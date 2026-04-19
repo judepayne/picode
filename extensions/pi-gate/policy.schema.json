@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./policy.schema.json",
+  "title": "Pi Gate Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "activeProfile": {
+      "type": "string"
+    },
+    "permission": {
+      "$ref": "#/$defs/permissionConfig"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/profileDefinition"
+      }
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "ask",
+        "deny"
+      ]
+    },
+    "patternRuleMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/action"
+      }
+    },
+    "permissionRule": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/action"
+        },
+        {
+          "$ref": "#/$defs/patternRuleMap"
+        }
+      ]
+    },
+    "permissionMap": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/permissionRule"
+      }
+    },
+    "permissionConfig": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/action"
+        },
+        {
+          "$ref": "#/$defs/permissionMap"
+        }
+      ]
+    },
+    "profileDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inherits-from": {
+          "type": "string"
+        },
+        "unattended": {
+          "type": "boolean"
+        },
+        "permission": {
+          "$ref": "#/$defs/permissionConfig"
+        }
+      }
+    }
+  }
+}

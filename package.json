@@ -1,0 +1,31 @@
+{
+  "name": "picode",
+  "version": "0.1.0",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "files": [
+    "extensions",
+    "!extensions/**/test",
+    "!extensions/**/*.test.ts",
+    "!extensions/**/fixtures",
+    "skills",
+    "agents",
+    "subagents",
+    "README.md",
+    "package.json"
+  ],
+  "exports": {
+    "./agent-assets-contract": "./extensions/agent-assets/contract.ts"
+  },
+  "pi": {
+    "extensions": ["./extensions"],
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-agent-core": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}

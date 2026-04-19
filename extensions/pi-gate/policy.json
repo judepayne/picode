@@ -1,0 +1,284 @@
+{
+  "$schema": "./policy.schema.json",
+  "activeProfile": "builder",
+  "permission": {
+    "*": "allow",
+    "external_directory": {
+      "*": "ask",
+      "/tmp": "allow",
+      "/tmp/**": "allow",
+      "~/.pi": "allow",
+      "~/.pi/**": "allow",
+      "~/.config": "allow",
+      "~/.config/**": "allow"
+    },
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "~/.ssh/**": "deny",
+      "~/.gnupg/**": "deny",
+      "~/.aws/**": "deny",
+      "**/*.pem": "deny",
+      "**/*.key": "deny"
+    },
+    "edit": {
+      "*": "allow",
+      "~/.ssh/**": "deny",
+      "~/.gnupg/**": "deny",
+      "~/.aws/**": "deny",
+      "~/.gitconfig": "deny",
+      "~/.zshrc": "deny",
+      "~/.bashrc": "deny",
+      "~/.bash_profile": "deny",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow",
+      "**/.git/**": "deny",
+      "**/*.pem": "deny",
+      "**/*.key": "deny",
+      "/etc/**": "deny"
+    },
+    "bash": {
+      "*": "allow",
+      "git push*": "ask",
+      "sudo*": "ask",
+      "su*": "ask",
+      "curl*|*sh*": "ask",
+      "curl*|*bash*": "ask",
+      "curl*|*zsh*": "ask",
+      "wget*|*sh*": "ask",
+      "wget*|*bash*": "ask",
+      "wget*|*zsh*": "ask",
+      "chmod * 777*": "ask",
+      "chown *": "ask",
+      "rm -rf /": "deny",
+      "rm -fr /": "deny",
+      "rm -rf ~*": "deny",
+      "rm -fr ~*": "deny"
+    }
+  },
+  "profiles": {
+    "builder": {
+      "inherits-from": "$base",
+      "permission": {
+        "external_directory": {
+          "*": "allow"
+        }
+      }
+    },
+    "planner": {
+      "inherits-from": "$base",
+      "permission": {
+        "external_directory": {
+          "*": "allow"
+        },
+        "edit": {
+          "*": "deny",
+          "${cwd}/.pi/plans/**": "allow"
+        },
+        "bash": {
+          "*": "ask",
+          "cat*": "allow",
+          "head*": "allow",
+          "tail*": "allow",
+          "less*": "allow",
+          "more*": "allow",
+          "grep*": "allow",
+          "find*": "allow",
+          "ls*": "allow",
+          "pwd": "allow",
+          "echo*": "allow",
+          "printf*": "allow",
+          "wc*": "allow",
+          "sort*": "allow",
+          "uniq*": "allow",
+          "diff*": "allow",
+          "file*": "allow",
+          "stat*": "allow",
+          "du*": "allow",
+          "df*": "allow",
+          "tree*": "allow",
+          "which*": "allow",
+          "whereis*": "allow",
+          "type*": "allow",
+          "env": "allow",
+          "printenv": "allow",
+          "uname*": "allow",
+          "whoami": "allow",
+          "id": "allow",
+          "date": "allow",
+          "cal*": "allow",
+          "uptime": "allow",
+          "ps*": "allow",
+          "top*": "allow",
+          "htop*": "allow",
+          "free*": "allow",
+          "git status*": "allow",
+          "git log*": "allow",
+          "git diff*": "allow",
+          "git show*": "allow",
+          "git branch*": "allow",
+          "git remote*": "allow",
+          "git config --get*": "allow",
+          "git ls-*": "allow",
+          "npm list*": "allow",
+          "npm ls*": "allow",
+          "npm view*": "allow",
+          "npm info*": "allow",
+          "npm search*": "allow",
+          "npm outdated*": "allow",
+          "npm audit*": "allow",
+          "yarn list*": "allow",
+          "yarn info*": "allow",
+          "yarn why*": "allow",
+          "yarn audit*": "allow",
+          "node --version": "allow",
+          "python --version": "allow",
+          "jq*": "allow",
+          "sed -n*": "allow",
+          "awk*": "allow",
+          "rg*": "allow",
+          "fd*": "allow",
+          "bat*": "allow",
+          "exa*": "allow"
+        }
+      }
+    },
+    "code-reviewer": {
+      "inherits-from": "planner"
+    },
+    "designer": {
+      "inherits-from": "planner",
+      "permission": {
+        "external_directory": {
+          "*": "allow"
+        },
+        "edit": {
+          "*": "deny",
+          "/tmp/*.md": "allow",
+          "/tmp/*.txt": "allow",
+          "/tmp/**": "allow",
+          "${cwd}/*.md": "allow",
+          "${cwd}/*.txt": "allow",
+          "${cwd}/**/*.md": "allow",
+          "${cwd}/**/*.txt": "allow"
+        },
+        "bash": {
+          "*": "ask",
+          "mkdir* /tmp*": "allow",
+          "rm* /tmp*": "allow",
+          "git add*": "deny",
+          "git commit*": "deny",
+          "git push*": "deny"
+        }
+      }
+    },
+    "scout": {
+      "inherits-from": "designer",
+      "unattended": true,
+      "permission": {
+        "external_directory": {
+          "*": "allow"
+        },
+        "edit": {
+          "*": "deny",
+          "**/pi-subagents-*/async-subagent-runs/**": "allow",
+          "**/pi-subagents-*/async-subagent-results/**": "allow",
+          "**/pi-subagents-*/chain-runs/**": "allow",
+          "**/pi-subagents-*/artifacts/**": "allow",
+          "**/subagent-artifacts/**": "allow"
+        },
+        "bash": {
+          "*": "deny",
+          "cat*": "allow",
+          "head*": "allow",
+          "tail*": "allow",
+          "less*": "allow",
+          "more*": "allow",
+          "grep*": "allow",
+          "find*": "allow",
+          "ls*": "allow",
+          "pwd": "allow",
+          "echo*": "allow",
+          "printf*": "allow",
+          "wc*": "allow",
+          "sort*": "allow",
+          "uniq*": "allow",
+          "diff*": "allow",
+          "file*": "allow",
+          "stat*": "allow",
+          "du*": "allow",
+          "df*": "allow",
+          "tree*": "allow",
+          "which*": "allow",
+          "whereis*": "allow",
+          "type*": "allow",
+          "env": "allow",
+          "printenv": "allow",
+          "uname*": "allow",
+          "whoami": "allow",
+          "id": "allow",
+          "date": "allow",
+          "cal*": "allow",
+          "uptime": "allow",
+          "ps*": "allow",
+          "top*": "allow",
+          "htop*": "allow",
+          "free*": "allow",
+          "git status*": "allow",
+          "git log*": "allow",
+          "git diff*": "allow",
+          "git show*": "allow",
+          "git branch*": "allow",
+          "git remote*": "allow",
+          "git config --get*": "allow",
+          "git ls-*": "allow",
+          "npm list*": "allow",
+          "npm ls*": "allow",
+          "npm view*": "allow",
+          "npm info*": "allow",
+          "npm search*": "allow",
+          "npm outdated*": "allow",
+          "npm audit*": "allow",
+          "yarn list*": "allow",
+          "yarn info*": "allow",
+          "yarn why*": "allow",
+          "yarn audit*": "allow",
+          "node --version": "allow",
+          "python --version": "allow",
+          "jq*": "allow",
+          "sed -n*": "allow",
+          "awk*": "allow",
+          "rg*": "allow",
+          "fd*": "allow",
+          "bat*": "allow",
+          "exa*": "allow"
+        }
+      }
+    },
+    "generalist": {
+      "inherits-from": "builder",
+      "unattended": true,
+      "permission": {
+        "bash": {
+          "git push*": "deny",
+          "sudo*": "deny",
+          "su*": "deny",
+          "curl*|*sh*": "deny",
+          "curl*|*bash*": "deny",
+          "curl*|*zsh*": "deny",
+          "wget*|*sh*": "deny",
+          "wget*|*bash*": "deny",
+          "wget*|*zsh*": "deny",
+          "chmod * 777*": "deny",
+          "chown *": "deny"
+        }
+      }
+    },
+    "designer-scout": {
+      "inherits-from": "scout"
+    }
+  }
+}
