@@ -1,4 +1,4 @@
-# picode
+![picode logo](./img/picode.svg)
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
