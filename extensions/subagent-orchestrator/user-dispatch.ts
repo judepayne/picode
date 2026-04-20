@@ -12,7 +12,7 @@ export interface ParsedUserDispatch {
 
 function readConfiguredDefaultContext(cwd: string): DelegationContext | undefined {
 	const value = getMergedStoredVarValue(cwd, "subagents.dispatch.defaultContext");
-	return value === "fresh" || value === "fork" ? value : undefined;
+	return value === "fresh" || value === "fork" || value === "continue" ? value : undefined;
 }
 
 function resolveDispatchContext(cwd: string, override?: DelegationContext): DelegationContext {
@@ -44,10 +44,14 @@ export function parseUserDispatch(
 
 	let contextOverride: DelegationContext | undefined;
 	let task = rawRemainder;
-	if (task === "--fresh" || task === "--fork") return undefined;
-	const overrideMatch = /^(--fresh|--fork)\s+([\s\S]+)$/u.exec(task);
+	if (task === "--fresh" || task === "--fork" || task === "--continue" || task === "--cont") return undefined;
+	const overrideMatch = /^(--fresh|--fork|--continue|--cont)\s+([\s\S]+)$/u.exec(task);
 	if (overrideMatch) {
-		contextOverride = overrideMatch[1] === "--fresh" ? "fresh" : "fork";
+		contextOverride = overrideMatch[1] === "--fresh"
+			? "fresh"
+			: overrideMatch[1] === "--fork"
+				? "fork"
+				: "continue";
 		task = overrideMatch[2]?.trim() ?? "";
 	}
 

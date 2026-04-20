@@ -75,8 +75,8 @@ export interface ExecuteRunDeps {
 	runId?: string;
 }
 
-function resolveForkSessionFile(spec: RunSpec, options: SyncRunOptions, index: number): string | undefined {
-	return spec.forkSessionFiles?.[index] ?? options.forkSessionFileForIndex?.(index);
+function resolveSessionFile(spec: RunSpec, options: SyncRunOptions, index: number): string | undefined {
+	return spec.sessionFiles?.[index] ?? options.forkSessionFileForIndex?.(index);
 }
 
 export async function executeRun(
@@ -124,7 +124,7 @@ async function runSingle(
 	}
 	emitRunStarted(runId, topLevelRunId, "single", spec.agent, callbacks);
 
-	const sessionFile = resolveForkSessionFile(spec, options, 0);
+	const sessionFile = resolveSessionFile(spec, options, 0);
 	const childId = spec.childIds?.[0] ?? crypto.randomUUID();
 	const result = await runChild(
 		{
@@ -179,7 +179,7 @@ async function runParallel(
 
 	const parentChildId = currentParentChildId();
 	const results = await mapConcurrent(expanded, MAX_CONCURRENCY, async (task, index) => {
-		const sessionFile = resolveForkSessionFile(spec, options, index);
+		const sessionFile = resolveSessionFile(spec, options, index);
 		const childId = spec.childIds?.[index] ?? crypto.randomUUID();
 		return runChild(
 			{
@@ -352,7 +352,7 @@ async function runChainSingleStep(ctx: ChainStepContext): Promise<DelegatedChild
 			agent: ctx.step.agent,
 			task,
 			context: ctx.spec.context,
-			sessionFile: resolveForkSessionFile(ctx.spec, ctx.options, ctx.stepIndex),
+			sessionFile: resolveSessionFile(ctx.spec, ctx.options, ctx.stepIndex),
 			parentSessionFile: ctx.spec.parentSessionFile,
 			cwd: ctx.options.cwd,
 			model: ctx.step.model ?? ctx.spec.model,

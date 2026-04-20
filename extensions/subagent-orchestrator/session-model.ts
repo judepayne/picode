@@ -11,6 +11,7 @@ interface BuildChildSessionRecordsInput {
 	parentMessageId?: string;
 	agent: string;
 	request: NormalizedDelegationRequest;
+	sessionFiles?: string[];
 	now: number;
 }
 
@@ -71,6 +72,7 @@ export function buildChildSessionRecords(input: BuildChildSessionRecordsInput): 
 		...(child.taskIndex !== undefined ? { taskIndex: child.taskIndex } : {}),
 		status: "queued",
 		taskSummary: child.taskSummary,
+		...(typeof input.sessionFiles?.[child.childIndex] === "string" ? { sessionFile: input.sessionFiles[child.childIndex] } : {}),
 		createdAt: input.now,
 		updatedAt: input.now,
 	}));

@@ -313,6 +313,7 @@ Examples:
 ~scout inspect how the config is loaded
 ~scout --fresh compare how configuration is loaded in the CLI and the server
 ~scout --fork use the current debugging context and identify the strongest root-cause candidates
+~scout --cont follow up on the earlier scout thread and check the parser next
 ~generalist implement the smallest safe fix and run the relevant tests
 ```
 
@@ -321,8 +322,11 @@ Important details:
 - it must be at the **start of the first line**
 - it only works for subagents allowed by the **current mode**
 - it launches an **async** delegated run
-- `--fresh` and `--fork` override the context for that run
-- if you omit the context, the default comes from prompt-vars configuration; this package seeds that default to **`fresh`** on bootstrap
+- `--fresh`, `--fork`, and `--continue` (or `--cont`) override the context for that run
+- `continue` reuses the same subagent conversation for the current parent conversation when available
+- if a continued thread is already running, you will get a short `scout is busy` style message instead of opening a second concurrent continued thread
+- if you omit the context, the default comes from prompt-vars configuration; this package seeds that default to **`fresh`** on bootstrap, but you may also set it to `continue`
+- continued user subagent context is in-memory only and resets on `/reload` or restart
 
 This is one of the most immediately satisfying parts of the package, because it makes delegated help feel lightweight instead of ceremonial.
 
@@ -616,6 +620,11 @@ Bootstrap seeds the default dispatch context to:
   }
 }
 ```
+
+Allowed values are:
+- `fresh`
+- `fork`
+- `continue`
 
 ### 4. Package-local mode and subagent cards
 

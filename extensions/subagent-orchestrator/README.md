@@ -53,6 +53,7 @@ Examples:
 ~scout find every place where Zod schemas are constructed in this repo
 ~scout --fresh compare how configuration is loaded in the CLI and the server
 ~scout --fork use the current debugging conversation and identify the strongest root-cause candidates
+~scout --cont pick up the earlier scout thread and check the parser next
 ~generalist implement the smallest safe fix for the failing parser test and run the relevant test file
 ```
 
@@ -64,7 +65,10 @@ Important rules:
 - it only works in interactive input
 - it only works for subagents allowed by the current mode
 - every run launched this way is **asynchronous**
-- `--fresh` and `--fork` override the context for that run
+- `--fresh`, `--fork`, and `--continue` (or `--cont`) override the context for that run
+- `continue` reuses the same user-facing subagent conversation for the current parent conversation when available
+- if that continued thread is already active, you get a short `scout is busy` style message instead of starting a second concurrent continued thread
+- continued user subagent context is in-memory only and resets on reload or restart
 
 ### What this feels like in practice
 
@@ -229,12 +233,16 @@ Delegated runs can be launched with:
 
 - `fresh`
 - `fork`
+- `continue`
 
 #### `fresh`
 A clean child session. This is the normal default and the recommended choice for most delegation.
 
 #### `fork`
 A branched child session that inherits the current conversation context. Use this only when the child truly needs that prior context.
+
+#### `continue`
+Reuse the same delegated user-facing subagent conversation for follow-up `~subagent` messages in the current parent conversation. This is mainly for direct user dispatch rather than general agent orchestration.
 
 ### `delegate_subagent_status`
 
@@ -287,7 +295,7 @@ The orchestrator reads the current top-level mode state to decide which subagent
 
 ### Benefits from `z-prompt-vars`
 
-The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars. This package seeds that default to `fresh`.
+The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars. This package seeds that default to `fresh`, but you can also set it to `continue` when you want repeated direct user follow-ups to stay in the same delegated thread until reload or shutdown.
 
 ### Child runtime composition
 

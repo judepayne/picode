@@ -111,9 +111,15 @@ When bootstrap creates the initial vars file, it seeds:
 - `paths.design = ".pi/designs/active.md"`
 - `subagents.dispatch.defaultContext = "fresh"`
 
+Allowed dispatch defaults:
+- `fresh`
+- `fork`
+- `continue`
+
 Recommendation:
 - use `fresh` as the normal subagent dispatch default
 - use `fork` only when a subagent truly needs prior session context
+- use `continue` when you want repeated direct user `~subagent` messages to stay in the same delegated conversation until reload or shutdown
 
 ## High-level data flow
 
@@ -188,6 +194,7 @@ Supported forms:
 /vars set project.name "Prompt Vars"
 /vars set flags '{"beta":true,"rollout":25}'
 /vars set subagents.dispatch.defaultContext "fork"
+/vars set subagents.dispatch.defaultContext "continue"
 /vars unset project.name
 /vars location
 /vars location project
@@ -237,9 +244,18 @@ Recommended default for subagent dispatch:
 - `subagents.dispatch.defaultContext = "fresh"`
 
 Use `fork` only as an exception when delegated work truly needs prior session context.
+Use `continue` when you want direct user `~subagent` follow-ups to reuse the same delegated conversation for the current parent session.
 
 The user-addressed subagent dispatch flow reads:
 - `subagents.dispatch.defaultContext`
+
+`continue` also has a shorthand flag at the input line:
+- `--continue`
+- `--cont`
+
+If a continued thread is already active, the user gets a short `scout is busy` style message instead of starting a second concurrent continued thread.
+
+Continued user subagent context is in-memory only and resets on reload or restart.
 
 Because project vars override global vars, you can set a team-wide global default and override it in a specific workspace.
 

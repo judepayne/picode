@@ -82,7 +82,7 @@ describe("executeRun: single mode", () => {
 		assert.strictEqual(recorder.requests[0]?.childId, "child-session-1");
 	});
 
-	test("uses precomputed fork session files from the run spec", async () => {
+	test("uses precomputed child session files from the run spec", async () => {
 		const { runChild, recorder } = makeMock();
 		await executeRun(
 			{
@@ -90,7 +90,7 @@ describe("executeRun: single mode", () => {
 				context: "fork",
 				agent: "scout",
 				task: "probe",
-				forkSessionFiles: ["/tmp/forked-session.jsonl"],
+				sessionFiles: ["/tmp/forked-session.jsonl"],
 			},
 			{ onEvent: () => {} },
 			{},

@@ -19,6 +19,18 @@ describe("session model", () => {
 		assert.equal(single.length, 1);
 		assert.equal(single[0]?.childKey, "single:0");
 
+		const continued = buildChildSessionRecords({
+			runId: "run-continue",
+			rootRunId: "root-1",
+			ownerModeId: "designer",
+			parentSessionId: "session-1",
+			agent: "scout",
+			request: { shape: "single", async: true, context: "continue", task: "Inspect again" },
+			sessionFiles: ["/tmp/scout-continue.jsonl"],
+			now: 1,
+		});
+		assert.equal(continued[0]?.sessionFile, "/tmp/scout-continue.jsonl");
+
 		const parallel = buildChildSessionRecords({
 			runId: "run-parallel",
 			rootRunId: "run-parallel",

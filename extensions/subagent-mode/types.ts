@@ -20,7 +20,7 @@
 // ============================================================================
 
 export type RunMode = "single" | "parallel" | "chain";
-export type ContextMode = "fresh" | "fork";
+export type ContextMode = "fresh" | "fork" | "continue";
 export type RunStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type ChildStatus = "complete" | "failed" | "cancelled";
 
@@ -46,8 +46,8 @@ export interface RunSpec {
 	tasks?: ParallelTaskSpec[];
 	chain?: ChainStep[];
 	parentSessionFile?: string;
-	/** Optional precomputed forked session files keyed by child index/step index. */
-	forkSessionFiles?: string[];
+	/** Optional child session files keyed by child index/step index. */
+	sessionFiles?: string[];
 	model?: string;
 	thinking?: string;
 	tools?: string[];

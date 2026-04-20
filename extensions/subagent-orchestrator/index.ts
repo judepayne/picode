@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@sinclair/typebox";
-import { keyHint } from "@mariozechner/pi-coding-agent";
+import { keyHint, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv, isAllowedContext } from "./policy.ts";
@@ -21,6 +21,12 @@ import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
+import {
+	findStickyUserSubagentSession,
+	upsertStickyUserSubagentSession,
+	updateStickyUserSubagentSessionByRun,
+	type StickyUserSubagentSession,
+} from "./sticky-user-sessions.ts";
 import type {
 	AsyncCompleteEvent,
 	AsyncStartedEvent,
@@ -98,6 +104,7 @@ const DelegateSubagentParams = Type.Object({
 	context: Type.Optional(Type.Union([
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
+		Type.Literal("continue"),
 	], { description: "Execution context for child scouts." })),
 	showRunCard: Type.Optional(Type.Boolean({ description: "Show a visible subagent orchestrator run card in the UI. Defaults to false." })),
 }, { additionalProperties: false });
@@ -201,7 +208,11 @@ function delegateMetaLine(args: Record<string, unknown>, result: { details?: unk
 			: isAsync
 				? "running"
 				: undefined;
-	const context = args.context === "fork" ? "fork" : "fresh";
+	const context = args.context === "fork"
+		? "fork"
+		: args.context === "continue"
+			? "continue"
+			: "fresh";
 	const parts = [isAsync ? "async" : "sync"];
 	if (isAsync && status) parts.push(status);
 	else if (!isAsync && result.isError && status) parts.push(status);
@@ -471,10 +482,14 @@ function normalizeDelegateInput(input: {
 		return { error: "Provide exactly one of task, tasks, or chain." };
 	}
 	if (input.context !== undefined && !isAllowedContext(input.context)) {
-		return { error: 'context must be either "fresh" or "fork".' };
+		return { error: 'context must be one of "fresh", "fork", or "continue".' };
 	}
 	const normalizedAsync = input.async === true;
-	const context = input.context === "fork" ? "fork" : "fresh";
+	const context = input.context === "fork"
+		? "fork"
+		: input.context === "continue"
+			? "continue"
+			: "fresh";
 	const showRunCard = input.showRunCard === true;
 	const agent = requestedDelegatedAgent(input.agent);
 	if (hasTask) {
@@ -549,8 +564,55 @@ function handbackMatchesSessionLineage(
 	return sessionReferenceInLineage(handback.parentSessionId, lineage);
 }
 
+function stickyUserSubagentBusyMessage(agent: string): string {
+	return `${agent} is busy`;
+}
+
+function createFreshPersistedUserSubagentSessionFile(ctx: ExtensionContext): string {
+	const sessionDir = (ctx.sessionManager as SessionDirCapableSessionManager | undefined)?.getSessionDir?.();
+	const manager = SessionManager.create(ctx.cwd, sessionDir);
+	const sessionFile = manager.getSessionFile();
+	if (!sessionFile) {
+		throw new Error("Failed to create a persisted child session for continued subagent context.");
+	}
+	return sessionFile;
+}
+
+function resolveStickyUserSubagentSession(
+	ctx: ExtensionContext,
+	agent: string,
+): StickyUserSubagentSession | undefined {
+	return findStickyUserSubagentSession(stickyUserSubagentSessions, agent, currentSessionLineage(ctx));
+}
+
+function setStickyUserSubagentSession(
+	ctx: ExtensionContext,
+	next: StickyUserSubagentSession,
+): StickyUserSubagentSession {
+	stickyUserSubagentSessions = upsertStickyUserSubagentSession(stickyUserSubagentSessions, currentSessionLineage(ctx), next);
+	return resolveStickyUserSubagentSession(ctx, next.agent) ?? next;
+}
+
+function clearStickyUserSubagentRun(runId: string, updatedAt: number): void {
+	stickyUserSubagentSessions = updateStickyUserSubagentSessionByRun(stickyUserSubagentSessions, runId, {
+		activeRunId: undefined,
+		lastUsedAt: updatedAt,
+	});
+}
+
+function bindStickyUserSubagentSessionToRun(
+	runId: string,
+	patch: Partial<StickyUserSubagentSession>,
+): void {
+	stickyUserSubagentSessions = updateStickyUserSubagentSessionByRun(stickyUserSubagentSessions, runId, patch);
+}
+
 function currentAllowedSubagents(ctx: ExtensionContext): string[] {
 	return findCurrentModeState(ctx).subagents ?? [];
+}
+
+interface SessionDirCapableSessionManager {
+	getSessionDir?: () => string | undefined;
 }
 
 const modeDepthCache = new Map<string, number | undefined>();
@@ -562,6 +624,7 @@ const subagentInstructionsCache = new Map<string, string | undefined>();
 
 let resolveAgentAssetDirs: (() => string[]) | undefined;
 let resolveSubagentAssetDirs: (() => string[]) | undefined;
+let stickyUserSubagentSessions: StickyUserSubagentSession[] = [];
 
 function defaultPackageAssetsRoot(): string {
 	return path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
@@ -666,7 +729,7 @@ function buildSubagentModeRunSpec(
 	request: NormalizedDelegationRequest,
 	currentThinking?: string,
 	childIds?: string[],
-	forkSessionFiles?: string[],
+	sessionFiles?: string[],
 ): Record<string, unknown> {
 	const env = childEnv(request.agent);
 	const maxSubagentDepth = resolveDelegatedRunMaxSubagentDepth({
@@ -685,7 +748,7 @@ function buildSubagentModeRunSpec(
 		...(request.tools?.length ? { tools: request.tools } : {}),
 		...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
 		...(Array.isArray(childIds) && childIds.length > 0 ? { childIds } : {}),
-		...(Array.isArray(forkSessionFiles) && forkSessionFiles.length > 0 ? { forkSessionFiles } : {}),
+		...(Array.isArray(sessionFiles) && sessionFiles.length > 0 ? { sessionFiles } : {}),
 	};
 	if (request.shape === "single") {
 		return {
@@ -708,6 +771,46 @@ function buildSubagentModeRunSpec(
 		task: request.chain?.[0]?.task ?? "",
 		chain: request.chain!.map((step) => ({ agent: request.agent, task: step.task })),
 	};
+}
+
+function prepareUserContinueSessionFiles(
+	ctx: ExtensionContext,
+	request: NormalizedDelegationRequest,
+	origin: RunOrigin,
+	orchestratorRunId: string,
+	now: number,
+	childSessionId?: string,
+): { response?: ProgrammaticSubagentResponse; sessionFiles?: string[] } {
+	if (origin !== "user" || request.context !== "continue" || request.shape !== "single") return {};
+	const existing = resolveStickyUserSubagentSession(ctx, request.agent);
+	if (existing?.activeRunId) {
+		const message = stickyUserSubagentBusyMessage(request.agent);
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: {
+					...errorResult(message),
+					isError: true,
+				},
+			},
+		};
+	}
+	const parentSessionId = currentSessionKey(ctx);
+	const parentSessionFile = ctx.sessionManager.getSessionFile();
+	const sessionFile = existing?.sessionFile ?? createFreshPersistedUserSubagentSessionFile(ctx);
+	setStickyUserSubagentSession(ctx, {
+		agent: request.agent,
+		parentSessionId,
+		parentSessionFile,
+		sessionFile,
+		...(childSessionId ? { childSessionId } : {}),
+		activeRunId: orchestratorRunId,
+		createdAt: existing?.createdAt ?? now,
+		lastUsedAt: now,
+	});
+	return { sessionFiles: [sessionFile] };
 }
 
 /**
@@ -1184,6 +1287,13 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		appendNodeLogForChild(child, event);
 		const updated = updateChildSessionFromEvent(child, event);
+		if (updated?.sessionFile) {
+			bindStickyUserSubagentSessionToRun(runId, {
+				sessionFile: updated.sessionFile,
+				childSessionId: updated.childSessionId,
+				lastUsedAt: updated.updatedAt,
+			});
+		}
 		if (updated && appendEntryOnUpdate && event.type && event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
 			appendChildEntry(updated, isTerminal(updated.status) ? (updated.status === "cancelled" ? "cancelled" : "completed") : "updated");
 		}
@@ -1550,8 +1660,16 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				...(finalAnswer ? { finalAnswer, resultSummary: nextResultSummary, recentOutput: finalAnswerRecentOutput(finalAnswer) } : {}),
 				...(nextError ? { error: nextError } : {}),
 			});
+			if (updated?.sessionFile) {
+				bindStickyUserSubagentSessionToRun(runId, {
+					sessionFile: updated.sessionFile,
+					childSessionId: updated.childSessionId,
+					lastUsedAt: now,
+				});
+			}
 			if (updated) appendChildEntry(updated, nextStatus === "cancelled" ? "cancelled" : isTerminal(nextStatus) ? "completed" : "updated");
 		}
+		clearStickyUserSubagentRun(runId, now);
 		refreshRunAggregates(runId);
 	}
 
@@ -1866,6 +1984,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentThinkingCache.clear();
 		subagentToolsCache.clear();
 		subagentInstructionsCache.clear();
+		stickyUserSubagentSessions = [];
 		resolveAgentAssetDirs = undefined;
 		resolveSubagentAssetDirs = undefined;
 	});
@@ -1892,7 +2011,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		const rootRunId = currentTopLevelRunId() ?? directParentChild?.rootRunId ?? directParentChild?.runId ?? orchestratorRunId;
 		const parentRunId = directParentChild?.runId;
 		const depth = currentSubagentDepth();
-		const childSessions = buildChildSessionRecords({
+		const baseChildSessions = buildChildSessionRecords({
 			runId: orchestratorRunId,
 			rootRunId,
 			parentChildSessionId: directParentChildSessionId,
@@ -1903,6 +2022,24 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			request,
 			now,
 		});
+		const continuePreparation = prepareUserContinueSessionFiles(
+			ctx,
+			request,
+			options.origin,
+			orchestratorRunId,
+			now,
+			baseChildSessions[0]?.childSessionId,
+		);
+		if (continuePreparation.response) {
+			return { orchestratorRunId, response: continuePreparation.response };
+		}
+		const sessionFiles = continuePreparation.sessionFiles ?? precomputeAsyncForkSessionFiles(ctx, request, baseChildSessions.length);
+		const childSessions = sessionFiles && sessionFiles.length > 0
+			? baseChildSessions.map((child, index) => ({
+				...child,
+				...(typeof sessionFiles[index] === "string" ? { sessionFile: sessionFiles[index] } : {}),
+			}))
+			: baseChildSessions;
 
 		state.createRun({
 			orchestratorRunId,
@@ -1979,7 +2116,6 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (options.signal?.aborted) cancelRequest();
 		else options.signal?.addEventListener("abort", cancelRequest, { once: true });
 
-		const forkSessionFiles = precomputeAsyncForkSessionFiles(ctx, request, childSessions.length);
 		pi.events.emit(SUBAGENT_MODE_REQUEST_EVENT, {
 			requestId: orchestratorRunId,
 			spec: buildSubagentModeRunSpec(
@@ -1988,7 +2124,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				request,
 				pi.getThinkingLevel(),
 				childSessions.map((child) => child.childSessionId),
-				forkSessionFiles,
+				sessionFiles,
 			),
 		});
 

@@ -39,6 +39,22 @@ describe("user dispatch parsing", () => {
 			parseUserDispatch("~generalist --fresh build the fix", ["scout", "generalist"], cwd),
 			{ agent: "generalist", context: "fresh", task: "build the fix" },
 		);
+		assert.deepEqual(
+			parseUserDispatch("~generalist --continue build the fix", ["scout", "generalist"], cwd),
+			{ agent: "generalist", context: "continue", task: "build the fix" },
+		);
+		assert.deepEqual(
+			parseUserDispatch("~generalist --cont build the fix", ["scout", "generalist"], cwd),
+			{ agent: "generalist", context: "continue", task: "build the fix" },
+		);
+	});
+
+	it("parses continue when it is the configured default context", () => {
+		const cwd = makeWorkspace({ subagents: { dispatch: { defaultContext: "continue" } } });
+		assert.deepEqual(
+			parseUserDispatch("~scout inspect the repo", ["scout", "generalist"], cwd),
+			{ agent: "scout", context: "continue", task: "inspect the repo" },
+		);
 	});
 
 	it("falls back to fresh when no dispatch config exists", () => {
@@ -54,6 +70,8 @@ describe("user dispatch parsing", () => {
 		assert.equal(parseUserDispatch("~foo inspect", ["scout"], cwd), undefined);
 		assert.equal(parseUserDispatch("~scout", ["scout"], cwd), undefined);
 		assert.equal(parseUserDispatch("~scout --fork", ["scout"], cwd), undefined);
+		assert.equal(parseUserDispatch("~scout --continue", ["scout"], cwd), undefined);
+		assert.equal(parseUserDispatch("~scout --cont", ["scout"], cwd), undefined);
 	});
 });
 

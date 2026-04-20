@@ -1,6 +1,6 @@
 export type ParentModeId = string;
 export type DelegatedAgent = string;
-export type DelegationContext = "fresh" | "fork";
+export type DelegationContext = "fresh" | "fork" | "continue";
 export type RequestShape = "single" | "parallel" | "chain";
 export type RunStatus = "queued" | "running" | "complete" | "failed" | "cancelled";
 export type HandbackStatus = "queued" | "consumed" | "dismissed";
