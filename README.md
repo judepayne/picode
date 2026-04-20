@@ -302,6 +302,9 @@ You will typically see some combination of:
 - the **current mode name** from `agent-mode`
 - the **current gate profile** from `pi-gate`
 - subagent activity such as active runs or queued handbacks from `subagent-orchestrator`
+- persistent agent-triggered failure summaries such as `subagents: failed generalist`
+
+The footer is intentionally quiet in the healthy case. Direct user `~scout` and `~generalist` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
 
 ### User-facing subagent dispatch
 
@@ -329,6 +332,31 @@ Important details:
 - continued user subagent context is in-memory only and resets on `/reload` or restart
 
 This is one of the most immediately satisfying parts of the package, because it makes delegated help feel lightweight instead of ceremonial.
+
+### When a subagent fails
+
+Most of the time you do not need to inspect low-level orchestrator state yourself.
+
+If a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
+
+- `subagents: failed scout`
+- `subagents: failed generalist`
+- `subagents: failed 2 scouts, 1 generalist`
+- `subagents: failed generalist · 1 active`
+
+That summary is intentionally human rather than technical. It tells you what kind of helper failed and, when relevant, whether other delegated work is still active.
+
+The failure summary persists until your next real user message, which acts as an acknowledgment. In practice, the normal next step is simply to ask the main agent to investigate.
+
+Good examples are:
+
+> Investigate the failed generalist.
+
+> A scout failed. Find out why and tell me whether the task should be retried.
+
+> Something in the delegated run failed. Inspect the orchestrator state and summarize the root cause.
+
+That is usually the best workflow. The main agent already has access to the orchestration and status tools, so it can inspect the relevant run, child logs, and handback state faster than a human user can do manually.
 
 ### Asking the main agent to orchestrate work for you
 

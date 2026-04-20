@@ -85,7 +85,22 @@ The orchestrator can show:
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-So even when delegated work is happening in the background, it does not have to disappear into a black box. The orchestrator keeps enough UI state around that runs can be inspected, resumed, and surfaced cleanly.
+In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout` and `~generalist` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
+
+When a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
+
+- `subagents: failed scout`
+- `subagents: failed generalist`
+- `subagents: failed 2 scouts, 1 generalist`
+- `subagents: failed generalist · 1 active`
+
+That summary is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
+
+> Investigate the failed generalist.
+
+The failure summary persists until the next real user message, which acts as an acknowledgment.
+
+So even when delegated work is happening in the background, it does not have to disappear into a black box. The orchestrator keeps enough UI state around that runs can be inspected, resumed, and surfaced cleanly, while the main agent remains the normal investigation interface.
 
 ---
 
