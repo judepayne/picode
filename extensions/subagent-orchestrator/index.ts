@@ -18,6 +18,7 @@ import { createForkContextResolver, type ForkableSessionManager } from "../subag
 import { readNamedAgentMaxSubagentDepthFromDirs, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
+import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
@@ -1442,23 +1443,33 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			return;
 		}
 		const lineage = currentSessionLineage(runtimeCtx);
-		const runs = state.listOwnedRuns(ownerModeId).filter((run) => runMatchesSessionLineage(run, lineage));
+		const runs = state.listOwnedRuns(ownerModeId).filter((run) =>
+			runMatchesSessionLineage(run, lineage) && normalizeRunOrigin(run.origin) !== "user"
+		);
 		const activeChildren = runs.reduce((total, run) => total + (run.activeChildCount ?? 0), 0);
 		const queuedHandbacks = state.listHandbacks().filter((record) =>
 			record.status === "queued"
 			&& record.ownerModeId === ownerModeId
 			&& handbackMatchesSessionLineage(record, lineage)
+			&& normalizeHandbackConsumer(record.consumer) !== "user"
 		).length;
 		const activeRuns = runs.filter((run) => !isTerminal(run.status)).length;
-		if (activeRuns === 0 && activeChildren === 0 && queuedHandbacks === 0) {
-			runtimeCtx.ui.setStatus(uiStatusKey, undefined);
-			return;
-		}
-		const parts = [] as string[];
-		if (activeRuns > 0) parts.push(`${activeRuns} run${activeRuns === 1 ? "" : "s"}`);
-		if (activeChildren > 0) parts.push(`${activeChildren} active`);
-		if (queuedHandbacks > 0) parts.push(`${queuedHandbacks} waiting`);
-		runtimeCtx.ui.setStatus(uiStatusKey, `subagents:${parts.join(" · ")}`);
+		const failedAgents = Array.from(runs
+			.filter((run) => run.status === "failed" && run.failureAcknowledgedAt === undefined)
+			.reduce((counts, run) => {
+				const agent = run.agent?.trim().toLowerCase() || "subagent";
+				counts.set(agent, (counts.get(agent) ?? 0) + 1);
+				return counts;
+			}, new Map<string, number>())
+			.entries())
+			.map(([agent, count]) => ({ agent, count }));
+		const statusText = formatFooterStatus({
+			activeRuns,
+			activeChildren,
+			queuedHandbacks,
+			failedAgents,
+		}, (text) => runtimeCtx.ui.theme.fg("error", runtimeCtx.ui.theme.bold(text)));
+		runtimeCtx.ui.setStatus(uiStatusKey, statusText);
 	}
 
 	function updateUiStatus(ctx?: ExtensionContext | null, immediate = false): void {
@@ -1473,6 +1484,21 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			applyUiStatus(ctx);
 		}, 75);
 		uiStatusTimer.unref?.();
+	}
+
+	function acknowledgeVisibleFailedRuns(ctx?: ExtensionContext | null): void {
+		const runtimeCtx = ctx ?? latestCtx;
+		if (!runtimeCtx) return;
+		const ownerModeId = findCurrentModeId(runtimeCtx);
+		if (!ownerModeId) return;
+		const lineage = currentSessionLineage(runtimeCtx);
+		const now = Date.now();
+		for (const run of state.listOwnedRuns(ownerModeId)) {
+			if (!runMatchesSessionLineage(run, lineage)) continue;
+			if (normalizeRunOrigin(run.origin) === "user") continue;
+			if (run.status !== "failed" || run.failureAcknowledgedAt !== undefined) continue;
+			state.updateRun(run.orchestratorRunId, { failureAcknowledgedAt: now, updatedAt: now });
+		}
 	}
 
 	function refreshRunMessageSnapshot(runId: string): OrchestratorRunMessageDetails | undefined {
@@ -1915,6 +1941,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	pi.on("input", async (event, ctx) => {
 		latestCtx = ctx;
 		if (event.source !== "interactive") return { action: "continue" };
+		acknowledgeVisibleFailedRuns(ctx);
+		updateUiStatus(ctx, true);
 		if ((event.images?.length ?? 0) > 0) return { action: "continue" };
 		const currentMode = findCurrentModeState(ctx);
 		if (!currentMode.modeId || !currentMode.subagents?.length) return { action: "continue" };
@@ -1937,7 +1965,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			return { action: "handled" };
 		}
 		if (ctx.hasUI) {
-			ctx.ui.notify(`Started background ${parsed.agent} run [${launched.orchestratorRunId}].`, "info");
+			const message = formatUserLaunchNotification(parsed.agent);
+			ctx.ui.notify(ctx.ui.theme.fg("accent", ctx.ui.theme.bold(message)), "info");
 		}
 		return { action: "handled" };
 	});
@@ -2392,7 +2421,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		if (latestCtx?.hasUI && status === "failed") {
 			latestCtx.ui.notify(
-				`Background scout failed: ${summary}`,
+				formatBackgroundFailureNotification(run.agent ?? event.agent, summary),
 				"warning",
 			);
 		}

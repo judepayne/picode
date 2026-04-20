@@ -98,6 +98,7 @@ function summarizeRun(record: OrchestratorRunRecord): OrchestratorRunSummary {
 		...(record.consumedHandbackCount !== undefined ? { consumedHandbackCount: record.consumedHandbackCount } : {}),
 		...(record.selectedChildIndex !== undefined ? { selectedChildIndex: record.selectedChildIndex } : {}),
 		...(record.terminalStatusNotifiedAt !== undefined ? { terminalStatusNotifiedAt: record.terminalStatusNotifiedAt } : {}),
+		...(record.failureAcknowledgedAt !== undefined ? { failureAcknowledgedAt: record.failureAcknowledgedAt } : {}),
 	};
 }
 

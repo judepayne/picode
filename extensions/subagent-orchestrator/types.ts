@@ -68,6 +68,7 @@ export interface OrchestratorRunRecord {
 	consumedHandbackCount?: number;
 	selectedChildIndex?: number;
 	terminalStatusNotifiedAt?: number;
+	failureAcknowledgedAt?: number;
 }
 
 export interface OrchestratorRunSummary {
@@ -96,6 +97,7 @@ export interface OrchestratorRunSummary {
 	consumedHandbackCount?: number;
 	selectedChildIndex?: number;
 	terminalStatusNotifiedAt?: number;
+	failureAcknowledgedAt?: number;
 }
 
 export interface OrchestratorIndexFile {
