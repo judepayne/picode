@@ -56,8 +56,9 @@ Consider alternatives only when there is a real design choice.
 Before finalizing:
 - re-read the highest-risk files
 - check the plan against the user's request
-- make sure Builder could execute it without reinterpretation
+- make it can be executed it without reinterpretation
 - ensure validation steps are included
+- Does the documentation need to change? If so, include those steps
 
 ### 6. Produce the handoff
 The final handoff should usually include:
@@ -68,7 +69,7 @@ The final handoff should usually include:
 - validation steps
 - rollout or migration notes when relevant
 
-For larger work, split the plan into phases.
+For larger work (more than half a day's work), split the plan into phases.
 
 ## Output
 

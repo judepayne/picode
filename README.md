@@ -2,14 +2,14 @@
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
-It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder → Code-Reviewer**, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
+It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder → Reviewer**, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
 
 What makes this package exciting is not just that it gives Pi “modes.” It gives you a way to turn one generic coding assistant into a small, organized system:
 
 - a **Designer** who helps shape the solution
 - a **Planner** who turns that into an implementation handoff
 - a **Builder** who actually changes the code
-- a **Code-Reviewer** who checks the work critically
+- a **Reviewer** who checks the work critically
 - plus delegated helpers like **scout** and **generalist** when the main agent needs backup
 
 And those are not just prompt labels. Modes can change:
@@ -84,7 +84,7 @@ The top-level agent can be switched between named modes such as:
 - **Designer**
 - **Planner**
 - **Builder**
-- **Code-Reviewer**
+- **Reviewer**
 
 Each mode has its own:
 
@@ -108,7 +108,7 @@ That gives you a very useful separation of concerns:
 - the **mode prompt** shapes how the agent should think and talk
 - the **gate profile** shapes what the agent is allowed to do
 
-For example, Planner and Code-Reviewer can be read-only in practice even if the model would otherwise be capable of editing.
+For example, Planner and Reviewer can be read-only in practice even if the model would otherwise be capable of editing.
 
 That is one of the package's most useful discipline-enforcing features: the role changes, and the permission envelope changes with it.
 
@@ -202,7 +202,7 @@ Because local-path installs are not copied into a separate build artifact, edits
    - `/mode Designer`
    - `/mode Planner`
    - `/mode Builder`
-   - `/mode Code-Reviewer`
+   - `/mode Reviewer`
    - or the keyboard shortcuts `Ctrl+,` and `Ctrl+.`
 5. Let prompt-vars bootstrap its files automatically, or run `/vars bootstrap` explicitly.
 6. Try one or two delegation examples so you can feel the package working:
@@ -215,7 +215,7 @@ If you do nothing else, the default high-value workflow is:
 1. **Designer** to shape the solution
 2. **Planner** to write or refine the implementation plan
 3. **Builder** to make the change
-4. **Code-Reviewer** to review the result
+4. **Reviewer** to review the result
 
 If you want the “oh, that’s cool” demo, this is a good natural-language example to try with the main agent:
 
@@ -260,10 +260,10 @@ Builder is for:
 - focused validation
 - delegating supporting research or parallel work when useful
 
-### Code-Reviewer
+### Reviewer
 Use when you want an actual review pass rather than more implementation.
 
-Code-Reviewer is for:
+Reviewer is for:
 
 - correctness
 - regression risk
@@ -589,7 +589,7 @@ The shipped policy includes profiles for:
 - `builder`
 - `planner`
 - `designer`
-- `code-reviewer`
+- `reviewer`
 - `scout`
 - `generalist`
 
@@ -729,7 +729,7 @@ A minimal mode looks like this:
 ---
 name: Security-Reviewer
 description: Review security-sensitive changes with a narrow remit.
-profile: code-reviewer
+profile: reviewer
 tools: [read, bash, grep, find, ls, delegate_subagent, delegate_subagent_status]
 subagents: scout
 bash: read-only

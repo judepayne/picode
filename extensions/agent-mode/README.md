@@ -29,7 +29,7 @@ The built-in package ships modes for:
 - Builder
 - Planner
 - Designer
-- Code-Reviewer
+- Reviewer
 
 ---
 
@@ -50,7 +50,7 @@ Examples:
 /mode Builder
 /mode Planner
 /mode Designer
-/mode Code-Reviewer
+/mode Reviewer
 ```
 
 ### Keyboard shortcuts
@@ -183,4 +183,4 @@ It becomes much more interesting when combined with:
 
 Delegated subagent children intentionally skip `agent-mode` so that a child scout or generalist runs from its own subagent card instead of accidentally inheriting the parent's top-level mode persona.
 
-That separation keeps Builder, Planner, Designer, and Code-Reviewer as top-level modes, and keeps scout/generalist as true delegated personas.
+That separation keeps Builder, Planner, Designer, and Reviewer as top-level modes, and keeps scout/generalist as true delegated personas.
