@@ -1,7 +1,7 @@
 import type { DelegationContext } from "./types.ts";
 import { getMergedStoredVarValue } from "../z-prompt-vars/prompt-vars.ts";
 
-const DEFAULT_DISPATCH_CONTEXT: DelegationContext = "fork";
+const DEFAULT_DISPATCH_CONTEXT: DelegationContext = "fresh";
 const USER_DISPATCH_PREFIX = "~";
 
 export interface ParsedUserDispatch {

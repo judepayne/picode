@@ -7,7 +7,6 @@ import { collectAgentsDirs } from "../agent-assets/contract.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 
 const PARENT_AGENTS_DIR_NAME = "agents";
-const LEGACY_MODES_DIR_NAME = "modes";
 const SETTINGS_FILE_NAME = "settings.json";
 const MODE_STATUS_KEY = "agent-mode";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
@@ -381,7 +380,6 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 	const agentDir = path.dirname(path.dirname(extensionDir));
 	const parentAgentsDir = path.join(agentDir, PARENT_AGENTS_DIR_NAME);
-	const legacyModesDir = path.join(extensionDir, LEGACY_MODES_DIR_NAME);
 	const settingsPath = path.join(extensionDir, SETTINGS_FILE_NAME);
 	const { settings, error: settingsError } = loadSettings(settingsPath);
 
@@ -408,7 +406,6 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		const candidateDirs = [...new Set([
 			...configuredDirs,
 			parentAgentsDir,
-			legacyModesDir,
 		])];
 		let lastError: string | undefined;
 		const discovered = new Map<string, { mode: ModeDefinition; orderKey: string }>();

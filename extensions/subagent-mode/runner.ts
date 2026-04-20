@@ -74,7 +74,7 @@ export interface RunChildOptions {
 export function resolveDefaultChildExtensionPaths(): string[] {
 	const assetsRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 	const extensionRoot = path.join(assetsRoot, "extensions");
-	const preferred = ["pi-gate", "subagent-mode", "subagent-orchestrator", "z-prompt-vars"];
+	const preferred = ["agent-assets", "pi-gate", "subagent-mode", "subagent-orchestrator", "z-prompt-vars"];
 	return preferred
 		.map((name) => {
 			const dir = path.join(extensionRoot, name);

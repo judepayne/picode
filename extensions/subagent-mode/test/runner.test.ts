@@ -6,6 +6,7 @@ import { resolveDefaultChildExtensionPaths } from "../runner.ts";
 describe("runner child extension defaults", () => {
 	test("uses an explicit child extension set that excludes agent-mode", () => {
 		const paths = resolveDefaultChildExtensionPaths();
+		assert.ok(paths.some((entry) => entry.includes("extensions/agent-assets")));
 		assert.ok(paths.some((entry) => entry.includes("extensions/pi-gate")));
 		assert.ok(paths.some((entry) => entry.includes("extensions/subagent-mode")));
 		assert.ok(paths.some((entry) => entry.includes("extensions/subagent-orchestrator")));

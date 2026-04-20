@@ -41,6 +41,14 @@ describe("user dispatch parsing", () => {
 		);
 	});
 
+	it("falls back to fresh when no dispatch config exists", () => {
+		const cwd = makeWorkspace();
+		assert.deepEqual(
+			parseUserDispatch("~scout inspect the repo", ["scout"], cwd),
+			{ agent: "scout", context: "fresh", task: "inspect the repo" },
+		);
+	});
+
 	it("treats invalid or incomplete prefixes as unrouted", () => {
 		const cwd = makeWorkspace();
 		assert.equal(parseUserDispatch("~foo inspect", ["scout"], cwd), undefined);
