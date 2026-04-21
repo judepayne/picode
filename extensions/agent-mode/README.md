@@ -12,7 +12,7 @@ If `picode` is the overall workflow package, `agent-mode` is the part that answe
 
 ## What it does
 
-`agent-mode` loads mode definitions from markdown files in `agents/` and applies them to the main Pi agent.
+`agent-mode` loads mode definitions from the resolved agent-card manifest owned by `extensions/agent-assets/agents/` and applies them to the main Pi agent.
 
 A mode can change:
 
@@ -29,7 +29,6 @@ The built-in package ships modes for:
 - Builder
 - Planner
 - Designer
-- Reviewer
 
 ---
 
@@ -50,7 +49,6 @@ Examples:
 /mode Builder
 /mode Planner
 /mode Designer
-/mode Reviewer
 ```
 
 ### Keyboard shortcuts
@@ -99,7 +97,7 @@ The result is that the agent does not merely "remember" a mode. It receives a fr
 
 ## Mode file format
 
-Mode files live in `agents/*.md`.
+Mode files live in `extensions/agent-assets/agents/*.md`.
 
 Example shape:
 
@@ -110,7 +108,7 @@ description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
 tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
-subagents: scout, worker
+subagents: scout, worker, reviewer
 bash: full
 thinking: high
 model: openai-codex/gpt-5.4
@@ -183,4 +181,4 @@ It becomes much more interesting when combined with:
 
 Delegated subagent children intentionally skip `agent-mode` so that a child scout or worker runs from its own subagent card instead of accidentally inheriting the parent's top-level mode persona.
 
-That separation keeps Builder, Planner, Designer, and Reviewer as top-level modes, and keeps scout/worker as true delegated personas.
+That separation keeps Builder, Planner, and Designer as top-level modes, and keeps scout, worker, and reviewer as true delegated personas.

@@ -2,15 +2,14 @@
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
-It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder → Reviewer**, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
+It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder**, with delegated reviewer passes when needed, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
 
 What makes this package exciting is not just that it gives Pi “modes.” It gives you a way to turn one generic coding assistant into a small, organized system:
 
 - a **Designer** who helps shape the solution
 - a **Planner** who turns that into an implementation handoff
 - a **Builder** who actually changes the code
-- a **Reviewer** who checks the work critically
-- plus delegated helpers like **scout** and **worker** when the main agent needs backup
+- plus delegated helpers like **scout**, **worker**, and **reviewer** when the main agent needs backup
 
 And those are not just prompt labels. Modes can change:
 
@@ -84,7 +83,6 @@ The top-level agent can be switched between named modes such as:
 - **Designer**
 - **Planner**
 - **Builder**
-- **Reviewer**
 
 Each mode has its own:
 
@@ -95,7 +93,7 @@ Each mode has its own:
 - preferred thinking level
 - associated permission profile
 
-That means the same Pi session can behave like a design partner, then a planner, then an implementation assistant, then a reviewer, without you rewriting the whole prompt every time.
+That means the same Pi session can behave like a design partner, then a planner, then an implementation assistant, while still being able to call a dedicated reviewer subagent when needed, without you rewriting the whole prompt every time.
 
 In other words, you can stop trying to get one giant prompt to do everything at once.
 
@@ -108,7 +106,7 @@ That gives you a very useful separation of concerns:
 - the **mode prompt** shapes how the agent should think and talk
 - the **gate profile** shapes what the agent is allowed to do
 
-For example, Planner and Reviewer can be read-only in practice even if the model would otherwise be capable of editing.
+For example, Planner can be read-only in practice even if the model would otherwise be capable of editing, and the delegated reviewer can use the existing reviewer gate profile.
 
 That is one of the package's most useful discipline-enforcing features: the role changes, and the permission envelope changes with it.
 
@@ -118,6 +116,7 @@ The package includes mediated subagent delegation with built-in child personas s
 
 - **scout** for fast reconnaissance
 - **worker** for unattended implementation or validation work
+- **reviewer** for independent code review
 
 Delegation is not a free-for-all. The current mode decides which subagents are allowed, and the orchestrator controls how runs are launched, tracked, surfaced, and handed back.
 
@@ -202,20 +201,19 @@ Because local-path installs are not copied into a separate build artifact, edits
    - `/mode Designer`
    - `/mode Planner`
    - `/mode Builder`
-   - `/mode Reviewer`
    - or the keyboard shortcuts `Ctrl+,` and `Ctrl+.`
 5. Let prompt-vars bootstrap its files automatically, or run `/vars bootstrap` explicitly.
 6. Try one or two delegation examples so you can feel the package working:
    - `~scout find every place where configuration is loaded`
    - `~scout --fork use the current debugging context and identify the strongest root-cause candidates`
    - `~worker implement the smallest safe fix for the failing parser test and run the relevant test file`
+   - `~reviewer inspect the current working tree diff and report findings by severity`
 
 If you do nothing else, the default high-value workflow is:
 
 1. **Designer** to shape the solution
 2. **Planner** to write or refine the implementation plan
-3. **Builder** to make the change
-4. **Reviewer** to review the result
+3. **Builder** to make the change and, for non-trivial changes, consult the **reviewer** subagent before finishing
 
 If you want the “oh, that’s cool” demo, this is a good natural-language example to try with the main agent:
 
@@ -260,8 +258,8 @@ Builder is for:
 - focused validation
 - delegating supporting research or parallel work when useful
 
-### Reviewer
-Use when you want an actual review pass rather than more implementation.
+### Reviewer subagent
+Use when you want an actual review pass without leaving the current top-level mode.
 
 Reviewer is for:
 
@@ -270,7 +268,7 @@ Reviewer is for:
 - maintainability
 - structured findings by severity
 
-This separation is the point. The mode switch is meant to change both the prompt and the permission envelope so the agent stays in role.
+In practice, Builder can consult `reviewer` before finishing non-trivial work, and users can also launch `~reviewer` directly for a standalone audit.
 
 ---
 
@@ -291,7 +289,7 @@ In this README, **user surface** means the things a human Pi user directly sees 
 | `/vars` | User | Inspect prompt vars and derived plan/design values |
 | `/vars bootstrap` | User | Create the expected vars/config files if missing |
 | `/vars set ...` / `/vars unset ...` / `/vars location ...` | User | Manage stored vars and write location |
-| `~scout ...` / `~worker ...` | User | Launch an async delegated subagent run from the prompt line |
+| `~scout ...` / `~worker ...` / `~reviewer ...` | User | Launch an async delegated subagent run from the prompt line |
 
 ### Footer/status surfaces
 
@@ -304,7 +302,7 @@ You will typically see some combination of:
 - subagent activity such as active runs or queued handbacks from `subagent-orchestrator`
 - persistent agent-triggered failure summaries such as `subagents: failed worker`
 
-The footer is intentionally quiet in the healthy case. Direct user `~scout` and `~worker` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
+The footer is intentionally quiet in the healthy case. Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
 
 ### User-facing subagent dispatch
 
@@ -318,6 +316,7 @@ Examples:
 ~scout --fork use the current debugging context and identify the strongest root-cause candidates
 ~scout --cont follow up on the earlier scout thread and check the parser next
 ~worker implement the smallest safe fix and run the relevant tests
+~reviewer inspect the current working tree diff and report findings by severity
 ```
 
 Important details:
@@ -384,7 +383,7 @@ In particular:
 - `delegate_subagent_status`
 - `vars`
 
-A user normally reaches those through ordinary conversation, through `/vars`, or through the `~scout` style shorthand.
+A user normally reaches those through ordinary conversation, through `/vars`, or through the `~subagent` style shorthand.
 
 ---
 
@@ -496,7 +495,7 @@ The package is easiest to understand as a small stack.
 ```text
 User
   │
-  ├─ /mode, /gate, /vars, ~scout
+  ├─ /mode, /gate, /vars, ~scout, ~worker, ~reviewer
   │
   ▼
 agent-mode ─────► pi-gate
@@ -536,7 +535,7 @@ subagent-orchestrator
 | --- | --- | --- | --- | --- | --- |
 | `extensions/agent-mode` | Extension | Switch the main agent between named modes | `/mode`, shortcuts, footer status | Mode prompt, tool/model/thinking setup | **Yes** |
 | `extensions/pi-gate` | Extension | Enforce permission profiles | `/gate`, approvals, footer status | Blocks/asks/allows tool calls | **Yes** |
-| `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~worker`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
+| `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~worker`, `~reviewer`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
 | `extensions/subagent-mode` | Extension | Spawn and normalize child runs | None intended for end users | Internal runner/event substrate | **No, mainly internal** |
 | `extensions/z-prompt-vars` | Extension | Interpolate prompt vars and manage stored vars | `/vars` | `vars` tool, `${...}` prompt expansion | **Yes** |
 | `extensions/agent-assets` | Extension | Resolve built-in and user-overlay agent/subagent card manifests | None direct | Resolved asset files + diagnostics to consumers | **Yes, especially for packaged workflows** |

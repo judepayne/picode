@@ -30,11 +30,12 @@ It also provides a user-facing shorthand for async delegation:
 
 - `~scout ...`
 - `~worker ...`
+- `~reviewer ...`
 
 Internally, it:
 
 - reads the current mode state to see which subagents are allowed
-- reads subagent metadata from `subagents/*.md`
+- reads subagent metadata from the resolved subagent-card manifest owned by `extensions/agent-assets/subagents/`
 - launches work through `subagent-mode`
 - stores run state under `.pi/state/subagent-orchestrator/`
 - manages handbacks, continuations, and run UI state
@@ -55,6 +56,7 @@ Examples:
 ~scout --fork use the current debugging conversation and identify the strongest root-cause candidates
 ~scout --cont pick up the earlier scout thread and check the parser next
 ~worker implement the smallest safe fix for the failing parser test and run the relevant test file
+~reviewer inspect the current working tree diff and report findings by severity
 ```
 
 This is the fast, high-leverage way to kick off helper work without needing the parent agent to translate your request first.
@@ -72,7 +74,7 @@ Important rules:
 
 ### What this feels like in practice
 
-A good mental model is that `~scout` is your quick “go investigate this and come back” lever, while `~worker` is your quick “go do this piece of work autonomously” lever.
+A good mental model is that `~scout` is your quick “go investigate this and come back” lever, `~worker` is your quick “go do this piece of work autonomously” lever, and `~reviewer` is your quick independent audit lever.
 
 That makes the feature feel less like a low-level spawn primitive and more like having a small bench of helpers you can send out to do focused work while you keep moving.
 
@@ -85,7 +87,7 @@ The orchestrator can show:
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout` and `~worker` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
+In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
 
 When a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
 
@@ -282,7 +284,7 @@ Use it when the agent needs to inspect or control a run rather than merely wait 
 
 ## Subagent cards
 
-The orchestrator reads subagent definitions from `subagents/*.md`.
+The orchestrator reads subagent definitions from the resolved manifest owned by `extensions/agent-assets/subagents/`.
 
 Those cards currently define the child persona through:
 
@@ -294,7 +296,7 @@ Those cards currently define the child persona through:
 
 That means the orchestrator does not just launch a generic child process and hope for the best. It launches a specific persona.
 
-For example, a `scout` child uses the scout card's own instructions, tools, model, and thinking level.
+For example, a `scout` child uses the scout card's own instructions, tools, model, and thinking level, and a `reviewer` child can run an independent read-only review pass with its own prompt and gate profile.
 
 ---
 
@@ -332,7 +334,7 @@ Notably, child processes do **not** load `agent-mode` as a top-level mode switch
 Treat it as one subsystem with:
 
 - `subagent-mode`
-- package-local `subagents/`
+- package-local `extensions/agent-assets/subagents/`
 - ideally `agent-mode` and `pi-gate`
 
 If you only load the orchestrator without its runner or without subagent cards, you do not really have the full feature.

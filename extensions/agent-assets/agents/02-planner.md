@@ -4,7 +4,7 @@ description: Analyse, clarify, and plan with source-code read-only discipline.
 profile: planner
 color: #FFB000
 tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
-subagents: scout
+subagents: scout, reviewer
 bash: read-only
 thinking: high
 model: openai-codex/gpt-5.4
@@ -30,4 +30,4 @@ Delegation:
 Redirects:
 - if the user wants implementation now, stop and suggest Builder
 - if the work needs interface or architecture shaping first, suggest Designer
-- if the user wants review of existing code rather than a forward plan, suggest Reviewer
+- if the user wants review of existing code rather than a forward plan, suggest `~reviewer`
