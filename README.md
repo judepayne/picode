@@ -10,7 +10,7 @@ What makes this package exciting is not just that it gives Pi “modes.” It gi
 - a **Planner** who turns that into an implementation handoff
 - a **Builder** who actually changes the code
 - a **Reviewer** who checks the work critically
-- plus delegated helpers like **scout** and **generalist** when the main agent needs backup
+- plus delegated helpers like **scout** and **worker** when the main agent needs backup
 
 And those are not just prompt labels. Modes can change:
 
@@ -45,7 +45,7 @@ To make that more concrete, these are the kinds of things this package makes pra
 ```
 
 ```text
-~generalist implement the smallest safe fix for the failing parser test and run the relevant test file
+~worker implement the smallest safe fix for the failing parser test and run the relevant test file
 ```
 
 Or, without using the shorthand directly:
@@ -117,7 +117,7 @@ That is one of the package's most useful discipline-enforcing features: the role
 The package includes mediated subagent delegation with built-in child personas such as:
 
 - **scout** for fast reconnaissance
-- **generalist** for unattended implementation or validation work
+- **worker** for unattended implementation or validation work
 
 Delegation is not a free-for-all. The current mode decides which subagents are allowed, and the orchestrator controls how runs are launched, tracked, surfaced, and handed back.
 
@@ -125,7 +125,7 @@ That means you can do things like:
 
 - send a scout to map where a library is used
 - launch several scouts in parallel to review different subsystems
-- send a generalist to apply a bounded fix while the parent keeps context and oversight
+- send a worker to apply a bounded fix while the parent keeps context and oversight
 - build nested workflows where delegated helpers can themselves coordinate smaller delegated tasks under a depth limit
 
 This is where the package starts to feel genuinely powerful.
@@ -208,7 +208,7 @@ Because local-path installs are not copied into a separate build artifact, edits
 6. Try one or two delegation examples so you can feel the package working:
    - `~scout find every place where configuration is loaded`
    - `~scout --fork use the current debugging context and identify the strongest root-cause candidates`
-   - `~generalist implement the smallest safe fix for the failing parser test and run the relevant test file`
+   - `~worker implement the smallest safe fix for the failing parser test and run the relevant test file`
 
 If you do nothing else, the default high-value workflow is:
 
@@ -291,7 +291,7 @@ In this README, **user surface** means the things a human Pi user directly sees 
 | `/vars` | User | Inspect prompt vars and derived plan/design values |
 | `/vars bootstrap` | User | Create the expected vars/config files if missing |
 | `/vars set ...` / `/vars unset ...` / `/vars location ...` | User | Manage stored vars and write location |
-| `~scout ...` / `~generalist ...` | User | Launch an async delegated subagent run from the prompt line |
+| `~scout ...` / `~worker ...` | User | Launch an async delegated subagent run from the prompt line |
 
 ### Footer/status surfaces
 
@@ -302,9 +302,9 @@ You will typically see some combination of:
 - the **current mode name** from `agent-mode`
 - the **current gate profile** from `pi-gate`
 - subagent activity such as active runs or queued handbacks from `subagent-orchestrator`
-- persistent agent-triggered failure summaries such as `subagents: failed generalist`
+- persistent agent-triggered failure summaries such as `subagents: failed worker`
 
-The footer is intentionally quiet in the healthy case. Direct user `~scout` and `~generalist` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
+The footer is intentionally quiet in the healthy case. Direct user `~scout` and `~worker` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
 
 ### User-facing subagent dispatch
 
@@ -317,7 +317,7 @@ Examples:
 ~scout --fresh compare how configuration is loaded in the CLI and the server
 ~scout --fork use the current debugging context and identify the strongest root-cause candidates
 ~scout --cont follow up on the earlier scout thread and check the parser next
-~generalist implement the smallest safe fix and run the relevant tests
+~worker implement the smallest safe fix and run the relevant tests
 ```
 
 Important details:
@@ -340,9 +340,9 @@ Most of the time you do not need to inspect low-level orchestrator state yoursel
 If a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
 
 - `subagents: failed scout`
-- `subagents: failed generalist`
-- `subagents: failed 2 scouts, 1 generalist`
-- `subagents: failed generalist · 1 active`
+- `subagents: failed worker`
+- `subagents: failed 2 scouts, 1 worker`
+- `subagents: failed worker · 1 active`
 
 That summary is intentionally human rather than technical. It tells you what kind of helper failed and, when relevant, whether other delegated work is still active.
 
@@ -350,7 +350,7 @@ The failure summary persists until your next real user message, which acts as an
 
 Good examples are:
 
-> Investigate the failed generalist.
+> Investigate the failed worker.
 
 > A scout failed. Find out why and tell me whether the task should be retried.
 
@@ -370,7 +370,7 @@ Examples:
 
 > Spawn three scout subagents in parallel and run them async: one should review the API layer, one the persistence layer, and one the frontend state layer for code-quality risks. Then bring back a concise comparison of the most important issues.
 
-> Create an async chain of generalist subagents. First, review `ModuleX` for code quality and maintainability issues. Second, apply the smallest safe cleanup for the highest-value issue. Third, summarize exactly what changed and any follow-up work still worth doing.
+> Create an async chain of worker subagents. First, review `ModuleX` for code quality and maintainability issues. Second, apply the smallest safe cleanup for the highest-value issue. Third, summarize exactly what changed and any follow-up work still worth doing.
 
 That is where the package starts to feel especially strong: you can talk at a high level, and the system underneath can turn that into a structured delegated workflow.
 
@@ -430,7 +430,7 @@ Examples:
 
 ```ts
 await delegate_subagent({ task: "inspect the parser" })
-await delegate_subagent({ agent: "generalist", task: "apply the fix" })
+await delegate_subagent({ agent: "worker", task: "apply the fix" })
 await delegate_subagent({ tasks: [{ task: "inspect A" }, { task: "inspect B" }], async: true })
 await delegate_subagent({ chain: [{ task: "inspect" }, { task: "summarize findings" }] })
 ```
@@ -536,7 +536,7 @@ subagent-orchestrator
 | --- | --- | --- | --- | --- | --- |
 | `extensions/agent-mode` | Extension | Switch the main agent between named modes | `/mode`, shortcuts, footer status | Mode prompt, tool/model/thinking setup | **Yes** |
 | `extensions/pi-gate` | Extension | Enforce permission profiles | `/gate`, approvals, footer status | Blocks/asks/allows tool calls | **Yes** |
-| `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~generalist`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
+| `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~worker`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
 | `extensions/subagent-mode` | Extension | Spawn and normalize child runs | None intended for end users | Internal runner/event substrate | **No, mainly internal** |
 | `extensions/z-prompt-vars` | Extension | Interpolate prompt vars and manage stored vars | `/vars` | `vars` tool, `${...}` prompt expansion | **Yes** |
 | `extensions/agent-assets` | Extension | Resolve built-in and user-overlay agent/subagent card manifests | None direct | Resolved asset files + diagnostics to consumers | **Yes, especially for packaged workflows** |
@@ -620,7 +620,7 @@ The shipped policy includes profiles for:
 - `designer`
 - `reviewer`
 - `scout`
-- `generalist`
+- `worker`
 
 ### 3. Prompt vars and prompt-vars write config
 

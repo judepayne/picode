@@ -149,7 +149,7 @@ The prompt-vars extension interpolates these placeholders before each turn.
 
 ## Subagent dispatch example
 
-The `~scout ...` and `~generalist ...` dispatch flow can read a default context from:
+The `~scout ...` and `~worker ...` dispatch flow can read a default context from:
 - `subagents.dispatch.defaultContext`
 
 Examples:

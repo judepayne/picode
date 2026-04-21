@@ -258,7 +258,7 @@
         }
       }
     },
-    "generalist": {
+    "worker": {
       "inherits-from": "builder",
       "unattended": true,
       "permission": {

@@ -29,7 +29,7 @@ If `agent-mode` answers "what should the main agent be right now?", then `subage
 It also provides a user-facing shorthand for async delegation:
 
 - `~scout ...`
-- `~generalist ...`
+- `~worker ...`
 
 Internally, it:
 
@@ -54,7 +54,7 @@ Examples:
 ~scout --fresh compare how configuration is loaded in the CLI and the server
 ~scout --fork use the current debugging conversation and identify the strongest root-cause candidates
 ~scout --cont pick up the earlier scout thread and check the parser next
-~generalist implement the smallest safe fix for the failing parser test and run the relevant test file
+~worker implement the smallest safe fix for the failing parser test and run the relevant test file
 ```
 
 This is the fast, high-leverage way to kick off helper work without needing the parent agent to translate your request first.
@@ -72,7 +72,7 @@ Important rules:
 
 ### What this feels like in practice
 
-A good mental model is that `~scout` is your quick “go investigate this and come back” lever, while `~generalist` is your quick “go do this piece of work autonomously” lever.
+A good mental model is that `~scout` is your quick “go investigate this and come back” lever, while `~worker` is your quick “go do this piece of work autonomously” lever.
 
 That makes the feature feel less like a low-level spawn primitive and more like having a small bench of helpers you can send out to do focused work while you keep moving.
 
@@ -85,18 +85,18 @@ The orchestrator can show:
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout` and `~generalist` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
+In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout` and `~worker` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
 
 When a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
 
 - `subagents: failed scout`
-- `subagents: failed generalist`
-- `subagents: failed 2 scouts, 1 generalist`
-- `subagents: failed generalist · 1 active`
+- `subagents: failed worker`
+- `subagents: failed 2 scouts, 1 worker`
+- `subagents: failed worker · 1 active`
 
 That summary is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
 
-> Investigate the failed generalist.
+> Investigate the failed worker.
 
 The failure summary persists until the next real user message, which acts as an acknowledgment.
 
@@ -128,7 +128,7 @@ A focused parallel investigation:
 
 A chained implementation-support workflow:
 
-> Create an async chain of generalist subagents. First, review `ModuleX` for code quality and maintainability issues. Second, apply the smallest safe cleanup for the highest-value issue. Third, summarize exactly what changed, what improved, and what follow-up work still remains.
+> Create an async chain of worker subagents. First, review `ModuleX` for code quality and maintainability issues. Second, apply the smallest safe cleanup for the highest-value issue. Third, summarize exactly what changed, what improved, and what follow-up work still remains.
 
 A context-sensitive debugging request:
 
@@ -173,11 +173,11 @@ In practice, that means you can build patterns like:
 
 - a parent Builder delegating to a scout
 - that scout delegating to more helpers for narrower follow-up investigation
-- a generalist coordinating a short internal chain before returning a result
+- a worker coordinating a short internal chain before returning a result
 
 But the nesting is still bounded, so you do not end up with runaway recursive delegation.
 
-This is especially useful if you want to build your own higher-level workflows or skills on top of the library. For example, you could create a skill that assembles a nested team of specialists: one scout for architecture mapping, one implementation-oriented generalist, one review-oriented helper for targeted verification, all operating under a controlled depth ceiling.
+This is especially useful if you want to build your own higher-level workflows or skills on top of the library. For example, you could create a skill that assembles a nested team of specialists: one scout for architecture mapping, one implementation-oriented worker, one review-oriented helper for targeted verification, all operating under a controlled depth ceiling.
 
 That is where `subagent-orchestrator` starts to feel less like a single feature and more like a foundation for richer multi-agent patterns.
 
@@ -209,7 +209,7 @@ await delegate_subagent({ task: "Inspect the parser and return the likely root c
 
 ```ts
 await delegate_subagent({
-  agent: "generalist",
+  agent: "worker",
   task: "Apply the smallest safe fix for the failing parser test and run the targeted validation."
 })
 ```
@@ -232,7 +232,7 @@ await delegate_subagent({
 
 ```ts
 await delegate_subagent({
-  agent: "generalist",
+  agent: "worker",
   async: true,
   chain: [
     { task: "Review ModuleX for the highest-value maintainability issue." },

@@ -4,7 +4,7 @@ description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
 tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
-subagents: scout, generalist
+subagents: scout, worker
 bash: full
 thinking: high
 model: openai-codex/gpt-5.4
@@ -26,7 +26,7 @@ Rules:
 
 Delegation:
 - use `delegate_subagent` when reconnaissance, parallel work, or isolated long-running work will clearly help
-- use `scout` for investigation and `generalist` for parallel implementation or validation
+- use `scout` for investigation and `worker` for parallel implementation or validation
 - consult `orchestrate-subagents` when you need delegation mechanics
 - keep the synthesis and final accountability in the parent
 

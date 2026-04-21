@@ -33,7 +33,7 @@ describe("sticky user subagent sessions", () => {
 
 			assert.equal(findStickyUserSubagentSessionIndex(entries, "scout", lineage), 0);
 			assert.equal(findStickyUserSubagentSession(entries, "scout", lineage)?.sessionFile, "/tmp/scout-session.jsonl");
-			assert.equal(findStickyUserSubagentSession(entries, "generalist", lineage), undefined);
+			assert.equal(findStickyUserSubagentSession(entries, "worker", lineage), undefined);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}

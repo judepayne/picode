@@ -110,7 +110,7 @@ description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
 tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
-subagents: scout, generalist
+subagents: scout, worker
 bash: full
 thinking: high
 model: openai-codex/gpt-5.4
@@ -181,6 +181,6 @@ It becomes much more interesting when combined with:
 
 `agent-mode` is for the **main agent session**.
 
-Delegated subagent children intentionally skip `agent-mode` so that a child scout or generalist runs from its own subagent card instead of accidentally inheriting the parent's top-level mode persona.
+Delegated subagent children intentionally skip `agent-mode` so that a child scout or worker runs from its own subagent card instead of accidentally inheriting the parent's top-level mode persona.
 
-That separation keeps Builder, Planner, Designer, and Reviewer as top-level modes, and keeps scout/generalist as true delegated personas.
+That separation keeps Builder, Planner, Designer, and Reviewer as top-level modes, and keeps scout/worker as true delegated personas.

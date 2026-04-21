@@ -28,7 +28,7 @@ describe("user dispatch parsing", () => {
 	it("parses a valid routed prefix with the configured default context", () => {
 		const cwd = makeWorkspace({ subagents: { dispatch: { defaultContext: "fresh" } } });
 		assert.deepEqual(
-			parseUserDispatch("~scout inspect the repo", ["scout", "generalist"], cwd),
+			parseUserDispatch("~scout inspect the repo", ["scout", "worker"], cwd),
 			{ agent: "scout", context: "fresh", task: "inspect the repo" },
 		);
 	});
@@ -36,23 +36,23 @@ describe("user dispatch parsing", () => {
 	it("prefers an inline context override", () => {
 		const cwd = makeWorkspace({ subagents: { dispatch: { defaultContext: "fork" } } });
 		assert.deepEqual(
-			parseUserDispatch("~generalist --fresh build the fix", ["scout", "generalist"], cwd),
-			{ agent: "generalist", context: "fresh", task: "build the fix" },
+			parseUserDispatch("~worker --fresh build the fix", ["scout", "worker"], cwd),
+			{ agent: "worker", context: "fresh", task: "build the fix" },
 		);
 		assert.deepEqual(
-			parseUserDispatch("~generalist --continue build the fix", ["scout", "generalist"], cwd),
-			{ agent: "generalist", context: "continue", task: "build the fix" },
+			parseUserDispatch("~worker --continue build the fix", ["scout", "worker"], cwd),
+			{ agent: "worker", context: "continue", task: "build the fix" },
 		);
 		assert.deepEqual(
-			parseUserDispatch("~generalist --cont build the fix", ["scout", "generalist"], cwd),
-			{ agent: "generalist", context: "continue", task: "build the fix" },
+			parseUserDispatch("~worker --cont build the fix", ["scout", "worker"], cwd),
+			{ agent: "worker", context: "continue", task: "build the fix" },
 		);
 	});
 
 	it("parses continue when it is the configured default context", () => {
 		const cwd = makeWorkspace({ subagents: { dispatch: { defaultContext: "continue" } } });
 		assert.deepEqual(
-			parseUserDispatch("~scout inspect the repo", ["scout", "generalist"], cwd),
+			parseUserDispatch("~scout inspect the repo", ["scout", "worker"], cwd),
 			{ agent: "scout", context: "continue", task: "inspect the repo" },
 		);
 	});

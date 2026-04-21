@@ -33,7 +33,7 @@ describe("user dispatch autocomplete", () => {
 	it("suggests allowed subagents for a routed prefix", async () => {
 		const provider = new UserDispatchAutocompleteProvider(
 			new StubAutocompleteProvider(),
-			() => ["generalist", "scout"],
+			() => ["worker", "scout"],
 		);
 		const suggestions = await provider.getSuggestions(["~sc"], 0, 3, {
 			signal: AbortSignal.abort(),
@@ -58,14 +58,14 @@ describe("user dispatch autocomplete", () => {
 	it("completes the chosen subagent with a trailing space", () => {
 		const provider = new UserDispatchAutocompleteProvider(
 			new StubAutocompleteProvider(),
-			() => ["generalist", "scout"],
+			() => ["worker", "scout"],
 		);
 		assert.deepEqual(
-			provider.applyCompletion(["~gen"], 0, 4, { value: "generalist", label: "generalist" }, "~gen"),
+			provider.applyCompletion(["~wo"], 0, 3, { value: "worker", label: "worker" }, "~wo"),
 			{
-				lines: ["~generalist "],
+				lines: ["~worker "],
 				cursorLine: 0,
-				cursorCol: 12,
+				cursorCol: 8,
 			},
 		);
 	});

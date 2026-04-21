@@ -32,19 +32,19 @@ describe("footer status", () => {
 				activeRuns: 1,
 				activeChildren: 1,
 				queuedHandbacks: 1,
-				failedAgents: [{ agent: "generalist", count: 1 }],
+				failedAgents: [{ agent: "worker", count: 1 }],
 			}),
-			"subagents: failed generalist · 1 active · 1 waiting",
+			"subagents: failed worker · 1 active · 1 waiting",
 		);
 	});
 
 	it("formats multiple failed groups by descending count", () => {
 		assert.equal(
 			summarizeFailedAgents([
-				{ agent: "generalist", count: 1 },
+				{ agent: "worker", count: 1 },
 				{ agent: "scout", count: 2 },
 			]),
-			"2 scouts, 1 generalist",
+			"2 scouts, 1 worker",
 		);
 		assert.equal(
 			formatFooterStatus({
@@ -52,11 +52,11 @@ describe("footer status", () => {
 				activeChildren: 0,
 				queuedHandbacks: 0,
 				failedAgents: [
-					{ agent: "generalist", count: 1 },
+					{ agent: "worker", count: 1 },
 					{ agent: "scout", count: 2 },
 				],
 			}),
-			"subagents: failed 2 scouts, 1 generalist",
+			"subagents: failed 2 scouts, 1 worker",
 		);
 	});
 });
@@ -64,13 +64,13 @@ describe("footer status", () => {
 describe("notifications", () => {
 	it("formats user launch notifications in title case", () => {
 		assert.equal(formatUserLaunchNotification("scout"), "Scout running in background");
-		assert.equal(formatUserLaunchNotification("generalist"), "Generalist running in background");
+		assert.equal(formatUserLaunchNotification("worker"), "Worker running in background");
 	});
 
 	it("formats background failure notifications with the agent type", () => {
 		assert.equal(
-			formatBackgroundFailureNotification("generalist", "parser test failed"),
-			"Background generalist failed: parser test failed",
+			formatBackgroundFailureNotification("worker", "parser test failed"),
+			"Background worker failed: parser test failed",
 		);
 	});
 });
