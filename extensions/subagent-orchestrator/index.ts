@@ -1,21 +1,20 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Type } from "@sinclair/typebox";
 import { keyHint, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv, isAllowedContext } from "./policy.ts";
-import { collectAgentsDirs, collectSubagentsDirs } from "../agent-assets/contract.ts";
+import { collectAgentFiles, collectSubagentFiles, type AgentAssetFile } from "../agent-assets/contract.ts";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
-import { formatModelReference, readNamedAgentInstructionsFromDirs, readNamedAgentModelFromDirs, readNamedAgentThinkingFromDirs, readNamedAgentToolsFromDirs } from "./subagent-model.ts";
+import { formatModelReference, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolsFromFiles } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
-import { readNamedAgentMaxSubagentDepthFromDirs, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
+import { readNamedAgentMaxSubagentDepthFromFiles, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
 import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
@@ -623,43 +622,35 @@ const subagentThinkingCache = new Map<string, string | undefined>();
 const subagentToolsCache = new Map<string, string[] | undefined>();
 const subagentInstructionsCache = new Map<string, string | undefined>();
 
-let resolveAgentAssetDirs: (() => string[]) | undefined;
-let resolveSubagentAssetDirs: (() => string[]) | undefined;
+let resolveAgentAssetFiles: (() => AgentAssetFile[]) | undefined;
+let resolveSubagentAssetFiles: (() => AgentAssetFile[]) | undefined;
 let stickyUserSubagentSessions: StickyUserSubagentSession[] = [];
 
-function defaultPackageAssetsRoot(): string {
-	return path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+function currentAgentAssetFiles(): AgentAssetFile[] {
+	return resolveAgentAssetFiles?.() ?? [];
 }
 
-function currentAgentAssetDirs(): string[] {
-	const resolved = resolveAgentAssetDirs?.() ?? [];
-	if (resolved.length > 0) return resolved;
-	return [path.join(defaultPackageAssetsRoot(), "agents")];
-}
-
-function currentSubagentAssetDirs(): string[] {
-	const resolved = resolveSubagentAssetDirs?.() ?? [];
-	if (resolved.length > 0) return resolved;
-	return [path.join(defaultPackageAssetsRoot(), "subagents")];
+function currentSubagentAssetFiles(): AgentAssetFile[] {
+	return resolveSubagentAssetFiles?.() ?? [];
 }
 
 function readModeMaxDepth(modeId: string): number | undefined {
 	if (modeDepthCache.has(modeId)) return modeDepthCache.get(modeId);
-	const value = readNamedAgentMaxSubagentDepthFromDirs(currentAgentAssetDirs(), modeId);
+	const value = readNamedAgentMaxSubagentDepthFromFiles(currentAgentAssetFiles(), modeId);
 	modeDepthCache.set(modeId, value);
 	return value;
 }
 
 function readSubagentMaxDepth(agent: string): number | undefined {
 	if (subagentDepthCache.has(agent)) return subagentDepthCache.get(agent);
-	const value = readNamedAgentMaxSubagentDepthFromDirs(currentSubagentAssetDirs(), agent);
+	const value = readNamedAgentMaxSubagentDepthFromFiles(currentSubagentAssetFiles(), agent);
 	subagentDepthCache.set(agent, value);
 	return value;
 }
 
 function readSubagentConfiguredModel(agent: string): string | undefined {
 	if (subagentModelCache.has(agent)) return subagentModelCache.get(agent);
-	const value = readNamedAgentModelFromDirs(currentSubagentAssetDirs(), agent);
+	const value = readNamedAgentModelFromFiles(currentSubagentAssetFiles(), agent);
 	subagentModelCache.set(agent, value);
 	return value;
 }
@@ -670,7 +661,7 @@ function resolveDelegatedSubagentModel(ctx: ExtensionContext, agent: string): st
 
 function readSubagentConfiguredThinking(agent: string): string | undefined {
 	if (subagentThinkingCache.has(agent)) return subagentThinkingCache.get(agent);
-	const value = readNamedAgentThinkingFromDirs(currentSubagentAssetDirs(), agent);
+	const value = readNamedAgentThinkingFromFiles(currentSubagentAssetFiles(), agent);
 	subagentThinkingCache.set(agent, value);
 	return value;
 }
@@ -681,14 +672,14 @@ function resolveDelegatedSubagentThinking(agent: string, currentThinking: string
 
 function readSubagentConfiguredTools(agent: string): string[] | undefined {
 	if (subagentToolsCache.has(agent)) return subagentToolsCache.get(agent);
-	const value = readNamedAgentToolsFromDirs(currentSubagentAssetDirs(), agent);
+	const value = readNamedAgentToolsFromFiles(currentSubagentAssetFiles(), agent);
 	subagentToolsCache.set(agent, value);
 	return value;
 }
 
 function readSubagentInstructions(agent: string): string | undefined {
 	if (subagentInstructionsCache.has(agent)) return subagentInstructionsCache.get(agent);
-	const value = readNamedAgentInstructionsFromDirs(currentSubagentAssetDirs(), agent);
+	const value = readNamedAgentInstructionsFromFiles(currentSubagentAssetFiles(), agent);
 	subagentInstructionsCache.set(agent, value);
 	return value;
 }
@@ -1114,8 +1105,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	subagentThinkingCache.clear();
 	subagentToolsCache.clear();
 	subagentInstructionsCache.clear();
-	resolveAgentAssetDirs = () => collectAgentsDirs(pi);
-	resolveSubagentAssetDirs = () => collectSubagentsDirs(pi);
+	resolveAgentAssetFiles = () => collectAgentFiles(pi);
+	resolveSubagentAssetFiles = () => collectSubagentFiles(pi);
 
 	pi.registerMessageRenderer<OrchestratorRunMessageDetails>(ORCHESTRATOR_RUN_MESSAGE_TYPE, (message, _options, theme) => {
 		const details = resolveRunMessageDetails(message.details);
@@ -2014,8 +2005,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentToolsCache.clear();
 		subagentInstructionsCache.clear();
 		stickyUserSubagentSessions = [];
-		resolveAgentAssetDirs = undefined;
-		resolveSubagentAssetDirs = undefined;
+		resolveAgentAssetFiles = undefined;
+		resolveSubagentAssetFiles = undefined;
 	});
 
 	async function launchDelegatedRun(

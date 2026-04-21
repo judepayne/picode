@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 
-import { findAgentMarkdownPath, findAgentMarkdownPathInDirs } from "./max-subagent-depth.ts";
+import type { AgentAssetFile } from "../agent-assets/contract.ts";
+import { findAgentAssetFile } from "./max-subagent-depth.ts";
 
 interface ModelLike {
 	provider?: unknown;
@@ -55,21 +56,12 @@ function readFrontmatterStringAttribute(filePath: string, attribute: string): st
 	return value ? unquote(value) : undefined;
 }
 
-function readNamedAgentFilePath(rootDir: string, id: string): string | undefined {
-	return findAgentMarkdownPath(rootDir, id);
+function readNamedAgentFilePathFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
+	return findAgentAssetFile(files, id)?.filePath;
 }
 
-function readNamedAgentFilePathFromDirs(rootDirs: readonly string[], id: string): string | undefined {
-	return findAgentMarkdownPathInDirs(rootDirs, id);
-}
-
-function readNamedAgentAttribute(rootDir: string, id: string, attribute: string): string | undefined {
-	const filePath = readNamedAgentFilePath(rootDir, id);
-	return filePath ? readFrontmatterStringAttribute(filePath, attribute) : undefined;
-}
-
-function readNamedAgentAttributeFromDirs(rootDirs: readonly string[], id: string, attribute: string): string | undefined {
-	const filePath = readNamedAgentFilePathFromDirs(rootDirs, id);
+function readNamedAgentAttributeFromFiles(files: readonly AgentAssetFile[], id: string, attribute: string): string | undefined {
+	const filePath = readNamedAgentFilePathFromFiles(files, id);
 	return filePath ? readFrontmatterStringAttribute(filePath, attribute) : undefined;
 }
 
@@ -97,36 +89,20 @@ function readInstructionsFromFile(filePath: string | undefined): string | undefi
 	return body || undefined;
 }
 
-export function readNamedAgentModel(rootDir: string, id: string): string | undefined {
-	return readNamedAgentAttribute(rootDir, id, "model");
+export function readNamedAgentModelFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
+	return readNamedAgentAttributeFromFiles(files, id, "model");
 }
 
-export function readNamedAgentModelFromDirs(rootDirs: readonly string[], id: string): string | undefined {
-	return readNamedAgentAttributeFromDirs(rootDirs, id, "model");
+export function readNamedAgentThinkingFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
+	return normalizeThinkingLevel(readNamedAgentAttributeFromFiles(files, id, "thinking"));
 }
 
-export function readNamedAgentThinking(rootDir: string, id: string): string | undefined {
-	return normalizeThinkingLevel(readNamedAgentAttribute(rootDir, id, "thinking"));
+export function readNamedAgentToolsFromFiles(files: readonly AgentAssetFile[], id: string): string[] | undefined {
+	return parseTools(readNamedAgentAttributeFromFiles(files, id, "tools"));
 }
 
-export function readNamedAgentThinkingFromDirs(rootDirs: readonly string[], id: string): string | undefined {
-	return normalizeThinkingLevel(readNamedAgentAttributeFromDirs(rootDirs, id, "thinking"));
-}
-
-export function readNamedAgentTools(rootDir: string, id: string): string[] | undefined {
-	return parseTools(readNamedAgentAttribute(rootDir, id, "tools"));
-}
-
-export function readNamedAgentToolsFromDirs(rootDirs: readonly string[], id: string): string[] | undefined {
-	return parseTools(readNamedAgentAttributeFromDirs(rootDirs, id, "tools"));
-}
-
-export function readNamedAgentInstructions(rootDir: string, id: string): string | undefined {
-	return readInstructionsFromFile(readNamedAgentFilePath(rootDir, id));
-}
-
-export function readNamedAgentInstructionsFromDirs(rootDirs: readonly string[], id: string): string | undefined {
-	return readInstructionsFromFile(readNamedAgentFilePathFromDirs(rootDirs, id));
+export function readNamedAgentInstructionsFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
+	return readInstructionsFromFile(readNamedAgentFilePathFromFiles(files, id));
 }
 
 export function formatModelReference(model: ModelLike | undefined): string | undefined {

@@ -3,10 +3,8 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { collectAgentsDirs } from "../agent-assets/contract.ts";
+import { collectAgentAssetDiagnostics, collectAgentFiles } from "../agent-assets/contract.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
-
-const PARENT_AGENTS_DIR_NAME = "agents";
 const SETTINGS_FILE_NAME = "settings.json";
 const MODE_STATUS_KEY = "agent-mode";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
@@ -378,14 +376,13 @@ function isReadOnlyBashCommand(command: string): boolean {
 export default function agentModeExtension(pi: ExtensionAPI) {
 	if (isDelegatedSubagentChildProcess()) return;
 	const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-	const agentDir = path.dirname(path.dirname(extensionDir));
-	const parentAgentsDir = path.join(agentDir, PARENT_AGENTS_DIR_NAME);
 	const settingsPath = path.join(extensionDir, SETTINGS_FILE_NAME);
 	const { settings, error: settingsError } = loadSettings(settingsPath);
 
 	let modes: ModeDefinition[] = [];
 	let currentIndex = 0;
 	let loadError: string | undefined;
+	let loadWarnings: string[] = [];
 
 	function getCurrentMode(): ModeDefinition | undefined {
 		return modes[currentIndex];
@@ -402,28 +399,26 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 	function loadModes(): void {
 		loadError = undefined;
-		const configuredDirs = collectAgentsDirs(pi);
-		const candidateDirs = [...new Set([
-			...configuredDirs,
-			parentAgentsDir,
-		])];
-		let lastError: string | undefined;
+		loadWarnings = [];
+		const resolvedFiles = collectAgentFiles(pi);
+		const diagnostics = collectAgentAssetDiagnostics(pi);
 		const discovered = new Map<string, { mode: ModeDefinition; orderKey: string }>();
+		let lastError: string | undefined;
 
-		for (const candidateDir of candidateDirs) {
+		for (const diagnostic of diagnostics) {
+			const message = diagnostic.filePath ? `${diagnostic.message} (${diagnostic.filePath})` : diagnostic.message;
+			if (diagnostic.severity === "error") {
+				loadWarnings.push(message);
+			} else {
+				loadWarnings.push(message);
+			}
+		}
+
+		for (const assetFile of resolvedFiles) {
 			try {
-				if (!fs.existsSync(candidateDir)) continue;
-				const entries = fs
-					.readdirSync(candidateDir, { withFileTypes: true })
-					.filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-					.map((entry) => entry.name)
-					.sort((a, b) => a.localeCompare(b));
-				for (const fileName of entries) {
-					const filePath = path.join(candidateDir, fileName);
-					const mode = parseModeFile(filePath, fs.readFileSync(filePath, "utf8"));
-					if (discovered.has(mode.id)) continue;
-					discovered.set(mode.id, { mode, orderKey: fileName.toLowerCase() });
-				}
+				const mode = parseModeFile(assetFile.filePath, fs.readFileSync(assetFile.filePath, "utf8"));
+				if (discovered.has(mode.id)) continue;
+				discovered.set(mode.id, { mode, orderKey: assetFile.fileName.toLowerCase() });
 			} catch (error) {
 				lastError = error instanceof Error ? error.message : String(error);
 			}
@@ -434,7 +429,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			.map((entry) => entry.mode);
 
 		if (modes.length === 0) {
-			loadError = lastError ?? `No agent mode files found in ${candidateDirs.join(", ")}`;
+			loadError = lastError ?? loadWarnings[0] ?? "No agent mode files resolved from agent-assets.";
 		}
 
 		if (currentIndex >= modes.length) {
@@ -602,6 +597,10 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 		if (loadError && ctx.hasUI) {
 			ctx.ui.notify(`Agent mode: ${loadError}`, "warning");
+		}
+		for (const warning of loadWarnings) {
+			if (!ctx.hasUI) break;
+			ctx.ui.notify(`Agent mode assets: ${warning}`, "warning");
 		}
 		if (modes.length > 0) {
 			await applyCurrentMode(ctx, { persist: true });

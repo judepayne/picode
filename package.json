@@ -9,8 +9,6 @@
     "!extensions/**/*.test.ts",
     "!extensions/**/fixtures",
     "skills",
-    "agents",
-    "subagents",
     "img",
     "README.md",
     "package.json"

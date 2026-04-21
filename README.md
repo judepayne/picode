@@ -30,7 +30,7 @@ This package bundles those ideas into one coherent setup for Pi:
 - **subagent-mode** as the child-runner substrate behind delegation
 - **z-prompt-vars** for prompt interpolation and runtime vars
 - **skills** that teach the agent how to use the package well
-- **package-local `agents/` and `subagents/` assets** that define the built-in modes and delegated personas
+- **agent-assets** for resolving the built-in and user-overlay agent/subagent cards that define the shipped modes and delegated personas
 
 The short version is: this package gives you a structured way to tell Pi **what kind of agent it should be right now**, **what it is allowed to do**, **what supporting subagents it may call**, and **what project-specific plan/design context should be injected into prompts**.
 
@@ -146,14 +146,14 @@ It also makes the built-in modes much more practical, because the same Planner o
 
 ### 5. Package-local agent and subagent assets
 
-The mode and subagent definitions live inside this package in:
+The built-in mode and subagent definitions live inside this package under:
 
-- `agents/`
-- `subagents/`
+- `extensions/agent-assets/agents/`
+- `extensions/agent-assets/subagents/`
 
 Those are **package assets**, not mutable user state. Mutable state stays in the workspace or in Pi's normal user directories.
 
-That separation is important: prompts and persona definitions ship with the package, while plans, designs, vars, sessions, and orchestrator state stay where they belong.
+If you want user overlays or custom card directories, configure them in Pi `settings.json` under the `picode` namespace at `.pi/settings.json` or `~/.pi/agent/settings.json`. That separation is important: shipped card definitions stay package-owned, while plans, designs, vars, sessions, orchestrator state, and optional overlay config stay where they belong.
 
 ### 6. A workflow that is opinionated in a useful way
 
@@ -396,7 +396,7 @@ In this README, **LLM surface** means the things the model itself sees or can ca
 
 When the main agent starts a turn, the package layers several things together:
 
-1. **The current mode prompt** from `agents/*.md`
+1. **The current mode prompt** from the resolved agent card manifest owned by `extensions/agent-assets/`
 2. **Interpolated prompt vars** from `z-prompt-vars`
 3. **Tool constraints** from the active mode
 4. **Model and thinking preferences** from the active mode
@@ -471,7 +471,7 @@ It supports:
 
 Delegated subagents do **not** just see the parent mode prompt copied into a child process.
 
-Instead, a delegated child is launched from its own subagent card in `subagents/*.md`, which currently supplies:
+Instead, a delegated child is launched from its own subagent card in the resolved subagent manifest owned by `extensions/agent-assets/`, which currently supplies:
 
 - instructions/body prompt
 - model
@@ -520,7 +520,7 @@ Main Pi agent
           ▼
 subagent-orchestrator
           │
-          ├─ reads subagent cards from subagents/
+          ├─ consumes resolved subagent card files from agent-assets
           ├─ manages run state and handbacks
           └─ calls subagent-mode
                     │
@@ -539,15 +539,16 @@ subagent-orchestrator
 | `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~generalist`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
 | `extensions/subagent-mode` | Extension | Spawn and normalize child runs | None intended for end users | Internal runner/event substrate | **No, mainly internal** |
 | `extensions/z-prompt-vars` | Extension | Interpolate prompt vars and manage stored vars | `/vars` | `vars` tool, `${...}` prompt expansion | **Yes** |
+| `extensions/agent-assets` | Extension | Resolve built-in and user-overlay agent/subagent card manifests | None direct | Resolved asset files + diagnostics to consumers | **Yes, especially for packaged workflows** |
 | `skills/*` | Skills | Teach the agent how to use the package well | None direct | Skill guidance | **Yes, as instruction assets** |
-| `agents/*` | Package asset | Define main modes | Indirect, through `/mode` | Mode instructions/frontmatter | **Only with `agent-mode`** |
-| `subagents/*` | Package asset | Define delegated child personas | Indirect, through `~scout` and delegation | Child instructions/frontmatter | **Only with orchestrator + runner** |
+| `extensions/agent-assets/agents/*` | Package asset | Define built-in main modes | Indirect, through `/mode` | Mode instructions/frontmatter | **Only with `agent-mode`** |
+| `extensions/agent-assets/subagents/*` | Package asset | Define built-in delegated child personas | Indirect, through `~scout` and delegation | Child instructions/frontmatter | **Only with orchestrator + runner** |
 
 ### Dependency notes
 
 #### `agent-mode`
 
-- reads mode markdown from `agents/`
+- reads the resolved mode-card manifest from `extensions/agent-assets/`
 - emits gate profile switch events that `pi-gate` can follow
 - works best with `z-prompt-vars`, because the built-in modes use `${plan.path}` and `${design.path}`
 - can run without `pi-gate`, but then you lose the permission-profile half of the design
@@ -561,7 +562,7 @@ subagent-orchestrator
 #### `subagent-orchestrator`
 
 - depends on `subagent-mode` for actual child execution
-- depends on package-local `subagents/` cards for delegated persona metadata
+- depends on the resolved subagent-card manifest from `extensions/agent-assets/` for delegated persona metadata
 - uses mode state from `agent-mode` to know which subagents are allowed
 - can also benefit from `z-prompt-vars`, because subagent dispatch defaults live there
 
@@ -579,7 +580,7 @@ subagent-orchestrator
 
 ## What is configurable
 
-There are four main configuration layers in this package.
+There are five main configuration layers in this package.
 
 ### 1. Agent-mode settings
 
@@ -654,11 +655,47 @@ Allowed values are:
 - `fork`
 - `continue`
 
-### 4. Package-local mode and subagent cards
+### 4. Agent asset overlay config
+
+Optional settings in the consuming workspace/user environment:
+
+- project: `<cwd>/.pi/settings.json`
+- global: `~/.pi/agent/settings.json`
+
+Store them under the `picode` namespace, for example:
+
+```json
+{
+  "picode": {
+    "agentsDir": "./custom-agents",
+    "subagentsDir": "./custom-subagents",
+    "agentsOnConflict": "prefer-user",
+    "subagentsOnConflict": "prefer-native"
+  }
+}
+```
+
+This controls:
+
+- optional user agent overlay directory
+- optional user subagent overlay directory
+- agent same-filename conflict policy
+- subagent same-filename conflict policy
+
+Environment variables may override this config at runtime:
+
+- `PICODE_AGENT_DIR`
+- `PICODE_SUBAGENT_DIR`
+- `PICODE_AGENT_OVERRIDE_ON_CONFLICT`
+- `PICODE_SUBAGENT_OVERRIDE_ON_CONFLICT`
+
+See [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md) for the detailed resolver behavior.
+
+### 5. Package-local mode and subagent cards
 
 These are the most important authoring surfaces in the package itself.
 
-#### Mode cards in `agents/*.md`
+#### Mode cards in `extensions/agent-assets/agents/*.md`
 
 The package currently uses frontmatter like this:
 
@@ -677,7 +714,7 @@ The package currently uses frontmatter like this:
 
 The markdown body becomes the mode's main instruction text.
 
-#### Subagent cards in `subagents/*.md`
+#### Subagent cards in `extensions/agent-assets/subagents/*.md`
 
 The orchestrator currently reads these fields from subagent cards:
 
@@ -702,8 +739,8 @@ Lives inside this repository and ships with the package:
 
 - extension code
 - skills
-- mode cards in `agents/`
-- subagent cards in `subagents/`
+- built-in mode cards in `extensions/agent-assets/agents/`
+- built-in subagent cards in `extensions/agent-assets/subagents/`
 - gate policy defaults
 - default mode navigation settings
 
@@ -723,31 +760,32 @@ That separation is intentional.
 
 This is one of the most important things to understand about the package: the built-in roles are not magic. They are authored assets.
 
-If you want your own top-level modes, your own delegated specialists, or your own team structure, the main place you extend the system is by editing the markdown cards in:
+If you want your own top-level modes, your own delegated specialists, or your own team structure, the built-in shipped cards live under:
 
-- `agents/` for main-agent modes
-- `subagents/` for delegated child personas
+- `extensions/agent-assets/agents/` for built-in main-agent modes
+- `extensions/agent-assets/subagents/` for built-in delegated child personas
 
-The runtime is designed to read those files and turn them into behavior.
+For user customization, prefer overlay directories configured through `settings.json` under the `picode` namespace rather than editing the shipped package files in place. The runtime is designed to resolve those built-ins together with any configured overlays and turn the final manifest into behavior.
 
 ### Where the files live
 
-- main modes: [`agents/`](./agents)
-- delegated helpers: [`subagents/`](./subagents)
+- built-in main modes: [`extensions/agent-assets/agents/`](./extensions/agent-assets/agents)
+- built-in delegated helpers: [`extensions/agent-assets/subagents/`](./extensions/agent-assets/subagents)
+- resolver/config documentation: [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md)
 
 ### How to think about the split
 
 A good rule of thumb is:
 
-- add a file in `agents/` when you want a **top-level operating mode** for the main agent
-- add a file in `subagents/` when you want a **delegated helper persona** the main agent can call through the orchestrator
+- add a file in your configured agent overlay directory when you want a **top-level operating mode** for the main agent
+- add a file in your configured subagent overlay directory when you want a **delegated helper persona** the main agent can call through the orchestrator
 
 Examples:
 
 - a `Security-Reviewer` or `Docs-Writer` would usually be a new **agent mode**
 - a `migration-scout`, `test-runner`, or `api-reviewer` would usually be a new **subagent**
 
-### Extending `agents/`
+### Extending agent cards
 
 An agent card defines a main-agent mode.
 
@@ -784,7 +822,7 @@ What matters most in practice:
 - use `${plan.path}`, `${design.path}`, and other prompt vars when the mode should adapt to the active workspace
 - be explicit about whether the mode should implement, plan, design, or review; ambiguity is the enemy here
 
-### Extending `subagents/`
+### Extending subagent cards
 
 A subagent card defines a delegated child persona.
 
@@ -824,9 +862,9 @@ The orchestrator reads those fields and uses them to launch the child with the r
 
 ### How new subagents become usable
 
-Adding a new file to `subagents/` is not enough on its own. A top-level mode must also allow that subagent in its `subagents:` frontmatter.
+Adding a new subagent card to your configured overlay directory is not enough on its own. A top-level mode must also allow that subagent in its `subagents:` frontmatter.
 
-For example, if you create `subagents/api-reviewer.md`, a mode that should be allowed to call it needs something like:
+For example, if you create `api-reviewer.md` in your configured subagent overlay directory, a mode that should be allowed to call it needs something like:
 
 ```md
 subagents: scout, api-reviewer
@@ -873,8 +911,8 @@ These are exposed to Pi through `package.json`:
 
 These are used by the extensions but are not exposed as first-class package entrypoints:
 
-- `agents/`
-- `subagents/`
+- `extensions/agent-assets/agents/`
+- `extensions/agent-assets/subagents/`
 
 ### Important runtime state locations
 
@@ -912,13 +950,14 @@ It is strongest when paired with `pi-gate`, but it does not strictly require it.
 
 ### Best used together
 
-#### `subagent-orchestrator` + `subagent-mode` + `subagents/`
+#### `subagent-orchestrator` + `subagent-mode` + resolved subagent cards
 
 These three form one real feature.
 
 - `subagent-orchestrator` is the public face
 - `subagent-mode` is the execution substrate
-- `subagents/` holds the child persona definitions
+- `extensions/agent-assets/subagents/` holds the built-in child persona definitions
+- configured overlay dirs can add or override subagent cards before the orchestrator consumes the resolved manifest
 
 In practice, you should treat them as one subsystem.
 
@@ -932,7 +971,7 @@ This exists so the orchestrator can have a clean execution substrate. Most users
 
 These are instruction assets. They matter a lot in practice, but they are not direct end-user UI.
 
-#### `agents/` and `subagents/`
+#### `extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`
 
 These are authored content assets for the extensions, not independent extension packages.
 
@@ -942,6 +981,7 @@ These are authored content assets for the extensions, not independent extension 
 
 ### Component READMEs
 
+- [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md)
 - [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md)
 - [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md)
 - [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md)
@@ -956,8 +996,8 @@ These are authored content assets for the extensions, not independent extension 
 
 ### Built-in package assets
 
-- [`agents/`](./agents)
-- [`subagents/`](./subagents)
+- [`extensions/agent-assets/agents/`](./extensions/agent-assets/agents)
+- [`extensions/agent-assets/subagents/`](./extensions/agent-assets/subagents)
 
 ---
 
@@ -970,7 +1010,7 @@ If you want the shortest accurate mental model, it is this:
 - **z-prompt-vars** injects project-aware context into prompts
 - **subagent-orchestrator** lets the agent call managed helper personas
 - **subagent-mode** is the engine that actually runs those helpers
-- **`agents/` and `subagents/`** define the shipped personalities
+- **`extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`** define the shipped personalities
 - **`skills/`** teach the agent how to use the whole package well
 
 That combination is what makes `picode` feel less like one generic coding assistant and more like a small, disciplined team with explicit roles.

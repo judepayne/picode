@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
-import { formatModelReference, normalizeThinkingLevel, readNamedAgentInstructions, readNamedAgentInstructionsFromDirs, readNamedAgentModel, readNamedAgentModelFromDirs, readNamedAgentThinking, readNamedAgentThinkingFromDirs, readNamedAgentTools, readNamedAgentToolsFromDirs } from "../subagent-model.ts";
+import type { AgentAssetFile } from "../../agent-assets/contract.ts";
+import { formatModelReference, normalizeThinkingLevel, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolsFromFiles } from "../subagent-model.ts";
 
 const tempDirs: string[] = [];
 
@@ -12,6 +13,15 @@ function makeRoot(): string {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-model-"));
 	tempDirs.push(root);
 	return root;
+}
+
+function assetFile(filePath: string, kind: AgentAssetFile["kind"] = "subagent", origin: AgentAssetFile["origin"] = "native"): AgentAssetFile {
+	return {
+		kind,
+		filePath,
+		fileName: path.basename(filePath),
+		origin,
+	};
 }
 
 afterEach(() => {
@@ -23,34 +33,43 @@ afterEach(() => {
 describe("subagent model metadata", () => {
 	it("reads model, thinking, tools, and instructions from the named markdown file", () => {
 		const root = makeRoot();
+		const filePath = path.join(root, "custom.md");
 		fs.writeFileSync(
-			path.join(root, "custom.md"),
+			filePath,
 			"---\nname: Scout\nmodel: \"openai-codex/gpt-5.4-mini\"\nthinking: low\ntools: read, grep, find\n---\nYou are scouty.\n",
 			"utf8",
 		);
-		assert.equal(readNamedAgentModel(root, "scout"), "openai-codex/gpt-5.4-mini");
-		assert.equal(readNamedAgentThinking(root, "scout"), "low");
-		assert.deepEqual(readNamedAgentTools(root, "scout"), ["read", "grep", "find"]);
-		assert.equal(readNamedAgentInstructions(root, "scout"), "You are scouty.");
+		const files = [assetFile(filePath)];
+		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
+		assert.equal(readNamedAgentThinkingFromFiles(files, "scout"), "low");
+		assert.deepEqual(readNamedAgentToolsFromFiles(files, "scout"), ["read", "grep", "find"]);
+		assert.equal(readNamedAgentInstructionsFromFiles(files, "scout"), "You are scouty.");
 	});
 
-	it("prefers the first matching asset dir when searching multiple roots", () => {
-		const overlay = makeRoot();
-		const base = makeRoot();
+	it("uses the effective manifest winner when a same-filename override exists", () => {
+		const root = makeRoot();
+		const filePath = path.join(root, "scout.md");
 		fs.writeFileSync(
-			path.join(base, "scout.md"),
-			"---\nname: Scout\nmodel: openai-codex/gpt-5.4\nthinking: high\ntools: read, bash\n---\nBase scout.\n",
-			"utf8",
-		);
-		fs.writeFileSync(
-			path.join(overlay, "scout.md"),
+			filePath,
 			"---\nname: Scout\nmodel: openai-codex/gpt-5.4-mini\nthinking: low\ntools: read, grep\n---\nOverlay scout.\n",
 			"utf8",
 		);
-		assert.equal(readNamedAgentModelFromDirs([overlay, base], "scout"), "openai-codex/gpt-5.4-mini");
-		assert.equal(readNamedAgentThinkingFromDirs([overlay, base], "scout"), "low");
-		assert.deepEqual(readNamedAgentToolsFromDirs([overlay, base], "scout"), ["read", "grep"]);
-		assert.equal(readNamedAgentInstructionsFromDirs([overlay, base], "scout"), "Overlay scout.");
+		const files = [assetFile(filePath, "subagent", "user")];
+		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
+		assert.equal(readNamedAgentThinkingFromFiles(files, "scout"), "low");
+		assert.deepEqual(readNamedAgentToolsFromFiles(files, "scout"), ["read", "grep"]);
+		assert.equal(readNamedAgentInstructionsFromFiles(files, "scout"), "Overlay scout.");
+	});
+
+	it("finds entries by numbered suffix and frontmatter name through the manifest", () => {
+		const root = makeRoot();
+		const numberedPath = path.join(root, "01-builder.md");
+		const namedPath = path.join(root, "custom.md");
+		fs.writeFileSync(numberedPath, "---\nname: Builder\nmodel: openai-codex/gpt-5.4\n---\nBuilder\n", "utf8");
+		fs.writeFileSync(namedPath, "---\nname: Scout\nmodel: openai-codex/gpt-5.4-mini\n---\nScout\n", "utf8");
+		const files = [assetFile(numberedPath, "agent"), assetFile(namedPath)];
+		assert.equal(readNamedAgentModelFromFiles(files, "builder"), "openai-codex/gpt-5.4");
+		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
 	});
 
 	it("normalizes supported thinking levels and rejects invalid ones", () => {

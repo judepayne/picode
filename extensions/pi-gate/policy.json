@@ -277,6 +277,9 @@
         }
       }
     },
+    "haiku": {
+      "inherits-from": "scout"
+    },
     "designer-scout": {
       "inherits-from": "scout"
     }

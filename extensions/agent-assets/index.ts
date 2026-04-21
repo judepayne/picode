@@ -1,23 +1,29 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { COLLECT_AGENT_ASSET_DIRS_EVENT, type CollectAgentAssetDirsRequest } from "./contract.ts";
+import { COLLECT_AGENT_ASSET_FILES_EVENT, type CollectAgentAssetFilesRequest } from "./contract.ts";
+import { resolveAgentAssetManifest } from "./resolver.ts";
 
 export default function agentAssetsExtension(pi: ExtensionAPI): void {
 	const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-	const packageRoot = path.dirname(path.dirname(extensionDir));
-	const agentsDir = path.join(packageRoot, "agents");
-	const subagentsDir = path.join(packageRoot, "subagents");
+	const nativeAgentsDir = path.join(extensionDir, "agents");
+	const nativeSubagentsDir = path.join(extensionDir, "subagents");
 
-	pi.events.on(COLLECT_AGENT_ASSET_DIRS_EVENT, (payload) => {
-		const request = payload as CollectAgentAssetDirsRequest | undefined;
+	pi.events.on(COLLECT_AGENT_ASSET_FILES_EVENT, (payload) => {
+		const request = payload as CollectAgentAssetFilesRequest | undefined;
 		if (!request?.entries) return;
+		const manifest = resolveAgentAssetManifest({
+			cwd: process.cwd(),
+			env: process.env,
+			nativeAgentsDir,
+			nativeSubagentsDir,
+		});
 		request.entries.push({
 			source: "picode",
 			priority: 0,
-			...(fs.existsSync(agentsDir) ? { agentsDir } : {}),
-			...(fs.existsSync(subagentsDir) ? { subagentsDir } : {}),
+			agents: manifest.agents,
+			subagents: manifest.subagents,
+			diagnostics: manifest.diagnostics,
 		});
 	});
 }

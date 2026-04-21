@@ -1,7 +1,30 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 
+import type { AgentAssetFile } from "../agent-assets/contract.ts";
 import { currentSubagentDepth, normalizeMaxSubagentDepth, resolveCurrentMaxSubagentDepth } from "../subagent-mode/depth.ts";
+
+function normalizeLookupToken(value: string): string {
+	return value.trim().toLowerCase();
+}
+
+function readFrontmatterName(filePath: string): string | undefined {
+	try {
+		const raw = fs.readFileSync(filePath, "utf8");
+		const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+		const nameMatch = fmMatch?.[1]?.match(/^name:\s*(.+?)\s*$/m);
+		return nameMatch?.[1]?.trim().toLowerCase() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isExactFileNameMatch(fileName: string, normalizedId: string): boolean {
+	return fileName.toLowerCase() === `${normalizedId}.md`;
+}
+
+function isSuffixFileNameMatch(fileName: string, normalizedId: string): boolean {
+	return fileName.toLowerCase().endsWith(`-${normalizedId}.md`);
+}
 
 function parseFrontmatterMaxSubagentDepth(raw: string): number | undefined {
 	const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
@@ -19,58 +42,26 @@ export function readMarkdownMaxSubagentDepth(filePath: string): number | undefin
 	}
 }
 
-export function findAgentMarkdownPath(rootDir: string, id: string): string | undefined {
-	const normalizedId = id.trim().toLowerCase();
+export function findAgentAssetFile(files: readonly AgentAssetFile[], id: string): AgentAssetFile | undefined {
+	const normalizedId = normalizeLookupToken(id);
 	if (!normalizedId) return undefined;
 
-	let entries: string[];
-	try {
-		entries = fs.readdirSync(rootDir);
-	} catch {
-		return undefined;
-	}
+	const exactMatch = files.find((file) => isExactFileNameMatch(file.fileName, normalizedId));
+	if (exactMatch) return exactMatch;
 
-	const markdownFiles = entries
-		.filter((entry) => entry.toLowerCase().endsWith(".md"))
-		.sort((a, b) => a.localeCompare(b));
+	const suffixMatch = files.find((file) => isSuffixFileNameMatch(file.fileName, normalizedId));
+	if (suffixMatch) return suffixMatch;
 
-	const exactMatch = markdownFiles.find((entry) => entry.toLowerCase() === `${normalizedId}.md`);
-	if (exactMatch) return path.join(rootDir, exactMatch);
-
-	const suffixMatch = markdownFiles.find((entry) => entry.toLowerCase().endsWith(`-${normalizedId}.md`));
-	if (suffixMatch) return path.join(rootDir, suffixMatch);
-
-	for (const entry of markdownFiles) {
-		const filePath = path.join(rootDir, entry);
-		try {
-			const raw = fs.readFileSync(filePath, "utf8");
-			const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-			const nameMatch = fmMatch?.[1]?.match(/^name:\s*(.+?)\s*$/m);
-			if (nameMatch?.[1]?.trim().toLowerCase() === normalizedId) return filePath;
-		} catch {
-			// Ignore unreadable files and continue scanning.
-		}
+	for (const file of files) {
+		if (readFrontmatterName(file.filePath) === normalizedId) return file;
 	}
 
 	return undefined;
 }
 
-export function readNamedAgentMaxSubagentDepth(rootDir: string, id: string): number | undefined {
-	const filePath = findAgentMarkdownPath(rootDir, id);
-	return filePath ? readMarkdownMaxSubagentDepth(filePath) : undefined;
-}
-
-export function findAgentMarkdownPathInDirs(rootDirs: readonly string[], id: string): string | undefined {
-	for (const rootDir of rootDirs) {
-		const filePath = findAgentMarkdownPath(rootDir, id);
-		if (filePath) return filePath;
-	}
-	return undefined;
-}
-
-export function readNamedAgentMaxSubagentDepthFromDirs(rootDirs: readonly string[], id: string): number | undefined {
-	const filePath = findAgentMarkdownPathInDirs(rootDirs, id);
-	return filePath ? readMarkdownMaxSubagentDepth(filePath) : undefined;
+export function readNamedAgentMaxSubagentDepthFromFiles(files: readonly AgentAssetFile[], id: string): number | undefined {
+	const file = findAgentAssetFile(files, id);
+	return file ? readMarkdownMaxSubagentDepth(file.filePath) : undefined;
 }
 
 export interface ResolveDelegatedRunMaxSubagentDepthInput {
