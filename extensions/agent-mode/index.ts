@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { collectAgentAssetDiagnostics, collectAgentFiles } from "../agent-assets/contract.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
@@ -109,7 +110,6 @@ const READ_ONLY_BASH_ALLOWLIST = [
 	/^\s*wget\s+-O\s*-/i,
 	/^\s*jq\b/i,
 	/^\s*sed\s+-n\b/i,
-	/^\s*awk\b/i,
 	/^\s*rg\b/i,
 	/^\s*fd\b/i,
 	/^\s*bat\b/i,
@@ -367,7 +367,21 @@ function parseModeFile(filePath: string, markdown: string): ModeDefinition {
 	};
 }
 
-function isReadOnlyBashCommand(command: string): boolean {
+export function buildAgentCommandCompletions(prefix: string, modes: ModeDefinition[]): AutocompleteItem[] | null {
+	const normalizedPrefix = prefix.trim().toLowerCase();
+	const options = [
+		{ value: "next", label: "next — switch to the next configured agent" },
+		{ value: "prev", label: "prev — switch to the previous configured agent" },
+		...modes.map((mode) => ({
+			value: mode.name,
+			label: mode.description ? `${mode.name} — ${mode.description}` : mode.name,
+		})),
+	];
+	const matches = options.filter((option) => option.value.toLowerCase().startsWith(normalizedPrefix));
+	return matches.length > 0 ? matches : null;
+}
+
+export function isReadOnlyBashCommand(command: string): boolean {
 	const blocked = READ_ONLY_BASH_BLOCKLIST.some((pattern) => pattern.test(command));
 	const allowed = READ_ONLY_BASH_ALLOWLIST.some((pattern) => pattern.test(command));
 	return !blocked && allowed;
@@ -625,7 +639,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		if (isReadOnlyBashCommand(command)) return undefined;
 		return {
 			block: true,
-			reason: `Mode ${current.name} only allows read-only bash commands. Switch modes with /mode if you need mutation tools.`,
+			reason: `Mode ${current.name} only allows read-only bash commands. Switch agents with /agents if you need mutation tools.`,
 		};
 	});
 
@@ -647,9 +661,10 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		});
 	}
 
-	pi.registerCommand("mode", {
-		description: "show current mode, switch by name, or use next/prev",
-		handler: async (args, ctx) => {
+	const agentsCommand = {
+		description: "show current agent, switch by name, or use next/prev",
+		getArgumentCompletions: (prefix: string) => buildAgentCommandCompletions(prefix, modes),
+		handler: async (args: string, ctx: ExtensionContext) => {
 			const trimmed = args.trim();
 			if (trimmed === "next") {
 				await switchToNextMode(ctx);
@@ -662,7 +677,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			}
 
 			if (trimmed) {
-				await switchToMode(ctx, trimmed, true);
+				await switchToMode(ctx, trimmed);
 				return;
 			}
 
@@ -675,7 +690,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			const effectiveTools = getEffectiveTools(current);
 			ctx.ui.notify(
 				[
-					`Current mode: ${current.name}`,
+					`Current agent: ${current.name}`,
 					current.description ? `description=${current.description}` : undefined,
 					`profile=${current.profile}`,
 					`tools=${effectiveTools.join(",")}`,
@@ -685,12 +700,14 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 					current.thinkingLevel ? `thinking=${current.thinkingLevel}` : undefined,
 					current.model ? `model=${current.model}` : undefined,
 					`available=${modes.map((mode) => mode.name).join(", ")}`,
-					`commands: /mode next, /mode prev, /mode <name>`,
+					`commands: /agents next, /agents prev, /agents <name>`,
 				]
 					.filter(Boolean)
 					.join(" | "),
 				"info",
 			);
 		},
-	});
+	};
+
+	pi.registerCommand("agents", agentsCommand);
 }

@@ -1,8 +1,29 @@
 {
   "name": "@judepayne/picode",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "A Pi package for disciplined, role-based coding workflows with mode switching, permissions, subagents, and prompt vars.",
   "type": "module",
-  "keywords": ["pi-package"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/judepayne/picode.git"
+  },
+  "homepage": "https://github.com/judepayne/picode#readme",
+  "bugs": {
+    "url": "https://github.com/judepayne/picode/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "coding-agent",
+    "ai-agent",
+    "subagent",
+    "workflow",
+    "prompt-vars",
+    "planner",
+    "builder",
+    "designer"
+  ],
   "files": [
     "extensions",
     "!extensions/**/test",
@@ -11,6 +32,7 @@
     "skills",
     "img",
     "README.md",
+    "CHANGELOG.md",
     "package.json"
   ],
   "exports": {
@@ -18,7 +40,8 @@
   },
   "pi": {
     "extensions": ["./extensions"],
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "image": "https://raw.githubusercontent.com/judepayne/picode/main/img/picode-preview.png"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",

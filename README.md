@@ -1,6 +1,22 @@
 ![picode logo](./img/picode.svg)
 
+![picode preview](./img/picode-preview.png)
+
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
+
+It gives Pi named operating modes like **Designer**, **Planner**, and **Builder**, pairs them with permission profiles, and adds managed delegated helpers like **scout**, **worker**, and **reviewer**.
+
+Install it with:
+
+```bash
+pi install npm:@judepayne/picode
+```
+
+Then run:
+
+```text
+/reload
+```
 
 It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder**, with delegated reviewer passes when needed, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
 
@@ -36,7 +52,7 @@ The short version is: this package gives you a structured way to tell Pi **what 
 To make that more concrete, these are the kinds of things this package makes practical:
 
 ```text
-/mode Designer
+/agents Designer
 ```
 
 ```text
@@ -70,6 +86,7 @@ Just as importantly, the system is meant to be **extended**. The built-in modes 
 - [Extending agents and subagents](#extending-agents-and-subagents)
 - [Package layout and state locations](#package-layout-and-state-locations)
 - [Which parts are reusable on their own](#which-parts-are-reusable-on-their-own)
+- [Troubleshooting](#troubleshooting)
 - [Further reading](#further-reading)
 
 ---
@@ -170,16 +187,16 @@ The point is not just that Pi can do many things. The point is that it can do th
 
 ## Install and reload
 
-### Local-path install for active development
+### Install from npm
 
 ```bash
-pi install -l /Users/jude/Dropbox/Projects/agent/picode
+pi install npm:@judepayne/picode
 ```
 
-### Global install
+### Install a pinned version
 
 ```bash
-pi install /Users/jude/Dropbox/Projects/agent/picode
+pi install npm:@judepayne/picode@1.0.0
 ```
 
 After installation, start Pi or reload an existing session:
@@ -188,19 +205,36 @@ After installation, start Pi or reload an existing session:
 /reload
 ```
 
+### Local-path install for active development
+
+```bash
+pi install -l /Users/jude/Dropbox/Projects/agent/picode
+```
+
+### Global local-path install
+
+```bash
+pi install /Users/jude/Dropbox/Projects/agent/picode
+```
+
 Because local-path installs are not copied into a separate build artifact, edits in this repository are normally picked up after `/reload`.
 
 ---
 
 ## Start here in one minute
 
-1. Install the package.
+1. Install the package:
+
+   ```bash
+   pi install npm:@judepayne/picode
+   ```
+
 2. Run `/reload`.
-3. Check the current mode with `/mode`.
-4. Switch modes with either:
-   - `/mode Designer`
-   - `/mode Planner`
-   - `/mode Builder`
+3. Check the current agent with `/agents`.
+4. Switch agents with either:
+   - `/agents Designer`
+   - `/agents Planner`
+   - `/agents Builder`
    - or the keyboard shortcuts `Ctrl+,` and `Ctrl+.`
 5. Let prompt-vars bootstrap its files automatically, or run `/vars bootstrap` explicitly.
 6. Try one or two delegation examples so you can feel the package working:
@@ -280,8 +314,8 @@ In this README, **user surface** means the things a human Pi user directly sees 
 
 | Surface | Who uses it | Purpose |
 | --- | --- | --- |
-| `/mode` | User | Show the current mode and available modes |
-| `/mode next` / `/mode prev` / `/mode <name>` | User | Switch the current mode |
+| `/agents` | User | Show the current agent and available agents |
+| `/agents next` / `/agents prev` / `/agents <name>` | User | Switch the current agent |
 | `Ctrl+.` / `Ctrl+,` | User | Cycle forward/backward through modes |
 | `/gate` / `/gate status` | User | Inspect the current gate profile and policy state |
 | `/gate switch` | User | Pick a gate profile manually |
@@ -495,7 +529,7 @@ The package is easiest to understand as a small stack.
 ```text
 User
   │
-  ├─ /mode, /gate, /vars, ~scout, ~worker, ~reviewer
+  ├─ /agents, /gate, /vars, ~scout, ~worker, ~reviewer
   │
   ▼
 agent-mode ─────► pi-gate
@@ -533,14 +567,14 @@ subagent-orchestrator
 
 | Component | Kind | Main job | User surface | Agent surface | Separate use? |
 | --- | --- | --- | --- | --- | --- |
-| `extensions/agent-mode` | Extension | Switch the main agent between named modes | `/mode`, shortcuts, footer status | Mode prompt, tool/model/thinking setup | **Yes** |
+| `extensions/agent-mode` | Extension | Switch the main agent between named modes | `/agents`, shortcuts, footer status | Mode prompt, tool/model/thinking setup | **Yes** |
 | `extensions/pi-gate` | Extension | Enforce permission profiles | `/gate`, approvals, footer status | Blocks/asks/allows tool calls | **Yes** |
 | `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~worker`, `~reviewer`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
 | `extensions/subagent-mode` | Extension | Spawn and normalize child runs | None intended for end users | Internal runner/event substrate | **No, mainly internal** |
 | `extensions/z-prompt-vars` | Extension | Interpolate prompt vars and manage stored vars | `/vars` | `vars` tool, `${...}` prompt expansion | **Yes** |
 | `extensions/agent-assets` | Extension | Resolve built-in and user-overlay agent/subagent card manifests | None direct | Resolved asset files + diagnostics to consumers | **Yes, especially for packaged workflows** |
 | `skills/*` | Skills | Teach the agent how to use the package well | None direct | Skill guidance | **Yes, as instruction assets** |
-| `extensions/agent-assets/agents/*` | Package asset | Define built-in main modes | Indirect, through `/mode` | Mode instructions/frontmatter | **Only with `agent-mode`** |
+| `extensions/agent-assets/agents/*` | Package asset | Define built-in main modes | Indirect, through `/agents` | Mode instructions/frontmatter | **Only with `agent-mode`** |
 | `extensions/agent-assets/subagents/*` | Package asset | Define built-in delegated child personas | Indirect, through `~scout` and delegation | Child instructions/frontmatter | **Only with orchestrator + runner** |
 
 ### Dependency notes
@@ -973,6 +1007,30 @@ These are instruction assets. They matter a lot in practice, but they are not di
 #### `extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`
 
 These are authored content assets for the extensions, not independent extension packages.
+
+---
+
+## Troubleshooting
+
+### I installed the package but do not see the modes or commands yet
+
+Run `/reload` in the current Pi session, or restart Pi if you installed the package outside the running session.
+
+### `/agents` or `~scout` is not available
+
+Confirm the package installed successfully with `pi list`, then reload. If the package is installed locally for the project, make sure you are running Pi from the same project directory.
+
+### My local edits are not showing up while developing the package
+
+Use a local-path install for development and run `/reload` after editing files in this repository.
+
+### My overlay agent or subagent files are not being picked up
+
+Check your `.pi/settings.json` or `~/.pi/agent/settings.json` `picode` block and confirm the configured overlay directories exist.
+
+### Where are release notes?
+
+See [`CHANGELOG.md`](./CHANGELOG.md).
 
 ---
 

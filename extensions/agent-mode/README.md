@@ -37,19 +37,20 @@ The built-in package ships modes for:
 ### Commands
 
 ```text
-/mode
-/mode next
-/mode prev
-/mode <name>
+/agents
+/agents next
+/agents prev
+/agents <name>
 ```
 
 Examples:
 
 ```text
-/mode Builder
-/mode Planner
-/mode Designer
+/agents Builder
+/agents Planner
+/agents Designer
 ```
+
 
 ### Keyboard shortcuts
 
