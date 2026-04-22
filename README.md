@@ -10,10 +10,10 @@ A homage to OpenCode in Pi!
 - Each agent has its own prompt, tools, skills, model settings, allowed subagents and permissions. You are not just telling Pi to “act like a planner.” You are putting it into a runtime that behaves like one.
 - An agent is just a markdown file; change as you wish.
 
-- Picode has a sync/ async subagent system.
-- Invoke in your chat with the current agent `Fire off a reviewer and have it review index.ts`
-- or interact directly `~scout when's the Arsenal match?`
-- like agents, subagents are just markdown files so you can extend.
+- Picode has a sync/async subagent system.
+- Invoke one in chat through the current agent: `Fire off a reviewer and have it review index.ts`
+- or interact directly: `~scout when's the Arsenal match?`
+- Like agents, subagents are just markdown files, so you can extend them.
 
 Picode's goal is to give you a significant boost whilst remaining unobtrusive.
 
@@ -291,10 +291,10 @@ Investigate the failed worker.
 A scout failed. Find out why and tell me whether to retry it.
 ```
 
-If picode shows a detailed subagent status card in the chat, that card gives you a closer look at one selected child run. It can show what task that child is working on, whether the overall run is sync or async, how many children are still active or already finished, what tool the child is using right now, where its session/log files live, any recent output, whether handbacks are waiting, and the final summary once the run is done.
+If picode shows a detailed subagent status card in the chat, that card gives you a closer look at one selected child run. It can show what task that child is working on, whether the overall run is sync or async, how many children are still active or already finished, what tool the child is using right now, where its session and log files live, any recent output, whether handbacks are waiting, and the final summary once the run is done.
 
 
-I wrestled with adding a pop up monitoring panel for subagents, but instead opted to create extensive 'under the cover' monitoring tools in the subagent-orchestrator extension that the agent can use to investigate on your behalf.
+I wrestled with adding a pop-up monitoring panel for subagents, but instead opted to build extensive behind-the-scenes monitoring tools in the `subagent-orchestrator` extension that the agent can use to investigate on your behalf.
 
 ---
 
