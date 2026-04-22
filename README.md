@@ -1,273 +1,145 @@
 ![picode logo](./img/picode.svg)
 
+A homage to OpenCode in Pi!
+
 ![picode preview](./img/picode-preview.png)
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
-It gives Pi named operating modes like **Designer**, **Planner**, and **Builder**, pairs them with permission profiles, and adds managed delegated helpers like **scout**, **worker**, and **reviewer**.
+- Switch between **Builder**, **Planner** and **Designer** agents with `Ctrl + ,` and `Ctrl + .`
+- Each agent has its own prompt, tools, skills, model settings, allowed subagents and permissions. You are not just telling Pi to “act like a planner.” You are putting it into a runtime that behaves like one.
+- An agent is just a markdown file; change as you wish.
 
-Install it with:
+- Picode has a sync/ async subagent system.
+- Invoke in your chat with the current agent `Fire off a reviewer and have it review index.ts`
+- or interact directly `~scout when's the Arsenal match?`
+- like agents, subagents are just markdown files so you can extend.
 
-```bash
-pi install npm:@judepayne/picode
-```
+Picode's goal is to give you a significant boost whilst remaining unobtrusive.
 
-Then run:
 
-```text
-/reload
-```
+**The parts of the whole:**
 
-It is also my homage to the Opencode features I liked most: multiple agent personas, permission profiles, and quick keyboard navigation between them. In practice, that usually means a deliberate loop of **Designer → Planner → Builder**, with delegated reviewer passes when needed, which helps keep architecture work, planning, implementation, and review from collapsing into one blurry role.
-
-What makes this package exciting is not just that it gives Pi “modes.” It gives you a way to turn one generic coding assistant into a small, organized system:
-
-- a **Designer** who helps shape the solution
-- a **Planner** who turns that into an implementation handoff
-- a **Builder** who actually changes the code
-- plus delegated helpers like **scout**, **worker**, and **reviewer** when the main agent needs backup
-
-And those are not just prompt labels. Modes can change:
-
-- the active prompt and persona
-- the active tools
-- the model and thinking level
-- the permission profile
-- which subagents are allowed
-
-That combination is what gives the package its bite. You are not just telling Pi to “act like a planner.” You are putting it into a runtime that behaves like one.
-
-This package bundles those ideas into one coherent setup for Pi:
-
-- **agent-mode** for mode switching and persona prompts
-- **pi-gate** for OpenCode-style permission profiles
-- **subagent-orchestrator** for mediated delegation to package-defined subagents
-- **subagent-mode** as the child-runner substrate behind delegation
-- **z-prompt-vars** for prompt interpolation and runtime vars
+- **agent-mode** an extension for mode switching and persona prompts
+- **pi-gate** an extension for OpenCode-style permission profiles
+- **subagent-orchestrator** an extension for mediated delegation to/ monitoring of package-defined subagents
+- **subagent-mode** an extension that provides the child-runner substrate behind delegation
+- **z-prompt-vars** an extension for prompt interpolation and runtime vars
 - **skills** that teach the agent how to use the package well
-- **agent-assets** for resolving the built-in and user-overlay agent/subagent cards that define the shipped modes and delegated personas
-
-The short version is: this package gives you a structured way to tell Pi **what kind of agent it should be right now**, **what it is allowed to do**, **what supporting subagents it may call**, and **what project-specific plan/design context should be injected into prompts**.
-
-To make that more concrete, these are the kinds of things this package makes practical:
-
-```text
-/agents Designer
-```
-
-```text
-~scout find every place where LibraryX is used and group the results by subsystem
-```
-
-```text
-~worker implement the smallest safe fix for the failing parser test and run the relevant test file
-```
-
-Or, without using the shorthand directly:
-
-> Spawn three scout subagents in parallel and run them async: one should review the API layer, one the persistence layer, and one the frontend state layer for code-quality risks. Then bring back a concise comparison of the most important issues.
-
-That is the real promise of `picode`: not just more knobs, but a workflow that feels more like coordinating a disciplined little engineering team.
-
-Just as importantly, the system is meant to be **extended**. The built-in modes and subagents are not hardcoded into the runtime; they are authored as package-local markdown assets. If you like the workflow but want different personas, different helper specialists, or a different house style, you can add your own mode cards and subagent cards instead of forking the whole architecture.
+- **agent-assets** an extension for resolving the built-in and user-overlay agent/subagent cards that define the shipped modes and delegated personas
 
 ---
 
 ## Contents
 
-- [What this package gives you](#what-this-package-gives-you)
-- [Install and reload](#install-and-reload)
-- [Start here in one minute](#start-here-in-one-minute)
-- [The default working style](#the-default-working-style)
-- [User surface](#user-surface)
-- [LLM-agent surface](#llm-agent-surface)
-- [Components and dependencies](#components-and-dependencies)
-- [What is configurable](#what-is-configurable)
-- [Extending agents and subagents](#extending-agents-and-subagents)
-- [Package layout and state locations](#package-layout-and-state-locations)
-- [Which parts are reusable on their own](#which-parts-are-reusable-on-their-own)
+- [Install and first run](#install-and-first-run)
+- [How picode works](#how-picode-works)
+- [The default workflow](#the-default-workflow)
+- [Agents](#agents)
+- [Subagents](#subagents)
+- [Prompt vars and plan/design files](#prompt-vars-and-plandesign-files)
+- [Customising picode](#customising-picode)
+- [Files and state](#files-and-state)
 - [Troubleshooting](#troubleshooting)
 - [Further reading](#further-reading)
 
 ---
 
-## What this package gives you
+## Install and first run
 
-### 1. Mode switching for the main agent
-
-The top-level agent can be switched between named modes such as:
-
-- **Designer**
-- **Planner**
-- **Builder**
-
-Each mode has its own:
-
-- persona and instructions
-- allowed tools
-- allowed delegated subagents
-- preferred model
-- preferred thinking level
-- associated permission profile
-
-That means the same Pi session can behave like a design partner, then a planner, then an implementation assistant, while still being able to call a dedicated reviewer subagent when needed, without you rewriting the whole prompt every time.
-
-In other words, you can stop trying to get one giant prompt to do everything at once.
-
-### 2. Permission profiles that follow the mode
-
-The package pairs each mode with a **pi-gate** profile. When you switch modes, the permission profile switches with it.
-
-That gives you a very useful separation of concerns:
-
-- the **mode prompt** shapes how the agent should think and talk
-- the **gate profile** shapes what the agent is allowed to do
-
-For example, Planner can be read-only in practice even if the model would otherwise be capable of editing, and the delegated reviewer can use the existing reviewer gate profile.
-
-That is one of the package's most useful discipline-enforcing features: the role changes, and the permission envelope changes with it.
-
-### 3. Managed delegation to subagents
-
-The package includes mediated subagent delegation with built-in child personas such as:
-
-- **scout** for fast reconnaissance
-- **worker** for unattended implementation or validation work
-- **reviewer** for independent code review
-
-Delegation is not a free-for-all. The current mode decides which subagents are allowed, and the orchestrator controls how runs are launched, tracked, surfaced, and handed back.
-
-That means you can do things like:
-
-- send a scout to map where a library is used
-- launch several scouts in parallel to review different subsystems
-- send a worker to apply a bounded fix while the parent keeps context and oversight
-- build nested workflows where delegated helpers can themselves coordinate smaller delegated tasks under a depth limit
-
-This is where the package starts to feel genuinely powerful.
-
-### 4. Prompt vars for plan and design driven workflows
-
-The package includes prompt vars so prompts can refer to things like:
-
-- the active plan path
-- the active design path
-- whether those files exist
-- stored project/global variables
-- the preferred default subagent context
-
-This avoids hardcoding paths into prompts and makes the same prompt files portable between projects.
-
-It also makes the built-in modes much more practical, because the same Planner or Builder prompt can adapt to whichever project it is running in.
-
-### 5. Package-local agent and subagent assets
-
-The built-in mode and subagent definitions live inside this package under:
-
-- `extensions/agent-assets/agents/`
-- `extensions/agent-assets/subagents/`
-
-Those are **package assets**, not mutable user state. Mutable state stays in the workspace or in Pi's normal user directories.
-
-If you want user overlays or custom card directories, configure them in Pi `settings.json` under the `picode` namespace at `.pi/settings.json` or `~/.pi/agent/settings.json`. That separation is important: shipped card definitions stay package-owned, while plans, designs, vars, sessions, orchestrator state, and optional overlay config stay where they belong.
-
-### 6. A workflow that is opinionated in a useful way
-
-A lot of AI tooling gives you raw capability. `picode` tries to give you **usable structure**.
-
-The point is not just that Pi can do many things. The point is that it can do them in a way that encourages better habits:
-
-- design before code
-- planning before implementation when needed
-- implementation with bounded permissions
-- explicit review instead of self-congratulation
-- delegated helpers when the scope is broad enough to justify them
-
----
-
-## Install and reload
-
-### Install from npm
+Install the package:
 
 ```bash
 pi install npm:@judepayne/picode
 ```
 
-### Install a pinned version
-
-```bash
-pi install npm:@judepayne/picode@1.0.0
-```
-
-After installation, start Pi or reload an existing session:
+Reload Pi:
 
 ```text
 /reload
 ```
 
-### Local-path install for active development
+Bootstrap the prompt-vars files:
 
-```bash
-pi install -l /Users/jude/Dropbox/Projects/agent/picode
+```text
+/vars bootstrap
 ```
 
-### Global local-path install
+That command creates these project-local files if they do not already exist:
 
-```bash
-pi install /Users/jude/Dropbox/Projects/agent/picode
+- `<cwd>/.pi/agent-mode-vars.json`
+- `<cwd>/.pi/agent-mode-vars-config.json`
+
+It seeds:
+
+- `paths.plan = ".pi/plans/active.md"`
+- `paths.design = ".pi/designs/active.md"`
+- `subagents.dispatch.defaultContext = "fresh"`
+- `pi-location = "project"`
+
+Once that is done, a good quick smoke test is:
+
+```text
+/agents
+/agents Designer
+~scout find every place where config is loaded
 ```
-
-Because local-path installs are not copied into a separate build artifact, edits in this repository are normally picked up after `/reload`.
 
 ---
 
-## Start here in one minute
+## How picode works
 
-1. Install the package:
+Picode turns one Pi session into a small, structured system.
 
-   ```bash
-   pi install npm:@judepayne/picode
-   ```
+First, the main agent runs in one of several named **agents** such as Builder, Planner, or Designer. Each agent has its own prompt, tools, preferred model settings, allowed subagents, and permission profile.
 
-2. Run `/reload`.
-3. Check the current agent with `/agents`.
-4. Switch agents with either:
-   - `/agents Designer`
-   - `/agents Planner`
-   - `/agents Builder`
-   - or the keyboard shortcuts `Ctrl+,` and `Ctrl+.`
-5. Let prompt-vars bootstrap its files automatically, or run `/vars bootstrap` explicitly.
-6. Try one or two delegation examples so you can feel the package working:
-   - `~scout find every place where configuration is loaded`
-   - `~scout --fork use the current debugging context and identify the strongest root-cause candidates`
-   - `~worker implement the smallest safe fix for the failing parser test and run the relevant test file`
-   - `~reviewer inspect the current working tree diff and report findings by severity`
+Second, permissions are enforced separately from persona through **pi-gate**. That matters. The prompt tells the agent how to behave; the gate tells it what it is allowed to do. In practice, switching agent also switches gate profile, so Builder can be broadly mutating, Planner can be read-mostly, and Designer can be constrained to design artefacts and scratch files.
 
-If you do nothing else, the default high-value workflow is:
+Pi-gate rules resolve to `allow`, `ask`, or `deny`. For the top-level agents, that gives you a useful balance: permissive where it should be, interactive where it would be risky, and blocked where it should never happen.
 
-1. **Designer** to shape the solution
-2. **Planner** to write or refine the implementation plan
-3. **Builder** to make the change and, for non-trivial changes, consult the **reviewer** subagent before finishing
+Third, the main agent can delegate bounded work to **subagents** such as scout, worker, and reviewer. Those subagents are not role-play. They run from their own markdown cards with their own tools and instructions.
 
-If you want the “oh, that’s cool” demo, this is a good natural-language example to try with the main agent:
+Fourth, prompts can interpolate project-aware values such as the active plan path and design path. That keeps prompts portable and lets the shipped agents adapt to the current workspace without hardcoding absolute paths.
 
-> Spawn three scout subagents in parallel and run them async: one should review the API layer, one the persistence layer, and one the frontend state layer for code-quality risks. Then bring back a concise comparison of the most important issues.
+The result is a package that gives Pi more structure without forcing a heavy workflow on top of you.
 
 ---
 
-## The default working style
+## The default workflow
 
-This package is opinionated. Its main goal is not to make Pi do more things at once. Its goal is to make Pi do the **right kind of work at the right time**.
+The default rhythm is simple:
 
-That is the through-line of the whole project: more structure, less blur.
+1. **Designer** shapes the approach.
+2. **Planner** turns that into a concrete handoff.
+3. **Builder** makes the change.
+4. **reviewer** checks non-trivial implementation work when needed.
 
-A typical disciplined loop looks like this:
+This is not bureaucracy. It is just a way to stop design, planning, implementation, and review from collapsing into one blurry prompt.
+
+If the task is tiny, you can skip straight to Builder. If the task is fuzzy, start with Designer. If the path is clear but the work is still non-trivial, Planner is usually the right next stop.
+
+---
+
+## Agents
+
+Use `/agents` to inspect the current agent and switch between them.
+
+```text
+/agents
+/agents Designer
+/agents Planner
+/agents Builder
+```
+
+You can also cycle with `Ctrl + ,` and `Ctrl + .`
+
+The shipped agents are:
 
 ### Designer
-Use when the problem is still fuzzy.
+
+Use Designer when the problem is still taking shape.
 
 Designer is for:
-
 - architecture
 - interfaces
 - boundaries
@@ -275,427 +147,213 @@ Designer is for:
 - shaping the work before code changes
 
 ### Planner
-Use when the direction is clear enough to turn into an implementation handoff.
+
+Use Planner when you know what should happen and want an implementation-ready handoff.
 
 Planner is for:
-
-- grounding a plan in the actual repository
-- clarifying scope and sequencing
-- writing the active handoff plan
+- clarifying scope
+- sequencing the work
+- grounding the plan in the actual repo
+- writing the active plan
 
 ### Builder
-Use when the request is ready to implement.
+
+Use Builder when the task is ready to implement.
 
 Builder is for:
-
-- direct code changes
+- code changes
 - focused validation
-- delegating supporting research or parallel work when useful
+- using subagents when they genuinely help
 
-### Reviewer subagent
-Use when you want an actual review pass without leaving the current top-level mode.
+A key point: agents are markdown files. If you want a different style, different rules, or a completely different set of roles, you can change them.
 
-Reviewer is for:
+The built-in agent definition files live in `extensions/agent-assets/agents/`. Each file is a markdown card with frontmatter for things like the name, tools, gate profile, allowed subagents, model, and thinking level, followed by the body prompt that actually defines the agent’s behaviour.
 
-- correctness
-- regression risk
-- maintainability
-- structured findings by severity
-
-In practice, Builder can consult `reviewer` before finishing non-trivial work, and users can also launch `~reviewer` directly for a standalone audit.
+When you build a new one, keep the role sharp and pair the prompt with the right tools and gate profile; vague overlap between agents tends to blur their behaviour. Also note that the number at the start of the filename sets the order the agents appear in Pi, so files like `01-builder.md`, `02-planner.md`, and `03-designer.md` are shown in that order.
 
 ---
 
-## User surface
+## Subagents
 
-In this README, **user surface** means the things a human Pi user directly sees or types.
+Subagents are delegated helpers. The shipped set is:
 
-### Commands and shortcuts
+- `scout` for reconnaissance
+- `worker` for bounded implementation or validation work
+- `reviewer` for an independent review pass
 
-| Surface | Who uses it | Purpose |
-| --- | --- | --- |
-| `/agents` | User | Show the current agent and available agents |
-| `/agents next` / `/agents prev` / `/agents <name>` | User | Switch the current agent |
-| `Ctrl+.` / `Ctrl+,` | User | Cycle forward/backward through modes |
-| `/gate` / `/gate status` | User | Inspect the current gate profile and policy state |
-| `/gate switch` | User | Pick a gate profile manually |
-| `/gate clear` | User | Clear cached session approvals |
-| `/vars` | User | Inspect prompt vars and derived plan/design values |
-| `/vars bootstrap` | User | Create the expected vars/config files if missing |
-| `/vars set ...` / `/vars unset ...` / `/vars location ...` | User | Manage stored vars and write location |
-| `~scout ...` / `~worker ...` / `~reviewer ...` | User | Launch an async delegated subagent run from the prompt line |
+Like agents, subagents have their own settings: tools, model, thinking level, body prompt, and `maxSubagentDepth`.
 
-### Footer/status surfaces
-
-The package also uses Pi's status/footer area to surface the current runtime state.
-
-You will typically see some combination of:
-
-- the **current mode name** from `agent-mode`
-- the **current gate profile** from `pi-gate`
-- subagent activity such as active runs or queued handbacks from `subagent-orchestrator`
-- persistent agent-triggered failure summaries such as `subagents: failed worker`
-
-The footer is intentionally quiet in the healthy case. Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer. The footer is mainly there to keep background agent-triggered activity legible and to make failures hard to miss.
-
-### User-facing subagent dispatch
-
-The cleanest user-facing delegation surface is the `~subagent` syntax at the start of an interactive input line.
-
-Examples:
+You can invoke them directly from the prompt line:
 
 ```text
-~scout inspect how the config is loaded
-~scout --fresh compare how configuration is loaded in the CLI and the server
-~scout --fork use the current debugging context and identify the strongest root-cause candidates
-~scout --cont follow up on the earlier scout thread and check the parser next
-~worker implement the smallest safe fix and run the relevant tests
+~scout inspect how config is loaded
+~worker implement the smallest safe fix and run the relevant test file
 ~reviewer inspect the current working tree diff and report findings by severity
+```
+
+Or you can just ask the current agent to orchestrate the work for you in plain English.
+
+Subagents can run sync or async. Direct `~subagent` use is async and lightweight by design.
+
+They also sit under their own gate profiles. This is where the permission story gets more interesting. The shipped subagent profiles are marked as **unattended**, which means they are designed to run without stopping for interactive `ask` decisions mid-flight. In practice that means the profiles lean toward explicit `allow` or `deny` rules instead.
+
+For example:
+
+- `scout` is tightly read-oriented, can write only to orchestrator artifact locations when needed, and has `maxSubagentDepth: 1`
+- `worker` is allowed to mutate files but has sharp denials around things like `git push`, `sudo`, and pipe-to-shell download patterns, and has `maxSubagentDepth: 0`
+- `reviewer` is read-only in spirit and does not edit files, with `maxSubagentDepth: 0`
+
+That combination is important: prompt, tools, gate profile, and depth limit all reinforce the intended role.
+
+A few example patterns:
+
+```text
+~scout inspect how config is loaded
+```
+
+```text
+Create a reviewer subagent, run it sync on the current working tree diff, and give me the findings by severity.
+```
+
+```text
+Spawn three scout subagents in parallel and run them async: one for the API layer, one for persistence, and one for frontend state. Then bring back a concise comparison.
+```
+
+```text
+Run a sync chain: first scout the parser code path, then have a worker implement the smallest safe fix, then have a reviewer inspect the diff and summarize any remaining risks.
 ```
 
 Important details:
 
-- it must be at the **start of the first line**
-- it only works for subagents allowed by the **current mode**
-- it launches an **async** delegated run
-- `--fresh`, `--fork`, and `--continue` (or `--cont`) override the context for that run
-- `continue` reuses the same subagent conversation for the current parent conversation when available
-- if a continued thread is already running, you will get a short `scout is busy` style message instead of opening a second concurrent continued thread
-- if you omit the context, the default comes from prompt-vars configuration; this package seeds that default to **`fresh`** on bootstrap, but you may also set it to `continue`
-- continued user subagent context is in-memory only and resets on `/reload` or restart
+- `~subagent` must be at the start of the first line
+- only subagents allowed by the current agent can be used
+- `--fresh`, `--fork`, and `--continue` control delegation context
+- the default direct-dispatch context is configured through prompt vars and defaults to `fresh`
 
-This is one of the most immediately satisfying parts of the package, because it makes delegated help feel lightweight instead of ceremonial.
+Like agents, subagents are just markdown cards. You can add your own specialists instead of forking the runtime.
 
-### When a subagent fails
+### Bonus: Going deeper
 
-Most of the time you do not need to inspect low-level orchestrator state yourself.
+> [!TIP]
+> You could build a PR-management team on top of picode with one custom **team-lead subagent** and one supporting **skill**.
+>
+> The team lead would own the workflow and delegate the actual work: assess the PR, ask the user for a go/no-go decision, call a Designer subagent if the change needs reshaping, call a Planner subagent to produce the execution plan, fan out multiple Worker subagents by subsystem, then finish with one or more Reviewer subagents.
+>
+> The skill would define the house process: when each stage starts, what output format each helper must return, when the lead should stop and ask the user, and when it is allowed to continue unattended.
+>
+> In practice, that means using a chain for the high-level flow and parallel fan-out for the worker/reviewer stages.
+>
+> The useful trick is that the team lead is itself a subagent, so it can manage a nested team of subagents while still giving the parent run one clean handback at the end.
 
-If a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
-
-- `subagents: failed scout`
-- `subagents: failed worker`
-- `subagents: failed 2 scouts, 1 worker`
-- `subagents: failed worker · 1 active`
-
-That summary is intentionally human rather than technical. It tells you what kind of helper failed and, when relevant, whether other delegated work is still active.
-
-The failure summary persists until your next real user message, which acts as an acknowledgment. In practice, the normal next step is simply to ask the main agent to investigate.
-
-Good examples are:
-
-> Investigate the failed worker.
-
-> A scout failed. Find out why and tell me whether the task should be retried.
-
-> Something in the delegated run failed. Inspect the orchestrator state and summarize the root cause.
-
-That is usually the best workflow. The main agent already has access to the orchestration and status tools, so it can inspect the relevant run, child logs, and handback state faster than a human user can do manually.
-
-### Asking the main agent to orchestrate work for you
-
-You also do not need to use the `~subagent` shorthand directly.
-
-A lot of the time, the most natural thing is simply to tell the main agent what kind of delegated work you want.
-
-Examples:
-
-> Create a scout subagent to find every place where `<LibraryX>` is used and group the results by subsystem.
-
-> Spawn three scout subagents in parallel and run them async: one should review the API layer, one the persistence layer, and one the frontend state layer for code-quality risks. Then bring back a concise comparison of the most important issues.
-
-> Create an async chain of worker subagents. First, review `ModuleX` for code quality and maintainability issues. Second, apply the smallest safe cleanup for the highest-value issue. Third, summarize exactly what changed and any follow-up work still worth doing.
-
-That is where the package starts to feel especially strong: you can talk at a high level, and the system underneath can turn that into a structured delegated workflow.
-
-### What users do **not** call directly
-
-Some package features are real Pi tools, but they are primarily intended for the main agent rather than for direct human use.
-
-In particular:
-
-- `delegate_subagent`
-- `delegate_subagent_status`
-- `vars`
-
-A user normally reaches those through ordinary conversation, through `/vars`, or through the `~subagent` style shorthand.
 
 ---
 
-## LLM-agent surface
+### Monitoring subagents
 
-In this README, **LLM surface** means the things the model itself sees or can call while generating answers.
+Picode can surface delegated work in three ways: a quick launch notification, footer status, and optional run cards.
 
-### The main agent sees
-
-When the main agent starts a turn, the package layers several things together:
-
-1. **The current mode prompt** from the resolved agent card manifest owned by `extensions/agent-assets/`
-2. **Interpolated prompt vars** from `z-prompt-vars`
-3. **Tool constraints** from the active mode
-4. **Model and thinking preferences** from the active mode
-5. **Permission enforcement** from `pi-gate`
-6. **Relevant skills** discovered by Pi from `skills/`
-
-That means the main agent's effective runtime is shaped by the selected mode, not just by a static base prompt.
-
-### The main agent can call
-
-The most important agent-facing tools in this package are:
-
-- `delegate_subagent(...)`
-- `delegate_subagent_status(...)`
-- `vars(...)`
-
-#### `delegate_subagent`
-
-This is the agent-facing delegation API.
-
-It supports:
-
-- single runs
-- parallel fan-out
-- sequential chains
-- `fresh` or `fork` context
-- sync or async execution
-- optional visible run cards
-
-Examples:
-
-```ts
-await delegate_subagent({ task: "inspect the parser" })
-await delegate_subagent({ agent: "worker", task: "apply the fix" })
-await delegate_subagent({ tasks: [{ task: "inspect A" }, { task: "inspect B" }], async: true })
-await delegate_subagent({ chain: [{ task: "inspect" }, { task: "summarize findings" }] })
-```
-
-#### `delegate_subagent_status`
-
-This is the inspection/control surface for delegated runs.
-
-It supports actions such as:
-
-- `list`
-- `get`
-- `cancel`
-- `next`
-- `prev`
-- `select`
-- `tree`
-- `log`
-- `stream`
-- `stream_next`
-
-It is mainly for situations where the agent needs to inspect an in-flight or completed delegated run in detail.
-
-#### `vars`
-
-This is the agent-facing runtime interface for prompt vars.
-
-It supports:
-
-- `bootstrap`
-- `list`
-- `get`
-- `set`
-- `unset`
-- `location`
-
-### What delegated subagents see
-
-Delegated subagents do **not** just see the parent mode prompt copied into a child process.
-
-Instead, a delegated child is launched from its own subagent card in the resolved subagent manifest owned by `extensions/agent-assets/`, which currently supplies:
-
-- instructions/body prompt
-- model
-- thinking level
-- tools
-- max subagent depth
-
-That separation matters. A scout child should feel like a scout, not like Builder wearing a different hat.
-
-### One especially important implementation detail
-
-Delegated child processes intentionally do **not** load `agent-mode` as their own top-level mode selector.
-
-That prevents the child from accidentally snapping back to the parent's main mode persona, model, or thinking level. The child instead runs with the subagent card that the orchestrator selected.
-
----
-
-## Components and dependencies
-
-The package is easiest to understand as a small stack.
+If you launch a subagent directly with `~scout`, `~worker`, or `~reviewer`, you will usually get a short notification such as:
 
 ```text
-User
-  │
-  ├─ /agents, /gate, /vars, ~scout, ~worker, ~reviewer
-  │
-  ▼
-agent-mode ─────► pi-gate
-  │               │
-  │               └─ enforces permissions on tool calls and bash
-  │
-  ├─ builds the main-agent prompt
-  ├─ applies tools/model/thinking
-  ├─ records allowed subagents
-  │
-  ▼
-z-prompt-vars
-  │
-  └─ interpolates ${...} values into the system prompt
-
-Main Pi agent
-  │
-  ├─ vars tool
-  └─ delegate_subagent / delegate_subagent_status
-          │
-          ▼
-subagent-orchestrator
-          │
-          ├─ consumes resolved subagent card files from agent-assets
-          ├─ manages run state and handbacks
-          └─ calls subagent-mode
-                    │
-                    ▼
-              subagent-mode
-                    │
-                    └─ spawns child pi processes and normalizes events
+Scout running in background
 ```
 
-### Component table
+That confirms the launch, but healthy user-started runs do not stay pinned in the footer.
 
-| Component | Kind | Main job | User surface | Agent surface | Separate use? |
-| --- | --- | --- | --- | --- | --- |
-| `extensions/agent-mode` | Extension | Switch the main agent between named modes | `/agents`, shortcuts, footer status | Mode prompt, tool/model/thinking setup | **Yes** |
-| `extensions/pi-gate` | Extension | Enforce permission profiles | `/gate`, approvals, footer status | Blocks/asks/allows tool calls | **Yes** |
-| `extensions/subagent-orchestrator` | Extension | Manage delegated runs and handbacks | `~scout`, `~worker`, `~reviewer`, async run UX | `delegate_subagent`, `delegate_subagent_status` | **Useful, but only with `subagent-mode` and subagent cards** |
-| `extensions/subagent-mode` | Extension | Spawn and normalize child runs | None intended for end users | Internal runner/event substrate | **No, mainly internal** |
-| `extensions/z-prompt-vars` | Extension | Interpolate prompt vars and manage stored vars | `/vars` | `vars` tool, `${...}` prompt expansion | **Yes** |
-| `extensions/agent-assets` | Extension | Resolve built-in and user-overlay agent/subagent card manifests | None direct | Resolved asset files + diagnostics to consumers | **Yes, especially for packaged workflows** |
-| `skills/*` | Skills | Teach the agent how to use the package well | None direct | Skill guidance | **Yes, as instruction assets** |
-| `extensions/agent-assets/agents/*` | Package asset | Define built-in main modes | Indirect, through `/agents` | Mode instructions/frontmatter | **Only with `agent-mode`** |
-| `extensions/agent-assets/subagents/*` | Package asset | Define built-in delegated child personas | Indirect, through `~scout` and delegation | Child instructions/frontmatter | **Only with orchestrator + runner** |
+When there is background activity worth tracking, the footer can show compact aggregate status such as:
 
-### Dependency notes
+```text
+subagents:1 run
+subagents:2 runs: 3 active · 1 waiting
+subagents:1 active
+subagents:2 active · 1 waiting
+```
 
-#### `agent-mode`
+What those parts mean:
 
-- reads the resolved mode-card manifest from `extensions/agent-assets/`
-- emits gate profile switch events that `pi-gate` can follow
-- works best with `z-prompt-vars`, because the built-in modes use `${plan.path}` and `${design.path}`
-- can run without `pi-gate`, but then you lose the permission-profile half of the design
+- `run` / `runs` is the number of top-level delegated runs currently in flight
+- `active` is the number of child subagents still running
+- `waiting` is the number of queued handbacks waiting to be surfaced back to the parent session
 
-#### `pi-gate`
+Failures stay visible in the footer until your next real user message, so they are hard to miss. Typical examples are:
 
-- is the most independently reusable piece
-- does not require `agent-mode`
-- gains a lot when paired with `agent-mode`, because mode switching can drive profile switching automatically
+```text
+subagents: failed scout
+subagents: failed worker · 1 active
+subagents: failed worker · 1 active · 1 waiting
+subagents: failed 2 scouts, 1 worker
+```
 
-#### `subagent-orchestrator`
+That is usually your cue to ask the main agent to inspect the failure, for example:
 
-- depends on `subagent-mode` for actual child execution
-- depends on the resolved subagent-card manifest from `extensions/agent-assets/` for delegated persona metadata
-- uses mode state from `agent-mode` to know which subagents are allowed
-- can also benefit from `z-prompt-vars`, because subagent dispatch defaults live there
+```text
+Investigate the failed worker.
+A scout failed. Find out why and tell me whether to retry it.
+```
 
-#### `subagent-mode`
+If picode shows a detailed subagent status card in the chat, that card gives you a closer look at one selected child run. It can show what task that child is working on, whether the overall run is sync or async, how many children are still active or already finished, what tool the child is using right now, where its session/log files live, any recent output, whether handbacks are waiting, and the final summary once the run is done.
 
-- is intentionally a substrate, not a polished end-user feature
-- is mainly valuable because the orchestrator sits on top of it
 
-#### `z-prompt-vars`
-
-- is independently useful anywhere you want `${...}` prompt interpolation and project/global vars
-- becomes especially useful in this package because the built-in modes and workflows refer to plan/design paths and subagent defaults
+I wrestled with adding a pop up monitoring panel for subagents, but instead opted to create extensive 'under the cover' monitoring tools in the subagent-orchestrator extension that the agent can use to investigate on your behalf.
 
 ---
 
-## What is configurable
+## Prompt vars and plan/design files
 
-There are five main configuration layers in this package.
+Picode uses `z-prompt-vars` so prompts can refer to project-aware values such as:
 
-### 1. Agent-mode settings
+- `${plan.path}`
+- `${design.path}`
+- `${plan.exists}`
+- `${design.exists}`
 
-File:
+By default those paths resolve to:
 
-- `extensions/agent-mode/settings.json`
+- `.pi/plans/active.md`
+- `.pi/designs/active.md`
 
-Current settings:
+The vars system reads project values first and global values second, so workspace overrides win.
 
-- `nextShortcut`
-- `prevShortcut`
+Useful commands:
 
-The shipped defaults are:
-
-- `Ctrl+.` for next mode
-- `Ctrl+,` for previous mode
-
-### 2. Gate policy
-
-Files:
-
-- `extensions/pi-gate/policy.json`
-- `extensions/pi-gate/policy.schema.json`
-
-This controls:
-
-- global/default permission rules
-- named profiles
-- profile inheritance
-- unattended profiles
-- subject-specific rules for tools and bash
-
-The shipped policy includes profiles for:
-
-- `builder`
-- `planner`
-- `designer`
-- `reviewer`
-- `scout`
-- `worker`
-
-### 3. Prompt vars and prompt-vars write config
-
-Files in the consuming workspace/user environment:
-
-- `<cwd>/.pi/agent-mode-vars.json`
-- `<cwd>/.pi/agent-mode-vars-config.json`
-- `~/.pi/agent/agent-mode-vars.json`
-
-This controls:
-
-- plan/design paths
-- project/global custom vars
-- where writes go (`project` or `global`)
-- the effective vars filename
-- the default user-facing subagent dispatch context
-
-Bootstrap seeds the default dispatch context to:
-
-```json
-{
-  "subagents": {
-    "dispatch": {
-      "defaultContext": "fresh"
-    }
-  }
-}
+```text
+/vars
+/vars bootstrap
+/vars plan.path
+/vars set project.name "My Project"
+/vars location
+/vars location global
 ```
 
-Allowed values are:
-- `fresh`
-- `fork`
-- `continue`
+For most users, `/vars bootstrap` is enough to get started.
 
-### 4. Agent asset overlay config
+---
 
-Optional settings in the consuming workspace/user environment:
+## Customising picode
 
-- project: `<cwd>/.pi/settings.json`
-- global: `~/.pi/agent/settings.json`
+There are three main ways to customise the package.
 
-Store them under the `picode` namespace, for example:
+### 1. Edit or add agent cards
+
+Built-in agent cards live under:
+
+- `extensions/agent-assets/agents/`
+
+These define top-level agents such as Builder, Planner, and Designer.
+
+### 2. Edit or add subagent cards
+
+Built-in subagent cards live under:
+
+- `extensions/agent-assets/subagents/`
+
+These define delegated specialists such as scout, worker, and reviewer.
+
+### 3. Add user overlays
+
+Instead of editing the shipped package files directly, you can point picode at your own overlay directories through Pi settings.
+
+In `.pi/settings.json` or `~/.pi/agent/settings.json`:
 
 ```json
 {
@@ -703,330 +361,70 @@ Store them under the `picode` namespace, for example:
     "agentsDir": "./custom-agents",
     "subagentsDir": "./custom-subagents",
     "agentsOnConflict": "prefer-user",
-    "subagentsOnConflict": "prefer-native"
+    "subagentsOnConflict": "prefer-user"
   }
 }
 ```
 
-This controls:
+That lets you keep your own house style while still using the rest of the package.
 
-- optional user agent overlay directory
-- optional user subagent overlay directory
-- agent same-filename conflict policy
-- subagent same-filename conflict policy
+The conflict policy settings control what happens when a user overlay file has the same filename as a built-in one:
 
-Environment variables may override this config at runtime:
+- `prefer-user` means your overlay file wins and shadows the shipped file
+- `prefer-native` means the shipped file stays active and the conflicting user file is ignored
 
-- `PICODE_AGENT_DIR`
-- `PICODE_SUBAGENT_DIR`
-- `PICODE_AGENT_OVERRIDE_ON_CONFLICT`
-- `PICODE_SUBAGENT_OVERRIDE_ON_CONFLICT`
-
-See [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md) for the detailed resolver behavior.
-
-### 5. Package-local mode and subagent cards
-
-These are the most important authoring surfaces in the package itself.
-
-#### Mode cards in `extensions/agent-assets/agents/*.md`
-
-The package currently uses frontmatter like this:
-
-| Field | Meaning |
-| --- | --- |
-| `name` | Human-facing mode name |
-| `description` | Short summary shown in mode info |
-| `profile` | The gate profile to activate |
-| `color` | Footer/status color |
-| `tools` | Active tools for the mode |
-| `subagents` | Subagents this mode is allowed to delegate to |
-| `bash` | `full` or `read-only` bash policy |
-| `thinking` | Preferred thinking level |
-| `model` | Preferred model |
-| `maxSubagentDepth` | Delegation depth ceiling used by the orchestrator |
-
-The markdown body becomes the mode's main instruction text.
-
-#### Subagent cards in `extensions/agent-assets/subagents/*.md`
-
-The orchestrator currently reads these fields from subagent cards:
-
-| Field | Meaning |
-| --- | --- |
-| `name` | Subagent identifier |
-| `description` | Human summary |
-| `tools` | Tools enabled for the child |
-| `model` | Child model |
-| `thinking` | Child thinking level |
-| `maxSubagentDepth` | Child delegation depth ceiling |
-
-The markdown body becomes the child system prompt.
-
-### What is configured by the package vs by the workspace
-
-A useful way to think about it is:
-
-#### Package-owned configuration
-
-Lives inside this repository and ships with the package:
-
-- extension code
-- skills
-- built-in mode cards in `extensions/agent-assets/agents/`
-- built-in subagent cards in `extensions/agent-assets/subagents/`
-- gate policy defaults
-- default mode navigation settings
-
-#### Workspace/user-owned mutable state
-
-Lives outside the package and should stay mutable:
-
-- prompt-vars files in `.pi/` or `~/.pi/agent/`
-- orchestrator runtime state in `.pi/state/subagent-orchestrator/`
-- normal Pi session files
-
-That separation is intentional.
+That can be useful if you want to allow additive custom files in an overlay directory without accidentally replacing the built-in cards.
 
 ---
 
-## Extending agents and subagents
+## Files and state
 
-This is one of the most important things to understand about the package: the built-in roles are not magic. They are authored assets.
+The files in this repository define how picode behaves. The files picode creates while you use it live in your project’s `.pi/` directory or in your normal Pi user config area.
 
-If you want your own top-level modes, your own delegated specialists, or your own team structure, the built-in shipped cards live under:
+### Package-owned
 
-- `extensions/agent-assets/agents/` for built-in main-agent modes
-- `extensions/agent-assets/subagents/` for built-in delegated child personas
-
-For user customization, prefer overlay directories configured through `settings.json` under the `picode` namespace rather than editing the shipped package files in place. The runtime is designed to resolve those built-ins together with any configured overlays and turn the final manifest into behavior.
-
-### Where the files live
-
-- built-in main modes: [`extensions/agent-assets/agents/`](./extensions/agent-assets/agents)
-- built-in delegated helpers: [`extensions/agent-assets/subagents/`](./extensions/agent-assets/subagents)
-- resolver/config documentation: [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md)
-
-### How to think about the split
-
-A good rule of thumb is:
-
-- add a file in your configured agent overlay directory when you want a **top-level operating mode** for the main agent
-- add a file in your configured subagent overlay directory when you want a **delegated helper persona** the main agent can call through the orchestrator
-
-Examples:
-
-- a `Security-Reviewer` or `Docs-Writer` would usually be a new **agent mode**
-- a `migration-scout`, `test-runner`, or `api-reviewer` would usually be a new **subagent**
-
-### Extending agent cards
-
-An agent card defines a main-agent mode.
-
-A minimal mode looks like this:
-
-```md
----
-name: Security-Reviewer
-description: Review security-sensitive changes with a narrow remit.
-profile: reviewer
-tools: [read, bash, grep, find, ls, delegate_subagent, delegate_subagent_status]
-subagents: scout
-bash: read-only
-thinking: high
-model: openai-codex/gpt-5.4
----
-Review changes for security issues, dangerous assumptions, and credential exposure.
-```
-
-What matters most in practice:
-
-- `name` gives the mode its human-facing identity
-- `profile` should line up with a sensible **pi-gate** profile
-- `tools` determines what the main agent can actually use in that mode
-- `subagents` determines which helpers that mode is allowed to delegate to
-- the markdown body is the real heart of the mode; that is where you define the persona, rules, workflow, and tone
-
-#### Tips for writing good mode cards
-
-- make each mode feel like a **distinct job**, not just a slight rewording of another mode
-- keep the body focused on mission and behavior, not implementation trivia
-- pair the mode with the right gate profile so the permissions reinforce the role
-- if you want stable keyboard cycling order, use numbered filenames like `01-builder.md`, `02-planner.md`, and so on
-- use `${plan.path}`, `${design.path}`, and other prompt vars when the mode should adapt to the active workspace
-- be explicit about whether the mode should implement, plan, design, or review; ambiguity is the enemy here
-
-### Extending subagent cards
-
-A subagent card defines a delegated child persona.
-
-A minimal subagent looks like this:
-
-```md
----
-name: api-reviewer
-description: Review API surfaces and contracts for consistency
-tools: read, grep, find, ls, bash
-model: openai-codex/gpt-5.4-mini
-thinking: medium
-maxSubagentDepth: 0
----
-You are an API reviewer. Inspect route shapes, request and response contracts, validation boundaries, and consistency across handlers.
-```
-
-For subagents, the most important currently-used fields are:
-
-- `name`
-- `tools`
-- `model`
-- `thinking`
-- `maxSubagentDepth`
-- the markdown body
-
-The orchestrator reads those fields and uses them to launch the child with the right runtime.
-
-#### Tips for writing good subagent cards
-
-- make the subagent sharply specialized; broad child personas are usually less helpful than crisp ones
-- write the body as if you were briefing a capable teammate for a bounded assignment
-- choose a tool set that matches the role instead of defaulting to maximum power
-- keep `maxSubagentDepth` low unless the subagent truly benefits from spawning its own helpers
-- prefer filenames that match the intended identifier, even though the resolver can also fall back to frontmatter `name`
-- think of subagents as **reusable specialists** that the main agent can compose into larger workflows
-
-### How new subagents become usable
-
-Adding a new subagent card to your configured overlay directory is not enough on its own. A top-level mode must also allow that subagent in its `subagents:` frontmatter.
-
-For example, if you create `api-reviewer.md` in your configured subagent overlay directory, a mode that should be allowed to call it needs something like:
-
-```md
-subagents: scout, api-reviewer
-```
-
-That is an intentional safety boundary. It keeps delegation explicit.
-
-### How permissions fit into extensibility
-
-If you add a new agent mode, you will often want a matching or reused profile in:
-
-- `extensions/pi-gate/policy.json`
-
-If you add a new subagent, think carefully about whether its tool set and delegated role should imply a distinct gate profile, a reused one, or tighter constraints.
-
-The main design principle here is that **persona and permission should reinforce each other**.
-
-### A practical way to extend the system
-
-A very workable pattern is:
-
-1. start by cloning the closest existing card
-2. change the role name, mission, and tool set
-3. simplify rather than elaborate
-4. run it in real tasks
-5. tighten the body once you see where it drifts
-
-That applies to both modes and subagents.
-
-In other words: do not try to design the perfect specialist from scratch. Start with a clear job and refine it against real use.
-
----
-
-## Package layout and state locations
-
-### Public package resources
-
-These are exposed to Pi through `package.json`:
+Inside the package:
 
 - `extensions/`
 - `skills/`
-
-### Package-local assets
-
-These are used by the extensions but are not exposed as first-class package entrypoints:
-
 - `extensions/agent-assets/agents/`
 - `extensions/agent-assets/subagents/`
 
-### Important runtime state locations
+### Workspace/user-owned
 
-#### Prompt vars
+Outside the package:
 
-- project: `<cwd>/.pi/agent-mode-vars.json`
-- project config: `<cwd>/.pi/agent-mode-vars-config.json`
-- global: `~/.pi/agent/agent-mode-vars.json`
+- project prompt vars: `<cwd>/.pi/agent-mode-vars.json`
+- project prompt-vars write config: `<cwd>/.pi/agent-mode-vars-config.json`
+- global fallback prompt vars: `~/.pi/agent/agent-mode-vars.json`
+- subagent orchestrator state: `<cwd>/.pi/state/subagent-orchestrator/`
+- Pi session files in Pi’s normal session storage
 
-#### Subagent orchestrator runtime state
-
-- `<cwd>/.pi/state/subagent-orchestrator/`
-
-That state includes run metadata, child-session metadata, handbacks, continuations, and logs.
-
----
-
-## Which parts are reusable on their own
-
-### Good standalone candidates
-
-#### `pi-gate`
-
-If you only want OpenCode-style permissions and profile switching, `pi-gate` is useful by itself.
-
-#### `z-prompt-vars`
-
-If you only want prompt interpolation, plan/design vars, and runtime var storage, `z-prompt-vars` is useful by itself.
-
-#### `agent-mode`
-
-If you want mode switching with different personas, tool sets, and preferred models/thinking levels, `agent-mode` is useful by itself.
-
-It is strongest when paired with `pi-gate`, but it does not strictly require it.
-
-### Best used together
-
-#### `subagent-orchestrator` + `subagent-mode` + resolved subagent cards
-
-These three form one real feature.
-
-- `subagent-orchestrator` is the public face
-- `subagent-mode` is the execution substrate
-- `extensions/agent-assets/subagents/` holds the built-in child persona definitions
-- configured overlay dirs can add or override subagent cards before the orchestrator consumes the resolved manifest
-
-In practice, you should treat them as one subsystem.
-
-### Mostly internal or support assets
-
-#### `subagent-mode`
-
-This exists so the orchestrator can have a clean execution substrate. Most users should not think of it as a standalone feature.
-
-#### `skills/`
-
-These are instruction assets. They matter a lot in practice, but they are not direct end-user UI.
-
-#### `extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`
-
-These are authored content assets for the extensions, not independent extension packages.
+That split is deliberate: shipped behaviour stays package-owned, while mutable project state stays local to the workspace or user environment.
 
 ---
 
 ## Troubleshooting
 
-### I installed the package but do not see the modes or commands yet
+### I installed the package but nothing changed
 
-Run `/reload` in the current Pi session, or restart Pi if you installed the package outside the running session.
+Run `/reload`, or restart Pi if you installed the package outside the current running session.
 
-### `/agents` or `~scout` is not available
+### `/agents` is not available
 
-Confirm the package installed successfully with `pi list`, then reload. If the package is installed locally for the project, make sure you are running Pi from the same project directory.
+Check that the package installed successfully with `pi list`, then reload.
 
-### My local edits are not showing up while developing the package
+### `~scout` or another subagent is not available
 
-Use a local-path install for development and run `/reload` after editing files in this repository.
+Make sure the current agent is allowed to delegate to that subagent.
 
-### My overlay agent or subagent files are not being picked up
+### My local edits are not showing up during development
 
-Check your `.pi/settings.json` or `~/.pi/agent/settings.json` `picode` block and confirm the configured overlay directories exist.
+Use a local-path install and run `/reload` after editing files in this repository.
+
+### My overlay cards are not being picked up
+
+Check the `picode` block in `.pi/settings.json` or `~/.pi/agent/settings.json` and confirm the configured directories actually exist.
 
 ### Where are release notes?
 
@@ -1036,38 +434,17 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Further reading
 
-### Component READMEs
-
-- [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md)
-- [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md)
-- [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md)
-- [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md)
-- [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md)
-- [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md)
-
-### Built-in skills
-
-- [`skills/planning-workflow/SKILL.md`](./skills/planning-workflow/SKILL.md)
-- [`skills/orchestrate-subagents/SKILL.md`](./skills/orchestrate-subagents/SKILL.md)
-- [`skills/prompt-vars/SKILL.md`](./skills/prompt-vars/SKILL.md)
-
-### Built-in package assets
-
-- [`extensions/agent-assets/agents/`](./extensions/agent-assets/agents)
-- [`extensions/agent-assets/subagents/`](./extensions/agent-assets/subagents)
+- [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md) — read this to understand how agent switching works: prompts, tools, models, thinking levels, shortcuts, and the `/agents` command.<br><br>
+- [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md) — read this to understand the permission system: profiles, `allow`/`ask`/`deny`, inheritance, and how bash/file actions are gated.<br><br>
+- [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md) — read this to understand the public delegation layer: `~subagent`, sync vs async runs, chains, parallel fan-out, status, logs, and handbacks.<br><br>
+- [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md) — read this if you want the internal execution model behind subagents: child `pi` processes, normalized events, sync/async executors, and depth propagation.<br><br>
+- [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md) — read this to learn how `${...}` prompt interpolation works, where vars are stored, and how `/vars` reads and writes project/global state.<br><br>
+- [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md) — read this to understand where built-in agent/subagent cards come from, how overlays are resolved, and what `prefer-user` / `prefer-native` actually do.<br><br>
+- [`skills/planning-workflow/SKILL.md`](./skills/planning-workflow/SKILL.md) — read this to see the planning discipline shipped with picode: how a request is turned into a Builder-ready plan grounded in the repo.<br><br>
+- [`skills/karpathy-coding-discipline/SKILL.md`](./skills/karpathy-coding-discipline/SKILL.md) — read this to see the Builder’s coding discipline layer: it pushes toward caution over speed, simpler changes, explicit assumptions, and tighter validation loops.<br><br>
+- [`skills/orchestrate-subagents/SKILL.md`](./skills/orchestrate-subagents/SKILL.md) — read this to see how the agent is taught to choose between one subagent, several in parallel, or a chain, and when to run sync vs async.<br><br>
+- [`skills/prompt-vars/SKILL.md`](./skills/prompt-vars/SKILL.md) — read this to see how prompt vars are meant to be used in prompts and at runtime, including the built-in plan/design vars and write-location rules.
 
 ---
 
-## Final summary
-
-If you want the shortest accurate mental model, it is this:
-
-- **agent-mode** decides what the main agent is supposed to be
-- **pi-gate** decides what it is allowed to do
-- **z-prompt-vars** injects project-aware context into prompts
-- **subagent-orchestrator** lets the agent call managed helper personas
-- **subagent-mode** is the engine that actually runs those helpers
-- **`extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`** define the shipped personalities
-- **`skills/`** teach the agent how to use the whole package well
-
-That combination is what makes `picode` feel less like one generic coding assistant and more like a small, disciplined team with explicit roles.
+Jude Payne, 2026. License MIT
