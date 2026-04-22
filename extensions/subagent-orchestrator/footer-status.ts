@@ -48,7 +48,13 @@ export function formatFooterStatus(input: FooterStatusInput, emphasizeFailed: (t
 		const parts = [`${emphasizeFailed("failed")} ${failedSummary}`, ...activeParts];
 		return `subagents: ${parts.join(" · ")}`;
 	}
-	if (input.activeRuns > 0) activeParts.unshift(`${input.activeRuns} run${input.activeRuns === 1 ? "" : "s"}`);
+	if (input.activeRuns > 0) {
+		const runLabel = `${input.activeRuns} run${input.activeRuns === 1 ? "" : "s"}`;
+		if (activeParts.length > 0) {
+			return `subagents:${runLabel}: ${activeParts.join(" · ")}`;
+		}
+		return `subagents:${runLabel}`;
+	}
 	return activeParts.length > 0 ? `subagents:${activeParts.join(" · ")}` : undefined;
 }
 

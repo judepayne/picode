@@ -96,7 +96,7 @@ const GATE_PROFILE_LOCK_ENV = "GATE_PROFILE_LOCK";
 const GATE_SWITCH_PROFILE_EVENT = "gate:switch-profile";
 const POLICY_SCHEMA_FILE = "policy.schema.json";
 const BASE_PROFILE_NAME = "$base";
-const YOLO_STATUS = "gate:yolo";
+const GATE_ERROR_STATUS = "gate:error";
 const SHELL_COMPLEXITY_PATTERN = /(^|[^\\])(\|\||&&|[;`]|\$\()/;
 const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "then", "do", "else", "elif", "fi"]);
 const PATH_SUBJECTS = new Set(["read", "edit", "list", "external_directory"]);
@@ -345,7 +345,7 @@ function loadPolicy(policyPath: string, schemaPath: string): LoadedPolicy {
 		return {
 			policyPath,
 			schemaPath,
-			error: `failed to load gate policy: ${message}. You're currently in YOLO permission mode!`,
+			error: `failed to load gate policy: ${message}. Tool calls are blocked until the gate policy is fixed.`,
 		};
 	}
 
@@ -358,7 +358,7 @@ function loadPolicy(policyPath: string, schemaPath: string): LoadedPolicy {
 			policy: isPlainObject(rawPolicy) ? (rawPolicy as RawPolicy) : undefined,
 			policyPath,
 			schemaPath,
-			error: `schema validation failed! failed to load ${path.basename(schemaPath)}: ${message}. You're currently in YOLO permission mode!`,
+			error: `schema validation failed! failed to load ${path.basename(schemaPath)}: ${message}. Tool calls are blocked until the gate policy is fixed.`,
 		};
 	}
 
@@ -368,7 +368,7 @@ function loadPolicy(policyPath: string, schemaPath: string): LoadedPolicy {
 			policy: isPlainObject(rawPolicy) ? (rawPolicy as RawPolicy) : undefined,
 			policyPath,
 			schemaPath,
-			error: `schema validation failed! ${schemaError}. You're currently in YOLO permission mode!`,
+			error: `schema validation failed! ${schemaError}. Tool calls are blocked until the gate policy is fixed.`,
 		};
 	}
 
@@ -379,7 +379,7 @@ function loadPolicy(policyPath: string, schemaPath: string): LoadedPolicy {
 			policy,
 			policyPath,
 			schemaPath,
-			error: `policy validation failed! ${semanticError}. You're currently in YOLO permission mode!`,
+			error: `policy validation failed! ${semanticError}. Tool calls are blocked until the gate policy is fixed.`,
 		};
 	}
 
@@ -865,9 +865,15 @@ function collectNonOptionArgs(tokens: string[], start: number): string[] {
 	return tokens.slice(start).filter((token) => token !== ">" && token !== ">>" && !token.startsWith("-"));
 }
 
-function extractMutationTargets(command: string, cwd: string): MutationAnalysis {
+function hasMutatingAwkPattern(command: string): boolean {
+	if (!/\bawk\b/i.test(command)) return false;
+	return /\bsystem\s*\(/i.test(command) || /\bprint\b[\s\S]*>>?/i.test(command);
+}
+
+export function extractMutationTargets(command: string, cwd: string): MutationAnalysis {
 	const lower = command.toLowerCase();
-	const mutating = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\btee\b|\bln\b|\binstall\b|\bchmod\b|\bchown\b|\bfind\b|\bgit\s+clean\b|>|\bsed\b[^\n]*\s-i|\bperl\b[^\n]*\s-pi/.test(lower);
+	const mutating = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\btee\b|\bln\b|\binstall\b|\bchmod\b|\bchown\b|\bfind\b[^\n]*\s-delete\b|\bgit\s+clean\b|>|\bsed\b[^\n]*\s-i|\bperl\b[^\n]*\s-pi/.test(lower)
+		|| hasMutatingAwkPattern(command);
 	const complex = SHELL_COMPLEXITY_PATTERN.test(command);
 	if (!mutating) {
 		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: "read-only command" };
@@ -985,7 +991,7 @@ function updateStatus(
 ): void {
 	if (!ctx.hasUI) return;
 	if (yolo) {
-		ctx.ui.setStatus(SESSION_STATUS_KEY, YOLO_STATUS);
+		ctx.ui.setStatus(SESSION_STATUS_KEY, GATE_ERROR_STATUS);
 		return;
 	}
 	const lockSuffix = locked ? "🔒" : "";
@@ -1040,12 +1046,12 @@ export default function piGate(pi: ExtensionAPI) {
 
 	function getCompiledPolicy(cwd: string): { compiled?: CompiledPolicy; error?: string } {
 		if (loaded.error) return { error: loaded.error };
-		if (!loaded.policy) return { error: "Gate policy unavailable. You're currently in YOLO permission mode!" };
+		if (!loaded.policy) return { error: "Gate policy unavailable. Tool calls are blocked until the gate policy is fixed." };
 		try {
 			return { compiled: compilePolicy(loaded.policy, cwd, resolveRequestedProfile()) };
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return { error: `policy resolution failed! ${message}. You're currently in YOLO permission mode!` };
+			return { error: `policy resolution failed! ${message}. Tool calls are blocked until the gate policy is fixed.` };
 		}
 	}
 
@@ -1059,7 +1065,7 @@ export default function piGate(pi: ExtensionAPI) {
 		}
 		if (loaded.error) return { ok: false, error: loaded.error };
 		if (!loaded.policy) {
-			return { ok: false, error: "Gate policy unavailable. You're currently in YOLO permission mode!" };
+			return { ok: false, error: "Gate policy unavailable. Tool calls are blocked until the gate policy is fixed." };
 		}
 		const normalizedProfile = normalizeProfileName(profileName) ?? BASE_PROFILE_NAME;
 		if (normalizedProfile !== BASE_PROFILE_NAME && !loaded.policy.profiles?.[normalizedProfile]) {
@@ -1090,7 +1096,7 @@ export default function piGate(pi: ExtensionAPI) {
 		}
 		if (loaded.error) return { ok: false, error: loaded.error };
 		if (!loaded.policy) {
-			return { ok: false, error: "Gate policy unavailable. You're currently in YOLO permission mode!" };
+			return { ok: false, error: "Gate policy unavailable. Tool calls are blocked until the gate policy is fixed." };
 		}
 		const normalizedProfile = normalizeProfileName(request.profile) ?? BASE_PROFILE_NAME;
 		if (normalizedProfile !== BASE_PROFILE_NAME && !loaded.policy.profiles?.[normalizedProfile]) {
@@ -1186,7 +1192,7 @@ export default function piGate(pi: ExtensionAPI) {
 				ctx.ui.notify("Gate: profile switching requires a UI", "warning");
 				return;
 			}
-			const current = getCompiledPolicy(ctx.cwd).compiled?.profileName ?? "yolo";
+			const current = getCompiledPolicy(ctx.cwd).compiled?.profileName ?? "error";
 			const choice = await ctx.ui.select(`Select gate profile (current: ${current})`, profileNames);
 			if (!choice) return;
 			const result = switchProfile(ctx, choice);
@@ -1213,7 +1219,7 @@ export default function piGate(pi: ExtensionAPI) {
 		}
 
 		const summary = [
-			resolved.compiled ? `Gate profile=${resolved.compiled.profileName}` : "Gate profile=yolo",
+			resolved.compiled ? `Gate profile=${resolved.compiled.profileName}` : "Gate profile=error",
 			resolved.compiled?.unattended ? "unattended=true" : undefined,
 			profileLocked ? `profile locked by=${GATE_PROFILE_LOCK_ENV}` : undefined,
 			selectedProfileOverride ? `profile override=${selectedProfileOverride === BASE_PROFILE_NAME ? "base" : selectedProfileOverride}` : undefined,
@@ -1234,7 +1240,12 @@ export default function piGate(pi: ExtensionAPI) {
 
 	pi.on("tool_call", async (event, ctx) => {
 		const resolved = getCompiledPolicy(ctx.cwd);
-		if (!resolved.compiled) return undefined;
+		if (!resolved.compiled) {
+			return {
+				block: true,
+				reason: resolved.error ?? "Gate policy unavailable. Tool calls are blocked until the gate policy is fixed.",
+			};
+		}
 		const compiled = resolved.compiled;
 
 		if (event.toolName === "bash") {

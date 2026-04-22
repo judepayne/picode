@@ -80,6 +80,14 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 		assert.ok(types.includes("subagent:mode:child.complete"));
 		assert.ok(types.includes("subagent:mode:run.complete"));
 
+		if (process.platform !== "win32") {
+			const mode = (target: string) => fs.statSync(target).mode & 0o777;
+			assert.strictEqual(mode(asyncRunDir(runId)), 0o700);
+			assert.strictEqual(mode(asyncRunManifestPath(runId)), 0o600);
+			assert.strictEqual(mode(asyncRunEventsPath(runId)), 0o600);
+			assert.strictEqual(mode(asyncRunResultPath(runId)), 0o600);
+		}
+
 		// Config file should be cleaned up.
 		assert.strictEqual(fs.existsSync(cfgPath), false);
 

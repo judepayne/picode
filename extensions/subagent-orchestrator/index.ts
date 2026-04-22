@@ -5,12 +5,13 @@ import { Type } from "@sinclair/typebox";
 import { keyHint, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
-import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv, isAllowedContext } from "./policy.ts";
+import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv } from "./policy.ts";
 import { collectAgentFiles, collectSubagentFiles, type AgentAssetFile } from "../agent-assets/contract.ts";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
 import { formatModelReference, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolsFromFiles } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
+import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
@@ -104,8 +105,7 @@ const DelegateSubagentParams = Type.Object({
 	context: Type.Optional(Type.Union([
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
-		Type.Literal("continue"),
-	], { description: "Execution context for child scouts." })),
+	], { description: "Execution context for child subagents." })),
 	showRunCard: Type.Optional(Type.Boolean({ description: "Show a visible subagent orchestrator run card in the UI. Defaults to false." })),
 }, { additionalProperties: false });
 
@@ -451,58 +451,6 @@ function summarizeTasks(request: NormalizedDelegationRequest): string {
 
 function getRequestedModeLabel(request: NormalizedDelegationRequest): "single" | "parallel" | "chain" {
 	return request.shape;
-}
-
-function normalizeTaskItems(value: unknown, field: "tasks" | "chain"): { items?: Array<{ task: string }>; error?: string } {
-	if (!Array.isArray(value) || value.length === 0) return { error: `${field} must be a non-empty array.` };
-	const items: Array<{ task: string }> = [];
-	for (let i = 0; i < value.length; i++) {
-		const item = value[i];
-		if (!item || typeof item !== "object" || Array.isArray(item)) return { error: `${field}[${i}] must be an object.` };
-		const task = (item as { task?: unknown }).task;
-		if (typeof task !== "string" || !task.trim()) return { error: `${field}[${i}].task must be a non-empty string.` };
-		items.push({ task: task.trim() });
-	}
-	return { items };
-}
-
-function normalizeDelegateInput(input: {
-	agent?: unknown;
-	task?: unknown;
-	tasks?: unknown;
-	chain?: unknown;
-	async?: unknown;
-	context?: unknown;
-	showRunCard?: unknown;
-}): { request?: NormalizedDelegationRequest; error?: string } {
-	const hasTask = typeof input.task === "string" && input.task.trim().length > 0;
-	const hasTasks = input.tasks !== undefined;
-	const hasChain = input.chain !== undefined;
-	if (Number(hasTask) + Number(hasTasks) + Number(hasChain) !== 1) {
-		return { error: "Provide exactly one of task, tasks, or chain." };
-	}
-	if (input.context !== undefined && !isAllowedContext(input.context)) {
-		return { error: 'context must be one of "fresh", "fork", or "continue".' };
-	}
-	const normalizedAsync = input.async === true;
-	const context = input.context === "fork"
-		? "fork"
-		: input.context === "continue"
-			? "continue"
-			: "fresh";
-	const showRunCard = input.showRunCard === true;
-	const agent = requestedDelegatedAgent(input.agent);
-	if (hasTask) {
-		return { request: { shape: "single", agent, async: normalizedAsync, context, showRunCard, task: (input.task as string).trim() } };
-	}
-	if (hasTasks) {
-		const normalized = normalizeTaskItems(input.tasks, "tasks");
-		if (!normalized.items) return { error: normalized.error };
-		return { request: { shape: "parallel", agent, async: normalizedAsync, context, showRunCard, tasks: normalized.items } };
-	}
-	const normalized = normalizeTaskItems(input.chain, "chain");
-	if (!normalized.items) return { error: normalized.error };
-	return { request: { shape: "chain", agent, async: normalizedAsync, context, showRunCard, chain: normalized.items } };
 }
 
 function normalizeAllowedSubagents(value: unknown): string[] | undefined {

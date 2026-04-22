@@ -10,7 +10,7 @@ describe("footer status", () => {
 	it("formats healthy aggregate status", () => {
 		assert.equal(
 			formatFooterStatus({ activeRuns: 2, activeChildren: 3, queuedHandbacks: 1 }),
-			"subagents:2 runs · 3 active · 1 waiting",
+			"subagents:2 runs: 3 active · 1 waiting",
 		);
 	});
 

@@ -77,6 +77,27 @@ export function isAsyncAvailable(): boolean {
 	return jitiCliPath !== undefined;
 }
 
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
+
+function ensurePrivateDir(dirPath: string): void {
+	fs.mkdirSync(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
+	try {
+		fs.chmodSync(dirPath, PRIVATE_DIR_MODE);
+	} catch {
+		// best effort
+	}
+}
+
+function writePrivateFile(filePath: string, content: string): void {
+	fs.writeFileSync(filePath, content, { mode: PRIVATE_FILE_MODE });
+	try {
+		fs.chmodSync(filePath, PRIVATE_FILE_MODE);
+	} catch {
+		// best effort
+	}
+}
+
 // ============================================================================
 // Parent-side launch
 // ============================================================================
@@ -100,8 +121,8 @@ export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput
 
 	const runId = crypto.randomUUID();
 	const dir = asyncRunDir(runId);
-	fs.mkdirSync(dir, { recursive: true });
-	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+	ensurePrivateDir(TEMP_ROOT_DIR);
+	ensurePrivateDir(dir);
 
 	const config: AsyncChildConfig = {
 		runId,
@@ -110,7 +131,7 @@ export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput
 		parentSessionFile: input.parentSessionFile,
 	};
 	const cfgPath = asyncConfigPath(runId);
-	fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
+	writePrivateFile(cfgPath, JSON.stringify(config, null, 2));
 
 	const runnerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "async-runner-main.ts");
 	const proc = spawn(process.execPath, [jitiCliPath, runnerPath, cfgPath], {
@@ -250,7 +271,8 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 	const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8")) as AsyncChildConfig;
 	const { runId, spec, cwd, parentSessionFile } = cfg;
 	const dir = asyncRunDir(runId);
-	fs.mkdirSync(dir, { recursive: true });
+	ensurePrivateDir(TEMP_ROOT_DIR);
+	ensurePrivateDir(dir);
 
 	const manifest: AsyncRunManifest = {
 		schemaVersion: ASYNC_SCHEMA_VERSION,
@@ -269,7 +291,7 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 	writeManifest(manifest);
 
 	const eventsPath = asyncRunEventsPath(runId);
-	const eventsStream = fs.createWriteStream(eventsPath, { flags: "a" });
+	const eventsStream = fs.createWriteStream(eventsPath, { flags: "a", mode: PRIVATE_FILE_MODE });
 
 	// Lazy-import to avoid circular type resolution at module load time.
 	const { executeRun } = await import("./sync-executor.ts");
@@ -358,13 +380,23 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 function writeManifest(manifest: AsyncRunManifest): void {
 	const p = asyncRunManifestPath(manifest.runId);
 	const tmp = `${p}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+	writePrivateFile(tmp, JSON.stringify(manifest, null, 2));
 	fs.renameSync(tmp, p);
+	try {
+		fs.chmodSync(p, PRIVATE_FILE_MODE);
+	} catch {
+		// best effort
+	}
 }
 
 function writeResultAtomic(runId: string, file: AsyncResultFile): void {
 	const finalPath = asyncRunResultPath(runId);
 	const tmp = asyncRunResultTempPath(runId);
-	fs.writeFileSync(tmp, JSON.stringify(file, null, 2));
+	writePrivateFile(tmp, JSON.stringify(file, null, 2));
 	fs.renameSync(tmp, finalPath);
+	try {
+		fs.chmodSync(finalPath, PRIVATE_FILE_MODE);
+	} catch {
+		// best effort
+	}
 }

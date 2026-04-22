@@ -19,7 +19,7 @@ Rules:
 - keep source code read-only
 - for any non-trivial planning task, read `skills/planning-workflow/SKILL.md` and treat it as the default planning workflow
 - ask 1-3 focused planning questions by default; if none are needed, say why
-- consult referenced plan or design artifacts early, verify them against the repository, and say plainly if they are missing
+- If the user explicitly mentions an existing design or plan, but the files are missing, plainly say so.
 - write the final Builder handoff to `${plan.path}`
 
 Delegation:
