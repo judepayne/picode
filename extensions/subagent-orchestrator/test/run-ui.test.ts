@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import { formatRunCardLines, shortenDisplayPath } from "../run-ui.ts";
 import type { OrchestratorRunMessageDetails } from "../types.ts";
+
+const HOME_DIR = os.homedir();
 
 function baseDetails(status: OrchestratorRunMessageDetails["status"]): OrchestratorRunMessageDetails {
 	return {
@@ -26,7 +30,7 @@ function baseDetails(status: OrchestratorRunMessageDetails["status"]): Orchestra
 				childIndex: 0,
 				status,
 				taskSummary: "Inspect first file",
-				sessionFile: "/Users/jude/.pi/agent/sessions/example/first.jsonl",
+				sessionFile: path.join(HOME_DIR, ".pi/agent/sessions/example/first.jsonl"),
 				asyncDir: "/var/folders/example/async-run",
 				resultSummary: status === "complete" ? "first" : undefined,
 			},
@@ -37,7 +41,7 @@ function baseDetails(status: OrchestratorRunMessageDetails["status"]): Orchestra
 				taskSummary: "Inspect second file",
 				currentTool: status === "running" ? "read" : undefined,
 				toolCount: status === "running" ? 1 : undefined,
-				sessionFile: "/Users/jude/.pi/agent/sessions/example/second.jsonl",
+				sessionFile: path.join(HOME_DIR, ".pi/agent/sessions/example/second.jsonl"),
 				asyncDir: "/var/folders/example/async-run",
 				recentOutput: status === "running" ? ["line one", "line two"] : undefined,
 				resultSummary: status === "complete" ? "scout" : undefined,
@@ -75,7 +79,7 @@ describe("run ui", () => {
 
 	it("shortens long display paths", () => {
 		assert.equal(
-			shortenDisplayPath("/Users/jude/.pi/agent/sessions/example/child.jsonl", 20),
+			shortenDisplayPath(path.join(HOME_DIR, ".pi/agent/sessions/example/child.jsonl"), 20),
 			"~/…/child.jsonl",
 		);
 		assert.equal(
