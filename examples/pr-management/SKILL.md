@@ -1,53 +1,88 @@
 ---
 name: pr-management
-description: Use the team-lead subagent to process PRs from assessment through review. Invoke when the user mentions a PR, diff, or wants to delegate a multi-file change end-to-end.
+description: Use the team-lead subagent to run a staged PR workflow. Invoke when the user mentions a PR, a diff, or wants to delegate a multi-file change end-to-end with explicit checkpoints.
 ---
 
 # PR Management
 
 Use the `team-lead` subagent when the user wants to:
-- Assess and implement a PR
-- Delegate a multi-file change end-to-end
-- Get a structured review of an existing PR
+- assess and implement a PR in stages
+- delegate a multi-file change end-to-end
+- checkpoint after assessment and planning before continuing
 
-## Invocation
+## Parent-agent role
 
-Call the team-lead with a clear task:
+In this workflow, the parent agent remains in charge of the user conversation.
+
+The pattern is:
+1. launch `team-lead`
+2. receive a stage handback
+3. ask the user for the decision
+4. resume the same child with explicit continuation
+
+The parent should not expect `team-lead` to talk directly to the user.
+
+## First launch
+
+Start the workflow with a fresh delegated run:
 
 ```text
-~team-lead Assess PR #123: the auth refactor. Check the diff, ask me for go/no-go, then plan and execute.
+Use the team-lead subagent to assess PR #123: the auth refactor. Read the diff and related code, return the assessment, and stop for my decision.
 ```
 
-Or through the active agent:
+## Continuing the same workflow
 
-```text
-Have the team-lead process this PR from assessment through review.
+When the team-lead hands back, note the returned `childSessionId` from the delegation details.
+
+Then resume the same child explicitly, for example:
+
+```json
+{
+  "agent": "team-lead",
+  "context": "continue",
+  "childSessionId": "<child-session-id>",
+  "task": "User approved. Produce the implementation plan and stop for plan approval."
+}
+```
+
+And later:
+
+```json
+{
+  "agent": "team-lead",
+  "context": "continue",
+  "childSessionId": "<child-session-id>",
+  "task": "Plan approved. Execute the plan, use workers in parallel where appropriate, then run review and return the final handback."
+}
 ```
 
 ## Expected handback
 
-The team-lead returns a structured summary:
-- Assessment summary
-- User decisions made
-- Execution status per subsystem
-- Review findings by severity
-- Remaining work or blockers
+Each team-lead stage should return:
+- Stage
+- Status
+- Next
+- Summary
+- Artifacts
+- Failures
 
-## Workflow stages
+The important point is that the handback tells the parent whether to ask the user something or continue the workflow.
 
-The team-lead manages these stages automatically. You do not need to call each subagent yourself:
+## Nested team shape
 
-| Stage | Subagent | When it runs |
-|-------|----------|-------------|
-| Assess | team-lead itself | Always |
-| Reshape | Designer | Only if user asks |
-| Plan | Planner | After go/no-go |
-| Execute | Worker(s) | After plan, in parallel |
-| Review | Reviewer(s) | After execution |
+The team-lead manages these stages internally:
+
+| Stage | Who does it | Notes |
+|-------|-------------|-------|
+| Assess | team-lead + optional scouts | Returns assessment handback |
+| Plan | team-lead + optional scouts | Returns plan handback |
+| Execute | worker(s) | Can fan out in parallel |
+| Review | reviewer(s) | Returns final verdict |
 
 ## Guidelines
 
 - Provide the PR number, branch name, or diff context in the initial task
-- The team-lead will stop at user checkpoints; do not pre-approve stages
-- If a worker fails, the team-lead stops and reports the failure
-- If review finds critical issues, the team-lead stops and asks the user
+- Do not pre-approve later stages in the first launch
+- Treat the user checkpoints as parent-agent responsibilities
+- If a nested worker fails, the team-lead should stop and report it
+- If review finds serious issues, the parent should decide whether to continue the same thread or stop

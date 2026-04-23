@@ -394,53 +394,22 @@ For full working examples, see the built-in cards in `extensions/agent-assets/ag
 
 ## Recipe: building a custom subagent team
 
-Picode's subagent system is not limited to the shipped set. You can build your own specialist subagents and teach the main agent when to use them through a custom skill. This section walks through a concrete example: a PR management workflow with a custom **team-lead** subagent.
+Picode's subagent system is not limited to the shipped set. You can build your own specialist subagents and teach the main agent when to use them through a custom skill.
 
-### The pattern
+This recipe shows a realistic PR-management workflow built around:
 
-A team-lead subagent owns a multi-stage workflow:
+- **Builder** as the user-facing coordinator
+- a custom **team-lead** subagent as the delegated workflow manager
+- nested **scout**, **worker**, and **reviewer** subagents for specialist work
+- explicit `context: "continue"` + `childSessionId` to resume the same delegated child thread across checkpoints
 
-1. **Assess** — read the PR diff, description, and related code
-2. **Ask** — present a go/no-go summary to the user
-3. **Reshape** (if needed) — call a Designer subagent to rethink the approach
-4. **Plan** — call a Planner subagent to produce an execution plan
-5. **Execute** — fan out Worker subagents by subsystem
-6. **Review** — finish with one or more Reviewer subagents
+It is a good demonstration of several picode features working together: nested delegation, async launches, explicit user checkpoints, and agent-side continuation of a specific child session.
 
-The skill teaches the parent agent when to invoke this workflow, what inputs to provide, and how to interpret the handback.
+For the full write-up, see:
 
-### The team-lead subagent
-
-The team-lead is a custom subagent card with `delegate_subagent` in its tool set and `maxSubagentDepth: 2` so it can orchestrate downstream subagents. Its prompt defines the 5-stage workflow above, specifies per-stage output format, and instructs it to stop at user checkpoints and on failures.
-
-Save it to your subagents overlay directory and run `/reload`.
-
-See `examples/team-lead.md` for the full card.
-
-### The supporting skill
-
-The skill teaches the parent agent when to invoke the team-lead, what inputs to provide (PR number, branch, diff context), and how to read the structured handback it returns. It also documents the stage table so the parent knows it does not need to call each subagent itself.
-
-Save the `pr-management/` skill directory under your skills path and run `/reload`.
-
-See `examples/pr-management/SKILL.md` for the full skill.
-
-### How they work together
-
-The **skill** is the trigger. When the user says something like *"Process this PR"*, the parent agent loads the skill, recognises the team-lead as the right tool, and calls it with the PR context.
-
-The **subagent card** is the runtime. The team-lead receives the task, executes the workflow, delegates to Designer/Planner/Worker/Reviewer at the right moments, and returns a single clean handback to the parent.
-
-This pattern — one skill for discovery, one subagent card for execution — scales to any specialist workflow you want to add.
-
-### Installing it
-
-1. Save `team-lead.md` to your subagents overlay directory (configured in `.pi/settings.json`)
-2. Save the `pr-management/` skill directory under your skills path (`.pi/skills/` or `~/.pi/agent/skills/`)
-3. Run `/reload`
-4. Invoke with `~team-lead ...` or ask the active agent to use it
-
-Working copies live in `examples/team-lead.md` and `examples/pr-management/SKILL.md`.
+- [`examples/pr-management/README.md`](./examples/pr-management/README.md)
+- [`examples/team-lead.md`](./examples/team-lead.md)
+- [`examples/pr-management/SKILL.md`](./examples/pr-management/SKILL.md)
 
 ---
 
