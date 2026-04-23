@@ -1,6 +1,6 @@
 ---
 name: orchestrate-subagents
-description: Use mediated subagent delegation through delegate_subagent and delegate_subagent_status. Use when deciding whether to run one scout, multiple scouts, or a scout chain, and when choosing sync vs async or fresh vs fork context.
+description: Use mediated subagent delegation through delegate_subagent and delegate_subagent_status. Use when deciding whether to run one scout, multiple scouts, or a scout chain, and when choosing sync vs async or fresh vs fork vs explicit continue context.
 ---
 
 # Orchestrate Subagents
@@ -17,6 +17,7 @@ Current orchestrator constraints:
 - the available child agent types depend on the current mode; use only the subagents explicitly allowed by that mode
 - child gate profile/env is assigned by the orchestrator, not by you
 - child runs are unattended, so `clarify` is not available
+- agent-driven continuation is explicit: use `context: "continue"` together with a concrete `childSessionId`
 - for current or recent async work, use the orchestrator status tool rather than digging through files on disk
 - read async artifacts on disk only for older runs outside the current/latest tree, or for low-level debugging
 
@@ -44,13 +45,15 @@ Supported top-level options:
 - `tasks` — multiple subagents in parallel
 - `chain` — multiple subagents in sequence
 - `async` — background execution when `true`
-- `context` — `fresh` or `fork`
+- `context` — `fresh`, `fork`, or `continue`
+- `childSessionId` — required when `context` is `continue`; identifies the exact delegated child session to resume
 - `showRunCard` — visible orchestrator run card message; keep this `false` unless the user explicitly wants that UI card
 
 Not available:
 - no raw env/profile control
 - no `cwd`
 - no `clarify`
+- no implicit agent-side `continue latest`; agent continuation must name the target `childSessionId`
 
 ### `delegate_subagent_status`
 
@@ -197,11 +200,20 @@ Prefer `fork` for:
 
 !NOTE: Only use fork when strictly necessary! Since subagents are often configured to use different (lesser) models than the main agent models, `fork` will require the current context to be processed with no caching on that different model. This can take up time and use up a lot of tokens!
 
+### `context: "continue"`
+Choose `continue` when you want to resume one exact delegated child conversation rather than start a fresh or forked child.
+
+Rules:
+- use it only with single-task delegation
+- always supply `childSessionId`
+- get the target id from prior orchestration details or from `delegate_subagent_status`
+- prefer this for staged workflows with explicit checkpoints, where the parent agent resumes the same specialist after a user decision
+
 ## Working pattern
 
 1. Decide whether you need one subagent, parallel subagents, or a chain.
 2. Decide whether results are needed now or can run in the background.
-3. Decide whether the subagent should run in `fresh` or `fork` context.
+3. Decide whether the subagent should run in `fresh`, `fork`, or explicit `continue` context.
 4. Choose the subagent type if the current mode allows more than one.
 5. Call `delegate_subagent`.
 6. If async, note the returned run id and monitor with `delegate_subagent_status`.

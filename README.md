@@ -6,16 +6,23 @@ A homage to OpenCode in Pi!
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
-- Switch between **Builder**, **Planner** and **Designer** agents with `Ctrl + ,` and `Ctrl + .`
-- Each agent has its own prompt, tools, skills, model settings, allowed subagents and permissions. You are not just telling Pi to “act like a planner.” You are putting it into a runtime that behaves like one.
-- An agent is just a markdown file; change as you wish.
-
-- Picode has a sync/async subagent system.
-- Invoke one in chat through the current agent: `Fire off a reviewer and have it review index.ts`
-- or interact directly: `~scout when's the Arsenal match?`
-- Like agents, subagents are just markdown files, so you can extend them.
+It gives you named runtime modes — **Builder**, **Planner** and **Designer** — plus delegated **subagents** such as scout, worker and reviewer. Switch modes with `Ctrl + ,` and `Ctrl + .`, or dispatch a subagent directly with `~scout`, `~worker`, `~reviewer`.
 
 Picode's goal is to give you a significant boost whilst remaining unobtrusive.
+
+---
+
+## What problem does this solve?
+
+Without picode, design, planning, implementation and review all collapse into one blurry prompt. One agent does everything with the same permissions, the same model, the same tools, and the same voice — so nothing signals when it is safe to mutate files, when to stop and think, or when to explore tradeoffs instead of jumping straight to code.
+
+Picode splits those concerns into **runtime modes**. You switch between specialist **agents** — Designer, Planner and Builder — each with its own prompt, tools, model preference, permission profile and communication style. Builder is short and to the point. Designer is warm and discursive. Planner is analytical and scoped. The prompt tells the agent how to behave; the gate tells it what it is allowed to do.
+
+You are not just telling Pi to "act like a planner." You are putting it into a runtime that behaves like one.
+
+On top of that, the active agent can delegate bounded work to **subagents** — scout, worker and reviewer — which are not role-play prompts but standalone utilities with their own instructions, tools and gate profiles. They run independently and hand back structured results, so the main agent stays focused while the specialist does the reconnaissance, implementation, or review.
+
+None of this is baked in. Every agent and subagent is just a markdown file. Don't like the shipped set? Change them, delete them, or add your own specialist subagents.
 
 
 **The parts of the whole:**
@@ -39,6 +46,7 @@ Picode's goal is to give you a significant boost whilst remaining unobtrusive.
 - [Subagents](#subagents)
 - [Prompt vars and plan/design files](#prompt-vars-and-plandesign-files)
 - [Customising picode](#customising-picode)
+- [Recipe: building a custom subagent team](#recipe-building-a-custom-subagent-team)
 - [Files and state](#files-and-state)
 - [Troubleshooting](#troubleshooting)
 - [Further reading](#further-reading)
@@ -87,6 +95,21 @@ Once that is done, a good quick smoke test is:
 
 ---
 
+## Quick reference
+
+| What you want | How |
+|---|---|
+| See current agent | `/agents` |
+| Switch agent | `/agents <name>` or `Ctrl + ,` / `Ctrl + .` |
+| Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>` |
+| Delegate through the active agent | Just ask in plain English |
+| Check / set prompt vars | `/vars` or `/vars set <key> <value>` |
+| Bootstrap missing vars files | `/vars bootstrap` |
+| Check active plan or design | Ask the agent: "Show me the active plan" |
+| Reference plan or design in prompts | `${plan.path}` or `${design.path}` |
+
+---
+
 ## How picode works
 
 Picode turns one Pi session into a small, structured system.
@@ -113,8 +136,6 @@ The default rhythm is simple:
 2. **Planner** turns that into a concrete handoff.
 3. **Builder** makes the change.
 4. **reviewer** checks non-trivial implementation work when needed.
-
-This is not bureaucracy. It is just a way to stop design, planning, implementation, and review from collapsing into one blurry prompt.
 
 If the task is tiny, you can skip straight to Builder. If the task is fuzzy, start with Designer. If the path is clear but the work is still non-trivial, Planner is usually the right next stop.
 
@@ -167,7 +188,7 @@ Builder is for:
 
 A key point: agents are markdown files. If you want a different style, different rules, or a completely different set of roles, you can change them.
 
-The built-in agent definition files live in `extensions/agent-assets/agents/`. Each file is a markdown card with frontmatter for things like the name, tools, gate profile, allowed subagents, model, and thinking level, followed by the body prompt that actually defines the agent’s behaviour.
+The built-in agent definition files live in `extensions/agent-assets/agents/`. Each file is a markdown card with frontmatter for things like the name, tools, gate profile, allowed subagents, model, and thinking level, followed by the body prompt that actually defines the agent's behaviour.
 
 When you build a new one, keep the role sharp and pair the prompt with the right tools and gate profile; vague overlap between agents tends to blur their behaviour. Also note that the number at the start of the filename sets the order the agents appear in Pi, so files like `01-builder.md`, `02-planner.md`, and `03-designer.md` are shown in that order.
 
@@ -232,69 +253,27 @@ Important details:
 
 Like agents, subagents are just markdown cards. You can add your own specialists instead of forking the runtime.
 
-### Bonus: Going deeper
-
-> [!TIP]
-> You could build a PR-management team on top of picode with one custom **team-lead subagent** and one supporting **skill**.
->
-> The team lead would own the workflow and delegate the actual work: assess the PR, ask the user for a go/no-go decision, call a Designer subagent if the change needs reshaping, call a Planner subagent to produce the execution plan, fan out multiple Worker subagents by subsystem, then finish with one or more Reviewer subagents.
->
-> The skill would define the house process: when each stage starts, what output format each helper must return, when the lead should stop and ask the user, and when it is allowed to continue unattended.
->
-> In practice, that means using a chain for the high-level flow and parallel fan-out for the worker/reviewer stages.
->
-> The useful trick is that the team lead is itself a subagent, so it can manage a nested team of subagents while still giving the parent run one clean handback at the end.
-
-
 ---
 
 ### Monitoring subagents
 
-Picode can surface delegated work in three ways: a quick launch notification, footer status, and optional run cards.
+Picode surfaces delegated work through three layers:
 
-If you launch a subagent directly with `~scout`, `~worker`, or `~reviewer`, you will usually get a short notification such as:
+- **Launch notification** — a brief confirmation that the subagent started (e.g. "Scout running in background"). Healthy user-started runs do not stay pinned.
+- **Footer status** — compact aggregate status for background activity:
+  - `subagents:1 run` — one top-level run in flight
+  - `subagents:2 active · 1 waiting` — two children running, one handback queued
+  - `subagents: failed scout` — a failure, visible until your next message
+- **Run cards** — detailed per-run view when explicitly requested or when `showRunCard: true` is set. Shows the current task, active/finished children, live tool usage, session file locations, recent output, and final summary.
 
-```text
-Scout running in background
-```
-
-That confirms the launch, but healthy user-started runs do not stay pinned in the footer.
-
-When there is background activity worth tracking, the footer can show compact aggregate status such as:
-
-```text
-subagents:1 run
-subagents:2 runs: 3 active · 1 waiting
-subagents:1 active
-subagents:2 active · 1 waiting
-```
-
-What those parts mean:
-
-- `run` / `runs` is the number of top-level delegated runs currently in flight
-- `active` is the number of child subagents still running
-- `waiting` is the number of queued handbacks waiting to be surfaced back to the parent session
-
-Failures stay visible in the footer until your next real user message, so they are hard to miss. Typical examples are:
-
-```text
-subagents: failed scout
-subagents: failed worker · 1 active
-subagents: failed worker · 1 active · 1 waiting
-subagents: failed 2 scouts, 1 worker
-```
-
-That is usually your cue to ask the main agent to inspect the failure, for example:
+When something fails, ask the main agent to inspect it:
 
 ```text
 Investigate the failed worker.
 A scout failed. Find out why and tell me whether to retry it.
 ```
 
-If picode shows a detailed subagent status card in the chat, that card gives you a closer look at one selected child run. It can show what task that child is working on, whether the overall run is sync or async, how many children are still active or already finished, what tool the child is using right now, where its session and log files live, any recent output, whether handbacks are waiting, and the final summary once the run is done.
-
-
-I wrestled with adding a pop-up monitoring panel for subagents, but instead opted to build extensive behind-the-scenes monitoring tools in the `subagent-orchestrator` extension that the agent can use to investigate on your behalf.
+The `subagent-orchestrator` extension provides the behind-the-scenes monitoring tools the agent uses to investigate on your behalf.
 
 ---
 
@@ -375,11 +354,99 @@ The conflict policy settings control what happens when a user overlay file has t
 
 That can be useful if you want to allow additive custom files in an overlay directory without accidentally replacing the built-in cards.
 
+### Minimal agent card example
+
+Agent cards are markdown files with YAML frontmatter. Here is the smallest useful example:
+
+```md
+---
+name: MyAgent
+profile: builder
+color: "#3366CC"
+tools: [read, bash, edit, write]
+subagents: scout
+bash: full
+thinking: medium
+model: openai-codex/gpt-5.4
+---
+
+Your prompt body goes here. This text is what the agent actually sees as its instructions.
+```
+
+What each key does:
+
+- `name` — the display name shown in `/agents` and the footer.
+- `profile` — the pi-gate permission profile (e.g. `builder`, `planner`, `designer`). Controls what the agent is allowed to do.
+- `color` — the accent colour for the agent’s UI elements. Hex or named colours.
+- `tools` — the tool set available to this agent (e.g. `read`, `bash`, `edit`, `write`, `grep`, `delegate_subagent`).
+- `subagents` — which subagents this agent is allowed to delegate to (e.g. `scout`, `worker`, `reviewer`).
+- `bash` — `full` allows any bash command; `read-only` restricts to safe inspection commands.
+- `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`).
+- `model` — the preferred model. If omitted, picode uses whatever model is currently selected in Pi.
+
+`model` and `thinking` are optional. If you leave them out, picode falls back to your current Pi settings, which is useful if you want the same agent to run on different models depending on context.
+
+The frontmatter controls runtime behaviour; the markdown body is the persona prompt. Save the file in your overlay directory (or `extensions/agent-assets/agents/` if you are editing the package directly) and run `/reload`.
+
+For full working examples, see the built-in cards in `extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`.
+
+---
+
+## Recipe: building a custom subagent team
+
+Picode's subagent system is not limited to the shipped set. You can build your own specialist subagents and teach the main agent when to use them through a custom skill. This section walks through a concrete example: a PR management workflow with a custom **team-lead** subagent.
+
+### The pattern
+
+A team-lead subagent owns a multi-stage workflow:
+
+1. **Assess** — read the PR diff, description, and related code
+2. **Ask** — present a go/no-go summary to the user
+3. **Reshape** (if needed) — call a Designer subagent to rethink the approach
+4. **Plan** — call a Planner subagent to produce an execution plan
+5. **Execute** — fan out Worker subagents by subsystem
+6. **Review** — finish with one or more Reviewer subagents
+
+The skill teaches the parent agent when to invoke this workflow, what inputs to provide, and how to interpret the handback.
+
+### The team-lead subagent
+
+The team-lead is a custom subagent card with `delegate_subagent` in its tool set and `maxSubagentDepth: 2` so it can orchestrate downstream subagents. Its prompt defines the 5-stage workflow above, specifies per-stage output format, and instructs it to stop at user checkpoints and on failures.
+
+Save it to your subagents overlay directory and run `/reload`.
+
+See `examples/team-lead.md` for the full card.
+
+### The supporting skill
+
+The skill teaches the parent agent when to invoke the team-lead, what inputs to provide (PR number, branch, diff context), and how to read the structured handback it returns. It also documents the stage table so the parent knows it does not need to call each subagent itself.
+
+Save the `pr-management/` skill directory under your skills path and run `/reload`.
+
+See `examples/pr-management/SKILL.md` for the full skill.
+
+### How they work together
+
+The **skill** is the trigger. When the user says something like *"Process this PR"*, the parent agent loads the skill, recognises the team-lead as the right tool, and calls it with the PR context.
+
+The **subagent card** is the runtime. The team-lead receives the task, executes the workflow, delegates to Designer/Planner/Worker/Reviewer at the right moments, and returns a single clean handback to the parent.
+
+This pattern — one skill for discovery, one subagent card for execution — scales to any specialist workflow you want to add.
+
+### Installing it
+
+1. Save `team-lead.md` to your subagents overlay directory (configured in `.pi/settings.json`)
+2. Save the `pr-management/` skill directory under your skills path (`.pi/skills/` or `~/.pi/agent/skills/`)
+3. Run `/reload`
+4. Invoke with `~team-lead ...` or ask the active agent to use it
+
+Working copies live in `examples/team-lead.md` and `examples/pr-management/SKILL.md`.
+
 ---
 
 ## Files and state
 
-The files in this repository define how picode behaves. The files picode creates while you use it live in your project’s `.pi/` directory or in your normal Pi user config area.
+The files in this repository define how picode behaves. The files picode creates while you use it live in your project's `.pi/` directory or in your normal Pi user config area.
 
 ### Package-owned
 
@@ -398,7 +465,7 @@ Outside the package:
 - project prompt-vars write config: `<cwd>/.pi/agent-mode-vars-config.json`
 - global fallback prompt vars: `~/.pi/agent/agent-mode-vars.json`
 - subagent orchestrator state: `<cwd>/.pi/state/subagent-orchestrator/`
-- Pi session files in Pi’s normal session storage
+- Pi session files in Pi's normal session storage
 
 That split is deliberate: shipped behaviour stays package-owned, while mutable project state stays local to the workspace or user environment.
 
@@ -434,16 +501,21 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 
 ## Further reading
 
-- [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md) — read this to understand how agent switching works: prompts, tools, models, thinking levels, shortcuts, and the `/agents` command.<br><br>
-- [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md) — read this to understand the permission system: profiles, `allow`/`ask`/`deny`, inheritance, and how bash/file actions are gated.<br><br>
-- [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md) — read this to understand the public delegation layer: `~subagent`, sync vs async runs, chains, parallel fan-out, status, logs, and handbacks.<br><br>
-- [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md) — read this if you want the internal execution model behind subagents: child `pi` processes, normalized events, sync/async executors, and depth propagation.<br><br>
-- [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md) — read this to learn how `${...}` prompt interpolation works, where vars are stored, and how `/vars` reads and writes project/global state.<br><br>
-- [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md) — read this to understand where built-in agent/subagent cards come from, how overlays are resolved, and what `prefer-user` / `prefer-native` actually do.<br><br>
-- [`skills/planning-workflow/SKILL.md`](./skills/planning-workflow/SKILL.md) — read this to see the planning discipline shipped with picode: how a request is turned into a Builder-ready plan grounded in the repo.<br><br>
-- [`skills/karpathy-coding-discipline/SKILL.md`](./skills/karpathy-coding-discipline/SKILL.md) — read this to see the Builder’s coding discipline layer: it pushes toward caution over speed, simpler changes, explicit assumptions, and tighter validation loops.<br><br>
-- [`skills/orchestrate-subagents/SKILL.md`](./skills/orchestrate-subagents/SKILL.md) — read this to see how the agent is taught to choose between one subagent, several in parallel, or a chain, and when to run sync vs async.<br><br>
-- [`skills/prompt-vars/SKILL.md`](./skills/prompt-vars/SKILL.md) — read this to see how prompt vars are meant to be used in prompts and at runtime, including the built-in plan/design vars and write-location rules.
+### Extensions
+
+- **Agent switching** — [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md): prompts, tools, models, thinking levels, shortcuts, and the `/agents` command.
+- **Permissions** — [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md): profiles, `allow`/`ask`/`deny`, inheritance, and how bash/file actions are gated.
+- **Delegation layer** — [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md): `~subagent`, sync vs async, chains, parallel fan-out, status, logs, and handbacks.
+- **Child execution** — [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md): child `pi` processes, normalized events, sync/async executors, and depth propagation.
+- **Prompt interpolation** — [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md): `${...}` expansion, var storage, and the `/vars` command.
+- **Agent cards and overlays** — [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md): where cards come from, how overlays resolve, and `prefer-user` vs `prefer-native`.
+
+### Skills
+
+- **Planning discipline** — [`skills/planning-workflow/SKILL.md`](./skills/planning-workflow/SKILL.md): turning a request into a Builder-ready plan grounded in the repo.
+- **Coding discipline** — [`skills/karpathy-coding-discipline/SKILL.md`](./skills/karpathy-coding-discipline/SKILL.md): caution over speed, simpler changes, explicit assumptions, tighter validation loops.
+- **Subagent orchestration** — [`skills/orchestrate-subagents/SKILL.md`](./skills/orchestrate-subagents/SKILL.md): choosing task vs tasks vs chain, sync vs async, fresh vs fork.
+- **Prompt vars usage** — [`skills/prompt-vars/SKILL.md`](./skills/prompt-vars/SKILL.md): using plan/design vars and write-location rules in prompts and at runtime.
 
 ---
 

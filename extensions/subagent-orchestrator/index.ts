@@ -105,7 +105,9 @@ const DelegateSubagentParams = Type.Object({
 	context: Type.Optional(Type.Union([
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
+		Type.Literal("continue"),
 	], { description: "Execution context for child subagents." })),
+	childSessionId: Type.Optional(Type.String({ description: 'Explicit child session id to continue when context is "continue".' })),
 	showRunCard: Type.Optional(Type.Boolean({ description: "Show a visible subagent orchestrator run card in the UI. Defaults to false." })),
 }, { additionalProperties: false });
 
@@ -505,6 +507,14 @@ function runMatchesSessionLineage(
 		|| sessionReferenceInLineage(run.parentSessionId, lineage);
 }
 
+function childSessionMatchesSessionLineage(
+	child: Pick<OrchestratorChildSessionRecord, "parentSessionId" | "parentSessionFile">,
+	lineage: ReturnType<typeof currentSessionLineage>,
+): boolean {
+	return sessionReferenceInLineage(child.parentSessionFile, lineage)
+		|| sessionReferenceInLineage(child.parentSessionId, lineage);
+}
+
 function handbackMatchesSessionLineage(
 	handback: Pick<OrchestratorHandbackRecord, "parentSessionId">,
 	lineage: ReturnType<typeof currentSessionLineage>,
@@ -751,6 +761,106 @@ function prepareUserContinueSessionFiles(
 		lastUsedAt: now,
 	});
 	return { sessionFiles: [sessionFile] };
+}
+
+function buildChildSessionDetails(children: OrchestratorChildSessionRecord[]): Array<Record<string, unknown>> {
+	return children.map((child) => ({
+		childSessionId: child.childSessionId,
+		agent: child.agent,
+		childIndex: child.childIndex,
+		status: child.status,
+		taskSummary: child.taskSummary,
+		...(child.sessionFile ? { sessionFile: child.sessionFile } : {}),
+	}));
+}
+
+function prepareAgentContinueSessionFiles(
+	ctx: ExtensionContext,
+	request: NormalizedDelegationRequest,
+	origin: RunOrigin,
+	orchestratorRunId: string,
+): { response?: ProgrammaticSubagentResponse; sessionFiles?: string[] } {
+	if (origin !== "agent" || request.context !== "continue") return {};
+	if (request.shape !== "single") {
+		const message = 'context "continue" currently supports only single-task delegation via `task`.';
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	if (!request.childSessionId) {
+		const message = 'childSessionId is required when context is "continue".';
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	const target = state.getChildSession(request.childSessionId);
+	if (!target) {
+		const message = `Child session ${request.childSessionId} was not found.`;
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	if (!childSessionMatchesSessionLineage(target, currentSessionLineage(ctx))) {
+		const message = `Child session ${request.childSessionId} is not part of the current session lineage.`;
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	if (target.agent !== request.agent) {
+		const message = `Child session ${request.childSessionId} belongs to subagent ${target.agent}, not ${request.agent}.`;
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	if (!target.sessionFile) {
+		const message = `Child session ${request.childSessionId} cannot be continued because no persisted session file was recorded.`;
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	const busy = state.listChildSessions().find((child) => child.sessionFile === target.sessionFile && !isTerminal(child.status));
+	if (busy) {
+		const message = `${request.agent} continuation ${request.childSessionId} is busy.`;
+		return {
+			response: {
+				requestId: orchestratorRunId,
+				isError: true,
+				errorText: message,
+				result: { ...errorResult(message), isError: true },
+			},
+		};
+	}
+	return { sessionFiles: [target.sessionFile] };
 }
 
 /**
@@ -1990,14 +2100,21 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			request,
 			now,
 		});
-		const continuePreparation = prepareUserContinueSessionFiles(
-			ctx,
-			request,
-			options.origin,
-			orchestratorRunId,
-			now,
-			baseChildSessions[0]?.childSessionId,
-		);
+		const continuePreparation = options.origin === "user"
+			? prepareUserContinueSessionFiles(
+				ctx,
+				request,
+				options.origin,
+				orchestratorRunId,
+				now,
+				baseChildSessions[0]?.childSessionId,
+			)
+			: prepareAgentContinueSessionFiles(
+				ctx,
+				request,
+				options.origin,
+				orchestratorRunId,
+			);
 		if (continuePreparation.response) {
 			return { orchestratorRunId, response: continuePreparation.response };
 		}
@@ -2099,6 +2216,13 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		const response = await responsePromise;
 		options.signal?.removeEventListener("abort", cancelRequest);
 		if (syncTimeout) clearTimeout(syncTimeout);
+
+		response.result.details = {
+			...(asRecord(response.result.details) ?? {}),
+			childSessions: buildChildSessionDetails(state.listChildSessionsByRun(orchestratorRunId).length > 0
+				? state.listChildSessionsByRun(orchestratorRunId)
+				: childSessions),
+		};
 
 		const responseText = firstTextContent(response.result.content);
 		if (!request.async) {
@@ -2370,7 +2494,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		name: "delegate_subagent",
 		label: "Delegate Subagent",
 		description: "Use the subagent orchestrator to run one or more scout subagents under mediated policy.",
-		promptSnippet: "delegate_subagent({ task } | { tasks } | { chain }, async?, context?, showRunCard?)",
+		promptSnippet: "delegate_subagent({ task } | { tasks } | { chain }, async?, context?, childSessionId?, showRunCard?)",
 		promptGuidelines: [
 			"After a successful sync delegated run, answer the user directly with the child result once.",
 			"For async delegated runs, do not add any assistant launch acknowledgment after the tool call when the tool result already shows the start state and run id.",

@@ -30,6 +30,7 @@
     "!extensions/**/*.test.ts",
     "!extensions/**/fixtures",
     "skills",
+    "examples",
     "img",
     "README.md",
     "CHANGELOG.md",

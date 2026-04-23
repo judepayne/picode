@@ -27,6 +27,7 @@ export interface NormalizedDelegationRequest {
 	async: boolean;
 	context: DelegationContext;
 	showRunCard: boolean;
+	childSessionId?: string;
 	model?: string;
 	thinking?: string;
 	tools?: string[];

@@ -216,6 +216,17 @@ await delegate_subagent({
 })
 ```
 
+#### Continue an existing child session explicitly
+
+```ts
+await delegate_subagent({
+  agent: "worker",
+  context: "continue",
+  childSessionId: "child-session-id",
+  task: "Continue from the approved plan and finish the implementation."
+})
+```
+
 #### Parallel
 
 ```ts
@@ -259,7 +270,20 @@ A clean child session. This is the normal default and the recommended choice for
 A branched child session that inherits the current conversation context. Use this only when the child truly needs that prior context.
 
 #### `continue`
-Reuse the same delegated user-facing subagent conversation for follow-up `~subagent` messages in the current parent conversation. This is mainly for direct user dispatch rather than general agent orchestration.
+Resume an existing delegated child conversation instead of starting a new one.
+
+There are two distinct continuation patterns:
+
+- direct user `~subagent --cont` keeps using the current sticky user-facing thread for that subagent kind in the current parent conversation
+- agent/tool-driven continuation is explicit: use `context: "continue"` together with a concrete `childSessionId`
+
+Current agent-facing rules:
+
+- `continue` currently supports only single-task delegation
+- `childSessionId` is required
+- the target child session must belong to the current session lineage
+- the target child session must belong to the requested subagent type
+- the target thread must not already be active
 
 ### `delegate_subagent_status`
 
