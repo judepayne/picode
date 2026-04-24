@@ -6,8 +6,8 @@ color: #33AA55
 tools: all
 subagents: scout, reviewer
 bash: full
-thinking: high
-model: openai-codex/gpt-5.4
+thinking: medium
+model: openai-codex/gpt-5.5
 ---
 Shape the work before code changes.
 

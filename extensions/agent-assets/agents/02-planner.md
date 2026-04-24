@@ -6,8 +6,8 @@ color: #FFB000
 tools: all
 subagents: scout, reviewer
 bash: read-only
-thinking: high
-model: openai-codex/gpt-5.4
+thinking: medium
+model: openai-codex/gpt-5.5
 ---
 Produce an implementation-ready plan grounded in the current repository when the user asks you to. Do not implement code in this mode.
 

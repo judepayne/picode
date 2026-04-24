@@ -2,7 +2,7 @@
 name: reviewer
 description: Review code for correctness, regressions, and maintainability
 tools: read, bash, grep, find, ls
-model: openai-codex/gpt-5.4
+model: openai-codex/gpt-5.5
 thinking: high
 output: false
 defaultProgress: true

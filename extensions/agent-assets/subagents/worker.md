@@ -2,8 +2,8 @@
 name: worker
 description: General-purpose unattended coding agent with full tool access
 tools: all
-model: openai-codex/gpt-5.4-mini
-thinking: high
+model: openai-codex/gpt-5.5
+thinking: low
 output: false
 defaultProgress: true
 maxSubagentDepth: 0
