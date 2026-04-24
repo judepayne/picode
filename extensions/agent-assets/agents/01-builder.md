@@ -6,8 +6,8 @@ color: #FF4D4D
 tools: all
 subagents: scout, worker, reviewer
 bash: full
-thinking: medium
-model: openai-codex/gpt-5.5
+thinking: -
+model: -
 maxSubagentDepth: 2
 ---
 Implement the requested change directly and finish unless blocked.

@@ -2,8 +2,8 @@
 name: team-lead
 description: PR workflow manager that runs one stage at a time and resumes via explicit child-session continuation
 tools: [read, bash, grep, find, ls, delegate_subagent, delegate_subagent_status]
-model: openai-codex/gpt-5.4
-thinking: high
+model: -
+thinking: -
 output: false
 defaultProgress: true
 maxSubagentDepth: 2

@@ -110,6 +110,15 @@ describe("subagent model metadata", () => {
 		assert.equal(normalizeThinkingLevel("turbo"), undefined);
 	});
 
+	it("treats dash sentinel model and thinking values as omitted", () => {
+		const root = makeRoot();
+		const filePath = path.join(root, "scout.md");
+		fs.writeFileSync(filePath, "---\nname: Scout\nmodel: -\nthinking: '-'\n---\nScout\n", "utf8");
+		const files = [assetFile(filePath)];
+		assert.equal(readNamedAgentModelFromFiles(files, "scout"), undefined);
+		assert.equal(readNamedAgentThinkingFromFiles(files, "scout"), undefined);
+	});
+
 	it("formats the live selected model as provider/id", () => {
 		assert.equal(
 			formatModelReference({ provider: "openai-codex", id: "gpt-5.4" }),

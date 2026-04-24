@@ -111,8 +111,8 @@ color: #FF4D4D
 tools: all
 subagents: scout, worker, reviewer
 bash: full
-thinking: high
-model: openai-codex/gpt-5.4
+thinking: -
+model: -
 maxSubagentDepth: 2
 ---
 Implement the requested change directly and finish unless blocked.
@@ -130,8 +130,8 @@ Implement the requested change directly and finish unless blocked.
 | `ban_tools` | Subtractive tool list applied after `tools` resolves |
 | `subagents` | Subagents this mode may delegate to |
 | `bash` | `full` or `read-only` |
-| `thinking` | Preferred thinking level |
-| `model` | Preferred model |
+| `thinking` | Preferred thinking level; use `-` to leave unset |
+| `model` | Preferred model; use `-` to leave unset |
 | `maxSubagentDepth` | Depth ceiling used by the delegation stack |
 
 The markdown body is the real instruction payload for the mode.

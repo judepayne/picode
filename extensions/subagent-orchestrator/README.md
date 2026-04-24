@@ -323,7 +323,7 @@ Those cards currently define the child persona through:
 
 That means the orchestrator does not just launch a generic child process and hope for the best. It launches a specific persona.
 
-For example, a `scout` child uses the scout card's own instructions, tools, model, and thinking level, and a `reviewer` child can run an independent read-only review pass with its own prompt and gate profile.
+For example, a `scout` child uses the scout card's own instructions and tools, and may use a card-specific model or thinking level when configured. Use `model: -` or `thinking: -` to leave those fields unset and inherit the parent/current runtime defaults.
 
 Tool resolution for subagent cards works like this:
 

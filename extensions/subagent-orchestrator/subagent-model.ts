@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 
 import type { AgentAssetFile } from "../agent-assets/contract.ts";
+import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { findAgentAssetFile } from "./max-subagent-depth.ts";
 
@@ -16,17 +17,6 @@ function normalizeString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const normalized = value.trim();
 	return normalized ? normalized : undefined;
-}
-
-function unquote(value: string): string {
-	if (value.length >= 2) {
-		const first = value[0];
-		const last = value[value.length - 1];
-		if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-			return value.slice(1, -1);
-		}
-	}
-	return value;
 }
 
 function readMarkdown(filePath: string): string | undefined {
@@ -62,8 +52,7 @@ function readFrontmatterAttributes(filePath: string): Record<string, string> | u
 
 function readFrontmatterStringAttribute(filePath: string, attribute: string): string | undefined {
 	const attributes = readFrontmatterAttributes(filePath);
-	const value = normalizeString(attributes?.[attribute.toLowerCase()]);
-	return value ? unquote(value) : undefined;
+	return normalizeOptionalFrontmatterString(attributes?.[attribute.toLowerCase()]);
 }
 
 function readNamedAgentFilePathFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {

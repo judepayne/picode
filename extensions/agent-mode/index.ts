@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { collectAgentAssetDiagnostics, collectAgentFiles } from "../agent-assets/contract.ts";
+import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
@@ -357,8 +358,8 @@ function parseModeFile(filePath: string, markdown: string): ModeDefinition {
 		toolSelection: parseToolSelection({ tools: attributes.tools, banTools: attributes.ban_tools }),
 		subagents: subagents.length > 0 ? subagents : undefined,
 		bashPolicy: normalizeBashPolicy(attributes.bash),
-		thinkingLevel: normalizeThinkingLevel(attributes.thinking),
-		model: attributes.model ? unquote(attributes.model) : undefined,
+		thinkingLevel: normalizeThinkingLevel(normalizeOptionalFrontmatterString(attributes.thinking)),
+		model: normalizeOptionalFrontmatterString(attributes.model),
 		instructions: body,
 	};
 }

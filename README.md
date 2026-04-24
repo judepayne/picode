@@ -367,8 +367,8 @@ tools: all
 ban_tools: [edit, write]
 subagents: scout
 bash: full
-thinking: medium
-model: openai-codex/gpt-5.4
+thinking: -
+model: -
 ---
 
 Your prompt body goes here. This text is what the agent actually sees as its instructions.
@@ -383,10 +383,10 @@ What each key does:
 - `ban_tools` — a subtractive list applied after `tools` is resolved.
 - `subagents` — which subagents this agent is allowed to delegate to (e.g. `scout`, `worker`, `reviewer`).
 - `bash` — `full` allows any bash command; `read-only` restricts to safe inspection commands.
-- `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`).
-- `model` — the preferred model. If omitted, picode uses whatever model is currently selected in Pi.
+- `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `-` to leave it unset.
+- `model` — the preferred model. Use `-` to leave it unset.
 
-`model` and `thinking` are optional. If you leave them out, picode falls back to your current Pi settings, which is useful if you want the same agent to run on different models depending on context.
+`model` and `thinking` are optional. If you leave them out, leave them blank, or set them to `-`, picode falls back to your current Pi settings, which is useful if you want the same agent to run on different models depending on context.
 
 The frontmatter controls runtime behaviour; the markdown body is the persona prompt. Save the file in your overlay directory (or `extensions/agent-assets/agents/` if you are editing the package directly) and run `/reload`.
 
