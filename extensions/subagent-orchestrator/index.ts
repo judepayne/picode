@@ -7,13 +7,15 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv } from "./policy.ts";
 import { collectAgentFiles, collectSubagentFiles, type AgentAssetFile } from "../agent-assets/contract.ts";
+import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
-import { formatModelReference, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolsFromFiles } from "./subagent-model.ts";
+import { formatModelReference, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
+import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
 import { readNamedAgentMaxSubagentDepthFromFiles, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
@@ -577,7 +579,7 @@ const modeDepthCache = new Map<string, number | undefined>();
 const subagentDepthCache = new Map<string, number | undefined>();
 const subagentModelCache = new Map<string, string | undefined>();
 const subagentThinkingCache = new Map<string, string | undefined>();
-const subagentToolsCache = new Map<string, string[] | undefined>();
+const subagentToolSelectionCache = new Map<string, ToolSelectionSpec | undefined>();
 const subagentInstructionsCache = new Map<string, string | undefined>();
 
 let resolveAgentAssetFiles: (() => AgentAssetFile[]) | undefined;
@@ -628,11 +630,57 @@ function resolveDelegatedSubagentThinking(agent: string, currentThinking: string
 	return readSubagentConfiguredThinking(agent) ?? currentThinking;
 }
 
-function readSubagentConfiguredTools(agent: string): string[] | undefined {
-	if (subagentToolsCache.has(agent)) return subagentToolsCache.get(agent);
-	const value = readNamedAgentToolsFromFiles(currentSubagentAssetFiles(), agent);
-	subagentToolsCache.set(agent, value);
+function readSubagentConfiguredToolSelection(agent: string): ToolSelectionSpec | undefined {
+	if (subagentToolSelectionCache.has(agent)) return subagentToolSelectionCache.get(agent);
+	const value = readNamedAgentToolSelectionFromFiles(currentSubagentAssetFiles(), agent);
+	subagentToolSelectionCache.set(agent, value);
 	return value;
+}
+
+function pathIncludesExtension(toolPath: string, extensionPath: string): boolean {
+	const normalizedToolPath = path.resolve(toolPath);
+	const normalizedExtensionPath = path.resolve(extensionPath);
+	return normalizedToolPath === normalizedExtensionPath || normalizedToolPath.startsWith(`${normalizedExtensionPath}${path.sep}`);
+}
+
+function getChildAvailableToolNames(): string[] {
+	const childExtensionPaths = resolveDefaultChildExtensionPaths();
+	const availableTools: string[] = [];
+	const seen = new Set<string>();
+	for (const tool of pi.getAllTools()) {
+		if (!tool?.name || seen.has(tool.name)) continue;
+		if (tool.sourceInfo?.source === "builtin") {
+			seen.add(tool.name);
+			availableTools.push(tool.name);
+			continue;
+		}
+		const toolPath = tool.sourceInfo?.path;
+		if (typeof toolPath !== "string") continue;
+		if (!childExtensionPaths.some((extensionPath) => pathIncludesExtension(toolPath, extensionPath))) continue;
+		seen.add(tool.name);
+		availableTools.push(tool.name);
+	}
+	return availableTools;
+}
+
+function notifySubagentToolWarnings(ctx: ExtensionContext, agent: string, unknownTools: string[], unknownBannedTools: string[]): void {
+	if (!ctx.hasUI) return;
+	if (unknownTools.length > 0) {
+		ctx.ui.notify(`Subagent ${agent}: unknown tools ignored: ${unknownTools.join(", ")}`, "warning");
+	}
+	if (unknownBannedTools.length > 0) {
+		ctx.ui.notify(`Subagent ${agent}: unknown ban_tools ignored: ${unknownBannedTools.join(", ")}`, "warning");
+	}
+}
+
+function resolveDelegatedSubagentTools(ctx: ExtensionContext, agent: string): string[] {
+	const resolved = resolveToolSelection(readSubagentConfiguredToolSelection(agent), {
+		defaultMode: "inherit",
+		availableTools: getChildAvailableToolNames(),
+		inheritedTools: pi.getActiveTools(),
+	});
+	notifySubagentToolWarnings(ctx, agent, resolved.unknownRequestedTools, resolved.unknownBannedTools);
+	return resolved.tools;
 }
 
 function readSubagentInstructions(agent: string): string | undefined {
@@ -651,7 +699,7 @@ function hydrateDelegationRequest(
 		...request,
 		model: request.model ?? resolveDelegatedSubagentModel(ctx, request.agent),
 		thinking: request.thinking ?? resolveDelegatedSubagentThinking(request.agent, currentThinking),
-		tools: request.tools ?? readSubagentConfiguredTools(request.agent),
+		tools: request.tools ?? resolveDelegatedSubagentTools(ctx, request.agent),
 		systemPrompt: request.systemPrompt ?? readSubagentInstructions(request.agent),
 	};
 }
@@ -695,7 +743,7 @@ function buildSubagentModeRunSpec(
 		env,
 		maxSubagentDepth,
 		...(model ? { model } : {}),
-		...(request.tools?.length ? { tools: request.tools } : {}),
+		...(request.tools !== undefined ? { tools: request.tools } : {}),
 		...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
 		...(Array.isArray(childIds) && childIds.length > 0 ? { childIds } : {}),
 		...(Array.isArray(sessionFiles) && sessionFiles.length > 0 ? { sessionFiles } : {}),
@@ -1161,7 +1209,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	subagentDepthCache.clear();
 	subagentModelCache.clear();
 	subagentThinkingCache.clear();
-	subagentToolsCache.clear();
+	subagentToolSelectionCache.clear();
 	subagentInstructionsCache.clear();
 	resolveAgentAssetFiles = () => collectAgentFiles(pi);
 	resolveSubagentAssetFiles = () => collectSubagentFiles(pi);
@@ -2060,7 +2108,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentDepthCache.clear();
 		subagentModelCache.clear();
 		subagentThinkingCache.clear();
-		subagentToolsCache.clear();
+		subagentToolSelectionCache.clear();
 		subagentInstructionsCache.clear();
 		stickyUserSubagentSessions = [];
 		resolveAgentAssetFiles = undefined;

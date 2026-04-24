@@ -108,7 +108,7 @@ name: Builder
 description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
-tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
+tools: all
 subagents: scout, worker, reviewer
 bash: full
 thinking: high
@@ -126,7 +126,8 @@ Implement the requested change directly and finish unless blocked.
 | `description` | Short human summary |
 | `profile` | pi-gate profile to switch to |
 | `color` | Footer/status color |
-| `tools` | Active tools for the main agent |
+| `tools` | Active tools for the main agent. Use an explicit list or `all`. If omitted, agent-mode resolves it as `all`. |
+| `ban_tools` | Subtractive tool list applied after `tools` resolves |
 | `subagents` | Subagents this mode may delegate to |
 | `bash` | `full` or `read-only` |
 | `thinking` | Preferred thinking level |
@@ -134,6 +135,12 @@ Implement the requested change directly and finish unless blocked.
 | `maxSubagentDepth` | Depth ceiling used by the delegation stack |
 
 The markdown body is the real instruction payload for the mode.
+
+Tool resolution for top-level modes is deterministic:
+
+- omitted `tools` means `all`
+- `tools: all` means all tools currently available in the top-level runtime
+- `ban_tools` subtracts from that resolved set
 
 ---
 

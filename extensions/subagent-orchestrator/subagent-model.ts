@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 
 import type { AgentAssetFile } from "../agent-assets/contract.ts";
+import { parseToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { findAgentAssetFile } from "./max-subagent-depth.ts";
 
 interface ModelLike {
@@ -36,23 +37,32 @@ function readMarkdown(filePath: string): string | undefined {
 	}
 }
 
-function parseFrontmatter(raw: string): { attributes: string; body: string } {
+function parseFrontmatter(raw: string): { attributes: Record<string, string>; body: string } {
 	const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
 	if (!fmMatch?.[1]) {
-		return { attributes: "", body: raw.trim() };
+		return { attributes: {}, body: raw.trim() };
+	}
+	const attributes: Record<string, string> = {};
+	for (const line of fmMatch[1].split(/\r?\n/)) {
+		const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+		if (!match) continue;
+		attributes[match[1].toLowerCase()] = match[2] ?? "";
 	}
 	return {
-		attributes: fmMatch[1],
+		attributes,
 		body: (fmMatch[2] ?? "").trim(),
 	};
 }
 
-function readFrontmatterStringAttribute(filePath: string, attribute: string): string | undefined {
+function readFrontmatterAttributes(filePath: string): Record<string, string> | undefined {
 	const raw = readMarkdown(filePath);
 	if (!raw) return undefined;
-	const { attributes } = parseFrontmatter(raw);
-	const attrMatch = attributes.match(new RegExp(`^${attribute}:\\s*(.+?)\\s*$`, "m"));
-	const value = normalizeString(attrMatch?.[1]);
+	return parseFrontmatter(raw).attributes;
+}
+
+function readFrontmatterStringAttribute(filePath: string, attribute: string): string | undefined {
+	const attributes = readFrontmatterAttributes(filePath);
+	const value = normalizeString(attributes?.[attribute.toLowerCase()]);
 	return value ? unquote(value) : undefined;
 }
 
@@ -68,17 +78,6 @@ function readNamedAgentAttributeFromFiles(files: readonly AgentAssetFile[], id: 
 export function normalizeThinkingLevel(value: string | undefined): string | undefined {
 	const normalized = normalizeString(value)?.toLowerCase();
 	return normalized && THINKING_LEVELS.has(normalized) ? normalized : undefined;
-}
-
-function parseTools(value: string | undefined): string[] | undefined {
-	if (!value) return undefined;
-	const normalized = value
-		.replace(/^\[/, "")
-		.replace(/\]$/, "")
-		.split(",")
-		.map((entry) => normalizeString(unquote(entry)))
-		.filter((entry): entry is string => Boolean(entry));
-	return normalized.length > 0 ? normalized : undefined;
 }
 
 function readInstructionsFromFile(filePath: string | undefined): string | undefined {
@@ -97,8 +96,19 @@ export function readNamedAgentThinkingFromFiles(files: readonly AgentAssetFile[]
 	return normalizeThinkingLevel(readNamedAgentAttributeFromFiles(files, id, "thinking"));
 }
 
+export function readNamedAgentToolSelectionFromFiles(files: readonly AgentAssetFile[], id: string): ToolSelectionSpec | undefined {
+	const filePath = readNamedAgentFilePathFromFiles(files, id);
+	if (!filePath) return undefined;
+	const attributes = readFrontmatterAttributes(filePath) ?? {};
+	return parseToolSelection({ tools: attributes.tools, banTools: attributes.ban_tools });
+}
+
 export function readNamedAgentToolsFromFiles(files: readonly AgentAssetFile[], id: string): string[] | undefined {
-	return parseTools(readNamedAgentAttributeFromFiles(files, id, "tools"));
+	const selection = readNamedAgentToolSelectionFromFiles(files, id);
+	if (!selection) return undefined;
+	if (selection.toolsMode === "list") return selection.tools;
+	if (selection.toolsMode === "all") return ["all"];
+	return undefined;
 }
 
 export function readNamedAgentInstructionsFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {

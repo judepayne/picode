@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { collectAgentAssetDiagnostics, collectAgentFiles } from "../agent-assets/contract.ts";
+import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
 const MODE_STATUS_KEY = "agent-mode";
@@ -125,7 +126,7 @@ interface ModeDefinition {
 	description?: string;
 	profile: string;
 	color?: string;
-	tools?: string[];
+	toolSelection: ToolSelectionSpec;
 	subagents?: string[];
 	bashPolicy: BashPolicy;
 	thinkingLevel?: ThinkingLevel;
@@ -259,10 +260,6 @@ function parseCommaList(value: string | undefined): string[] {
 		.filter(Boolean);
 }
 
-function parseTools(value: string | undefined): string[] {
-	return parseCommaList(value);
-}
-
 function parseSubagents(value: string | undefined): string[] {
 	return parseCommaList(value);
 }
@@ -349,7 +346,6 @@ function parseModeFile(filePath: string, markdown: string): ModeDefinition {
 	const { attributes, body } = parseFrontmatter(markdown);
 	const fallbackName = titleizeSlug(path.basename(filePath, ".md"));
 	const name = unquote(attributes.name ?? fallbackName);
-	const tools = parseTools(attributes.tools);
 	const subagents = parseSubagents(attributes.subagents);
 
 	return {
@@ -358,7 +354,7 @@ function parseModeFile(filePath: string, markdown: string): ModeDefinition {
 		description: attributes.description ? unquote(attributes.description) : undefined,
 		profile: unquote(attributes.profile ?? "default"),
 		color: attributes.color ? unquote(attributes.color) : undefined,
-		tools: tools.length > 0 ? tools : undefined,
+		toolSelection: parseToolSelection({ tools: attributes.tools, banTools: attributes.ban_tools }),
 		subagents: subagents.length > 0 ? subagents : undefined,
 		bashPolicy: normalizeBashPolicy(attributes.bash),
 		thinkingLevel: normalizeThinkingLevel(attributes.thinking),
@@ -481,8 +477,34 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		});
 	}
 
+	function getAvailableToolNames(): string[] {
+		return pi.getAllTools().map((tool) => tool.name);
+	}
+
 	function getEffectiveTools(mode: ModeDefinition): string[] {
-		return mode.tools && mode.tools.length > 0 ? mode.tools : pi.getActiveTools();
+		return resolveToolSelection(mode.toolSelection, {
+			defaultMode: "all",
+			availableTools: getAvailableToolNames(),
+		}).tools;
+	}
+
+	function notifyModeToolWarnings(ctx: ExtensionContext, mode: ModeDefinition): void {
+		const resolved = resolveToolSelection(mode.toolSelection, {
+			defaultMode: "all",
+			availableTools: getAvailableToolNames(),
+		});
+		if (resolved.unknownRequestedTools.length > 0) {
+			ctx.ui.notify(
+				`Agent mode ${mode.name}: unknown tools ignored: ${resolved.unknownRequestedTools.join(", ")}`,
+				"warning",
+			);
+		}
+		if (resolved.unknownBannedTools.length > 0) {
+			ctx.ui.notify(
+				`Agent mode ${mode.name}: unknown ban_tools ignored: ${resolved.unknownBannedTools.join(", ")}`,
+				"warning",
+			);
+		}
 	}
 
 	async function applyConfiguredModel(ctx: ExtensionContext, mode: ModeDefinition): Promise<void> {
@@ -518,8 +540,10 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		if (current.tools && current.tools.length > 0) {
-			pi.setActiveTools(current.tools);
+		const effectiveTools = getEffectiveTools(current);
+		pi.setActiveTools(effectiveTools);
+		if (ctx.hasUI) {
+			notifyModeToolWarnings(ctx, current);
 		}
 		if (current.thinkingLevel) {
 			pi.setThinkingLevel(current.thinkingLevel);
@@ -694,7 +718,6 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 					current.description ? `description=${current.description}` : undefined,
 					`profile=${current.profile}`,
 					`tools=${effectiveTools.join(",")}`,
-					current.tools ? undefined : `tools-source=unchanged`,
 					`bash=${current.bashPolicy}`,
 					current.subagents && current.subagents.length > 0 ? `subagents=${current.subagents.join(",")}` : `subagents=none`,
 					current.thinkingLevel ? `thinking=${current.thinkingLevel}` : undefined,

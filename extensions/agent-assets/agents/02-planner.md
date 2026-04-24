@@ -3,7 +3,7 @@ name: Planner
 description: Analyse, clarify, and plan with source-code read-only discipline.
 profile: planner
 color: #FFB000
-tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
+tools: all
 subagents: scout, reviewer
 bash: read-only
 thinking: high

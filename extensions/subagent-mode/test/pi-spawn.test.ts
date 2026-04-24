@@ -46,4 +46,14 @@ describe("buildChildPiArgs", () => {
 
 		assert.deepEqual(extensionValues, [gatePath]);
 	});
+
+	test("passes --no-tools when the resolved tool list is empty", () => {
+		const { args } = buildChildPiArgs({
+			task: "inspect",
+			sessionEnabled: false,
+			tools: [],
+		});
+
+		assert.ok(args.includes("--no-tools"));
+	});
 });

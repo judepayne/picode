@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import type { AgentAssetFile } from "../../agent-assets/contract.ts";
-import { formatModelReference, normalizeThinkingLevel, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolsFromFiles } from "../subagent-model.ts";
+import { formatModelReference, normalizeThinkingLevel, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "../subagent-model.ts";
 
 const tempDirs: string[] = [];
 
@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("subagent model metadata", () => {
-	it("reads model, thinking, tools, and instructions from the named markdown file", () => {
+	it("reads model, thinking, tool selection, and instructions from the named markdown file", () => {
 		const root = makeRoot();
 		const filePath = path.join(root, "custom.md");
 		fs.writeFileSync(
@@ -42,7 +42,10 @@ describe("subagent model metadata", () => {
 		const files = [assetFile(filePath)];
 		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
 		assert.equal(readNamedAgentThinkingFromFiles(files, "scout"), "low");
-		assert.deepEqual(readNamedAgentToolsFromFiles(files, "scout"), ["read", "grep", "find"]);
+		assert.deepEqual(readNamedAgentToolSelectionFromFiles(files, "scout"), {
+			toolsMode: "list",
+			tools: ["read", "grep", "find"],
+		});
 		assert.equal(readNamedAgentInstructionsFromFiles(files, "scout"), "You are scouty.");
 	});
 
@@ -57,7 +60,10 @@ describe("subagent model metadata", () => {
 		const files = [assetFile(filePath, "subagent", "user")];
 		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
 		assert.equal(readNamedAgentThinkingFromFiles(files, "scout"), "low");
-		assert.deepEqual(readNamedAgentToolsFromFiles(files, "scout"), ["read", "grep"]);
+		assert.deepEqual(readNamedAgentToolSelectionFromFiles(files, "scout"), {
+			toolsMode: "list",
+			tools: ["read", "grep"],
+		});
 		assert.equal(readNamedAgentInstructionsFromFiles(files, "scout"), "Overlay scout.");
 	});
 
@@ -70,6 +76,32 @@ describe("subagent model metadata", () => {
 		const files = [assetFile(numberedPath, "agent"), assetFile(namedPath)];
 		assert.equal(readNamedAgentModelFromFiles(files, "builder"), "openai-codex/gpt-5.4");
 		assert.equal(readNamedAgentModelFromFiles(files, "scout"), "openai-codex/gpt-5.4-mini");
+	});
+
+	it("parses tools: all and ban_tools from the card", () => {
+		const root = makeRoot();
+		const filePath = path.join(root, "worker.md");
+		fs.writeFileSync(
+			filePath,
+			"---\nname: Worker\ntools: all\nban_tools: [vars, edit]\n---\nWorker\n",
+			"utf8",
+		);
+		const files = [assetFile(filePath)];
+		assert.deepEqual(readNamedAgentToolSelectionFromFiles(files, "worker"), {
+			toolsMode: "all",
+			banTools: ["vars", "edit"],
+		});
+	});
+
+	it("returns omitted tool selection when the card does not specify tools", () => {
+		const root = makeRoot();
+		const filePath = path.join(root, "reviewer.md");
+		fs.writeFileSync(filePath, "---\nname: Reviewer\nban_tools: delegate_subagent\n---\nReview\n", "utf8");
+		const files = [assetFile(filePath)];
+		assert.deepEqual(readNamedAgentToolSelectionFromFiles(files, "reviewer"), {
+			toolsMode: "omitted",
+			banTools: ["delegate_subagent"],
+		});
 	});
 
 	it("normalizes supported thinking levels and rejects invalid ones", () => {

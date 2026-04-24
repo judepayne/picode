@@ -363,7 +363,8 @@ Agent cards are markdown files with YAML frontmatter. Here is the smallest usefu
 name: MyAgent
 profile: builder
 color: "#3366CC"
-tools: [read, bash, edit, write]
+tools: all
+ban_tools: [edit, write]
 subagents: scout
 bash: full
 thinking: medium
@@ -378,7 +379,8 @@ What each key does:
 - `name` — the display name shown in `/agents` and the footer.
 - `profile` — the pi-gate permission profile (e.g. `builder`, `planner`, `designer`). Controls what the agent is allowed to do.
 - `color` — the accent colour for the agent’s UI elements. Hex or named colours.
-- `tools` — the tool set available to this agent (e.g. `read`, `bash`, `edit`, `write`, `grep`, `delegate_subagent`).
+- `tools` — the base tool selection for this card. Use an explicit list or `all`. For top-level agents, omitting `tools` means `all`.
+- `ban_tools` — a subtractive list applied after `tools` is resolved.
 - `subagents` — which subagents this agent is allowed to delegate to (e.g. `scout`, `worker`, `reviewer`).
 - `bash` — `full` allows any bash command; `read-only` restricts to safe inspection commands.
 - `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`).
@@ -387,6 +389,14 @@ What each key does:
 `model` and `thinking` are optional. If you leave them out, picode falls back to your current Pi settings, which is useful if you want the same agent to run on different models depending on context.
 
 The frontmatter controls runtime behaviour; the markdown body is the persona prompt. Save the file in your overlay directory (or `extensions/agent-assets/agents/` if you are editing the package directly) and run `/reload`.
+
+Tool-selection semantics differ slightly by card type:
+
+- top-level agent cards: omitted `tools` means `all`
+- subagent cards: omitted `tools` means inherit the parent agent's current active tools
+- in both cases, omitted `ban_tools` means no subtraction
+
+For delegated subagents, inherited tools are still limited by what the child runtime actually loads. If a parent has a tool that the child runtime does not load, the child simply ignores that name.
 
 For full working examples, see the built-in cards in `extensions/agent-assets/agents/` and `extensions/agent-assets/subagents/`.
 

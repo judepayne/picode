@@ -136,8 +136,8 @@ export interface BuildChildPiArgsInput {
 	model?: string;
 	thinking?: string;
 	/**
-	 * Built-in tool names (e.g. "bash", "read") or extension paths. Paths are
-	 * routed to --extension, names to --tools.
+	 * Tool names and/or extension paths. Paths are routed to --extension, names
+	 * to --tools.
 	 */
 	tools?: string[];
 	/**
@@ -188,17 +188,19 @@ export function buildChildPiArgs(input: BuildChildPiArgsInput): BuildChildPiArgs
 	}
 
 	const toolExtensionPaths: string[] = [];
-	if (input.tools?.length) {
-		const builtin: string[] = [];
+	if (input.tools !== undefined) {
+		const toolNames: string[] = [];
 		for (const tool of input.tools) {
 			if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
 				toolExtensionPaths.push(tool);
 			} else {
-				builtin.push(tool);
+				toolNames.push(tool);
 			}
 		}
-		if (builtin.length > 0) {
-			args.push("--tools", builtin.join(","));
+		if (toolNames.length > 0) {
+			args.push("--tools", toolNames.join(","));
+		} else if (toolExtensionPaths.length === 0) {
+			args.push("--no-tools");
 		}
 	}
 

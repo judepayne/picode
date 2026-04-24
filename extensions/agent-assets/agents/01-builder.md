@@ -3,7 +3,7 @@ name: Builder
 description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
-tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
+tools: all
 subagents: scout, worker, reviewer
 bash: full
 thinking: high

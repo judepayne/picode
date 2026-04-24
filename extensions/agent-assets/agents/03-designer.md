@@ -3,7 +3,7 @@ name: Designer
 description: Design discussion and code review partner.
 profile: designer
 color: #33AA55
-tools: [read, bash, edit, write, grep, find, ls, delegate_subagent, delegate_subagent_status]
+tools: all
 subagents: scout, reviewer
 bash: full
 thinking: high
