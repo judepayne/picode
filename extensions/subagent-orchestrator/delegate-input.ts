@@ -1,4 +1,5 @@
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, isAllowedContext } from "./policy.ts";
+import { MAX_SYNC_TIMEOUT_SECONDS } from "./timeout.ts";
 import type { NormalizedDelegationRequest } from "./types.ts";
 
 function requestedDelegatedAgent(value: unknown): string {
@@ -26,6 +27,7 @@ export function normalizeDelegateInput(input: {
 	async?: unknown;
 	context?: unknown;
 	showRunCard?: unknown;
+	timeoutSeconds?: unknown;
 	childSessionId?: unknown;
 }): { request?: NormalizedDelegationRequest; error?: string } {
 	const hasTask = typeof input.task === "string" && input.task.trim().length > 0;
@@ -40,6 +42,17 @@ export function normalizeDelegateInput(input: {
 	const normalizedAsync = input.async === true;
 	const context = input.context === "fork" ? "fork" : input.context === "continue" ? "continue" : "fresh";
 	const showRunCard = input.showRunCard === true;
+	const timeoutSeconds = input.timeoutSeconds === undefined
+		? undefined
+		: typeof input.timeoutSeconds === "number"
+			&& Number.isInteger(input.timeoutSeconds)
+			&& input.timeoutSeconds > 0
+			&& input.timeoutSeconds <= MAX_SYNC_TIMEOUT_SECONDS
+				? input.timeoutSeconds
+				: null;
+	if (timeoutSeconds === null) {
+		return { error: `timeoutSeconds must be a positive integer no greater than ${MAX_SYNC_TIMEOUT_SECONDS}.` };
+	}
 	const childSessionId = typeof input.childSessionId === "string" && input.childSessionId.trim()
 		? input.childSessionId.trim()
 		: undefined;
@@ -55,14 +68,14 @@ export function normalizeDelegateInput(input: {
 	}
 	const agent = requestedDelegatedAgent(input.agent);
 	if (hasTask) {
-		return { request: { shape: "single", agent, async: normalizedAsync, context, showRunCard, ...(childSessionId ? { childSessionId } : {}), task: (input.task as string).trim() } };
+		return { request: { shape: "single", agent, async: normalizedAsync, context, showRunCard, ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}), ...(childSessionId ? { childSessionId } : {}), task: (input.task as string).trim() } };
 	}
 	if (hasTasks) {
 		const normalized = normalizeTaskItems(input.tasks, "tasks");
 		if (!normalized.items) return { error: normalized.error };
-		return { request: { shape: "parallel", agent, async: normalizedAsync, context, showRunCard, tasks: normalized.items } };
+		return { request: { shape: "parallel", agent, async: normalizedAsync, context, showRunCard, ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}), tasks: normalized.items } };
 	}
 	const normalized = normalizeTaskItems(input.chain, "chain");
 	if (!normalized.items) return { error: normalized.error };
-	return { request: { shape: "chain", agent, async: normalizedAsync, context, showRunCard, chain: normalized.items } };
+	return { request: { shape: "chain", agent, async: normalizedAsync, context, showRunCard, ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}), chain: normalized.items } };
 }

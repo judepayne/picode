@@ -24,6 +24,7 @@ import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaun
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
+import { DEFAULT_SYNC_TIMEOUT_SECONDS, MAX_SYNC_TIMEOUT_SECONDS } from "./timeout.ts";
 import {
 	findStickyUserSubagentSession,
 	upsertStickyUserSubagentSession,
@@ -101,9 +102,10 @@ const DelegateTaskSchema = Type.Object({
 const DelegateSubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ description: "The subagent type to run (defaults to scout)." })),
 	task: Type.Optional(Type.String({ description: "Run one subagent task." })),
-	tasks: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run multiple subagent tasks in parallel." })),
+	tasks: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run multiple subagents in parallel." })),
 	chain: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run a sequential chain of subagent tasks." })),
 	async: Type.Optional(Type.Boolean({ description: "Run in the background and return immediately with a run id." })),
+	timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SYNC_TIMEOUT_SECONDS, description: `Timeout for synchronous delegated runs in seconds. Defaults to ${DEFAULT_SYNC_TIMEOUT_SECONDS}. Async runs do not use it, but if provided it must still be within range.` })),
 	context: Type.Optional(Type.Union([
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
@@ -643,7 +645,7 @@ function pathIncludesExtension(toolPath: string, extensionPath: string): boolean
 	return normalizedToolPath === normalizedExtensionPath || normalizedToolPath.startsWith(`${normalizedExtensionPath}${path.sep}`);
 }
 
-function getChildAvailableToolNames(): string[] {
+function getChildAvailableToolNames(pi: ExtensionAPI): string[] {
 	const childExtensionPaths = resolveDefaultChildExtensionPaths();
 	const availableTools: string[] = [];
 	const seen = new Set<string>();
@@ -673,10 +675,10 @@ function notifySubagentToolWarnings(ctx: ExtensionContext, agent: string, unknow
 	}
 }
 
-function resolveDelegatedSubagentTools(ctx: ExtensionContext, agent: string): string[] {
+function resolveDelegatedSubagentTools(pi: ExtensionAPI, ctx: ExtensionContext, agent: string): string[] {
 	const resolved = resolveToolSelection(readSubagentConfiguredToolSelection(agent), {
 		defaultMode: "inherit",
-		availableTools: getChildAvailableToolNames(),
+		availableTools: getChildAvailableToolNames(pi),
 		inheritedTools: pi.getActiveTools(),
 	});
 	notifySubagentToolWarnings(ctx, agent, resolved.unknownRequestedTools, resolved.unknownBannedTools);
@@ -691,6 +693,7 @@ function readSubagentInstructions(agent: string): string | undefined {
 }
 
 function hydrateDelegationRequest(
+	pi: ExtensionAPI,
 	ctx: ExtensionContext,
 	request: NormalizedDelegationRequest,
 	currentThinking?: string,
@@ -699,7 +702,7 @@ function hydrateDelegationRequest(
 		...request,
 		model: request.model ?? resolveDelegatedSubagentModel(ctx, request.agent),
 		thinking: request.thinking ?? resolveDelegatedSubagentThinking(request.agent, currentThinking),
-		tools: request.tools ?? resolveDelegatedSubagentTools(ctx, request.agent),
+		tools: request.tools ?? resolveDelegatedSubagentTools(pi, ctx, request.agent),
 		systemPrompt: request.systemPrompt ?? readSubagentInstructions(request.agent),
 	};
 }
@@ -2045,7 +2048,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (!currentMode.modeId || !currentMode.subagents?.length) return { action: "continue" };
 		const parsed = parseUserDispatch(event.text, currentMode.subagents, ctx.cwd);
 		if (!parsed) return { action: "continue" };
-		const request = hydrateDelegationRequest(ctx, {
+		const request = hydrateDelegationRequest(pi, ctx, {
 			shape: "single",
 			agent: parsed.agent,
 			async: true,
@@ -2216,21 +2219,23 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			resolveResponse = resolve;
 			pending.set(orchestratorRunId, { orchestratorRunId, onUpdate: options.onUpdate, resolve: settleResponse });
 		});
+		const syncTimeoutSeconds = Math.min(request.timeoutSeconds ?? DEFAULT_SYNC_TIMEOUT_SECONDS, MAX_SYNC_TIMEOUT_SECONDS);
+		const timeoutMessage = `delegated subagent timed out waiting for a response after ${syncTimeoutSeconds}s`;
 		const syncTimeout = request.async
 			? undefined
 			: setTimeout(() => {
 				settleResponse({
 					requestId: orchestratorRunId,
 					isError: true,
-					errorText: "delegated subagent timed out waiting for a response",
+					errorText: timeoutMessage,
 					result: {
-						content: [{ type: "text", text: "delegated subagent timed out waiting for a response" }],
+						content: [{ type: "text", text: timeoutMessage }],
 						isError: true,
 						details: { mode: getRequestedModeLabel(request), results: [] },
 					},
 				});
 				pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: orchestratorRunId });
-			}, 120_000);
+			}, syncTimeoutSeconds * 1000);
 		syncTimeout?.unref?.();
 
 		const cancelRequest = () => {
@@ -2571,7 +2576,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				return errorResult(normalized.error ?? "Invalid subagent orchestrator request.");
 			}
 
-			const request = hydrateDelegationRequest(ctx, normalized.request, pi.getThinkingLevel());
+			const request = hydrateDelegationRequest(pi, ctx, normalized.request, pi.getThinkingLevel());
 			if (!currentMode.subagents?.includes(request.agent)) {
 				return errorResult(`Mode ${currentModeId} is not allowed to delegate to subagent type ${request.agent}.`);
 			}

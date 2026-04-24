@@ -45,6 +45,7 @@ Supported top-level options:
 - `tasks` — multiple subagents in parallel
 - `chain` — multiple subagents in sequence
 - `async` — background execution when `true`
+- `timeoutSeconds` — optional timeout for synchronous delegated runs; defaults to 180 seconds. Async runs do not use it, but if you provide it anyway it still must be a valid positive integer within the supported range.
 - `context` — `fresh`, `fork`, or `continue`
 - `childSessionId` — required when `context` is `continue`; identifies the exact delegated child session to resume
 - `showRunCard` — visible orchestrator run card message; keep this `false` unless the user explicitly wants that UI card
@@ -161,12 +162,14 @@ Use sync when:
 - you want the findings in the current turn
 - the investigation is moderate in size
 - you need to synthesize the result immediately
+- the default 180-second timeout is likely to be sufficient, or you deliberately set a longer `timeoutSeconds`
 
 ### Prefer async
 Use async when:
 - the investigation is broad or time-consuming
 - you want the main conversation to continue without waiting
 - you want to queue background scouting and come back later
+- a sync timeout would be wasteful or likely to trip even with a longer `timeoutSeconds`
 
 When `async: true`:
 - set `showRunCard: false` unless the user explicitly asks for the visible run card
@@ -218,7 +221,9 @@ Rules:
 5. Call `delegate_subagent`.
 6. If async, note the returned run id and monitor with `delegate_subagent_status`.
 7. Prefer `tree` / `log` / `stream` / `stream_next` for active monitoring instead of reading files directly.
-8. Synthesize the findings back into the main answer.
+8. If the delegation fails, inspect the failure reason before deciding what to do next.
+9. If it failed due to a timeout, decide whether the right next step is a longer `timeoutSeconds` or an async rerun.
+10. Synthesize the findings back into the main answer.
 
 ## Interpreting orchestrator status and completion messages
 
@@ -260,6 +265,13 @@ After a sync `delegate_subagent` call:
 - present the child's output in your reply (verbatim for artifact requests, synthesized for analytical requests)
 - avoid extra status polling
 - no need to restate that the subagent "ran" or "finished" — just answer
+
+### Sync failure handling
+If a sync `delegate_subagent` call fails:
+- inspect the failure reason rather than treating all failures the same
+- if the failure was a timeout, consider rerunning with a longer `timeoutSeconds`
+- if the work looks inherently long-running, prefer rerunning async instead of stretching sync indefinitely
+- explain the next step you chose briefly and concretely
 
 ### Async completion turn
 If a background handback or continuation arrives:

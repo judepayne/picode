@@ -1,0 +1,2 @@
+export const DEFAULT_SYNC_TIMEOUT_SECONDS = 180;
+export const MAX_SYNC_TIMEOUT_SECONDS = Math.floor(2_147_483_647 / 1000);
