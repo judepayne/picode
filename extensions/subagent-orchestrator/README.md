@@ -26,7 +26,7 @@ If `agent-mode` answers "what should the main agent be right now?", then `subage
 - `delegate_subagent`
 - `delegate_subagent_status`
 
-`delegate_subagent` supports an optional `timeoutSeconds` argument for synchronous runs. If omitted, sync runs default to 180 seconds. Async runs do not use this timeout, but if the field is present it still must be within the supported positive-integer range.
+`delegate_subagent` supports an optional `timeoutSeconds` argument for synchronous runs. It is an inactivity timeout: if omitted, sync runs are cancelled after 40 seconds without child activity. Child activity includes streamed text, thinking boundaries, tool events, and progress events. Async runs do not use this timeout, but if the field is present it still must be within the supported positive-integer range.
 
 It also provides a user-facing shorthand for async delegation:
 

@@ -24,7 +24,7 @@ import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaun
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
-import { DEFAULT_SYNC_TIMEOUT_SECONDS, MAX_SYNC_TIMEOUT_SECONDS } from "./timeout.ts";
+import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
 import {
 	findStickyUserSubagentSession,
 	upsertStickyUserSubagentSession,
@@ -105,7 +105,7 @@ const DelegateSubagentParams = Type.Object({
 	tasks: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run multiple subagents in parallel." })),
 	chain: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run a sequential chain of subagent tasks." })),
 	async: Type.Optional(Type.Boolean({ description: "Run in the background and return immediately with a run id." })),
-	timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SYNC_TIMEOUT_SECONDS, description: `Timeout for synchronous delegated runs in seconds. Defaults to ${DEFAULT_SYNC_TIMEOUT_SECONDS}. Async runs do not use it, but if provided it must still be within range.` })),
+	timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SYNC_TIMEOUT_SECONDS, description: `Inactivity timeout for synchronous delegated runs in seconds. Defaults to ${DEFAULT_SYNC_TIMEOUT_SECONDS}. Async runs do not use it, but if provided it must still be within range.` })),
 	context: Type.Optional(Type.Union([
 		Type.Literal("fresh"),
 		Type.Literal("fork"),
@@ -2220,10 +2220,15 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			pending.set(orchestratorRunId, { orchestratorRunId, onUpdate: options.onUpdate, resolve: settleResponse });
 		});
 		const syncTimeoutSeconds = Math.min(request.timeoutSeconds ?? DEFAULT_SYNC_TIMEOUT_SECONDS, MAX_SYNC_TIMEOUT_SECONDS);
-		const timeoutMessage = `delegated subagent timed out waiting for a response after ${syncTimeoutSeconds}s`;
-		const syncTimeout = request.async
-			? undefined
-			: setTimeout(() => {
+		const timeoutMessage = formatSyncIdleTimeoutMessage(syncTimeoutSeconds);
+		let syncTimeout: ReturnType<typeof setTimeout> | undefined;
+		const scheduleSyncIdleTimeout = (): void => {
+			if (settled) return;
+			const run = state.getRun(orchestratorRunId);
+			if (run && isTerminal(run.status)) return;
+			const lastActivityAt = typeof run?.updatedAt === "number" ? run.updatedAt : now;
+			const delayMs = nextSyncIdleTimeoutDelayMs(lastActivityAt, Date.now(), syncTimeoutSeconds);
+			if (delayMs === undefined) {
 				settleResponse({
 					requestId: orchestratorRunId,
 					isError: true,
@@ -2235,8 +2240,12 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					},
 				});
 				pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: orchestratorRunId });
-			}, syncTimeoutSeconds * 1000);
-		syncTimeout?.unref?.();
+				return;
+			}
+			syncTimeout = setTimeout(scheduleSyncIdleTimeout, delayMs);
+			syncTimeout.unref?.();
+		};
+		if (!request.async) scheduleSyncIdleTimeout();
 
 		const cancelRequest = () => {
 			pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: orchestratorRunId });
