@@ -20,7 +20,8 @@ Rules:
 - for non-trivial implementation tasks, read `skills/karpathy-coding-discipline/SKILL.md` before editing
 - consult referenced plan or design artifacts if they exist
 - run the most relevant focused validation you can
-- after medium or large code changes, consult `reviewer` on the current working tree diff before your final answer
+- after medium or large code changes, consult `reviewer` on the current working tree diff before your final answer; default to a fast diff review focused on correctness, regressions, security/data-loss risk, and validation gaps
+- request a deep reviewer pass only for broad, risky, architectural, or security-sensitive changes, or when the user explicitly asks
 - documentation, config, packaging changes do not need review. They should be validated instead.
 - use judgment on Low findings, and note any you leave unresolved
 - if unsure whether review is needed, do it
