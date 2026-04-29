@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import type { AgentAssetFile } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
@@ -17,6 +19,40 @@ function normalizeString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const normalized = value.trim();
 	return normalized ? normalized : undefined;
+}
+
+function unquote(value: string): string {
+	const trimmed = value.trim();
+	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+		return trimmed.slice(1, -1);
+	}
+	return trimmed;
+}
+
+function parseStringList(value: string | undefined): string[] | undefined {
+	const normalized = normalizeString(value);
+	if (!normalized) return undefined;
+	const unquoted = unquote(normalized);
+	if (!unquoted || unquoted === "-") return undefined;
+	const list = unquoted.startsWith("[") && unquoted.endsWith("]") ? unquoted.slice(1, -1) : unquoted;
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const entry of list.split(",")) {
+		const item = unquote(entry).trim();
+		if (!item || seen.has(item)) continue;
+		seen.add(item);
+		out.push(item);
+	}
+	return out.length > 0 ? out : undefined;
+}
+
+function resolveExtensionPath(rawPath: string, cardFilePath: string): string {
+	const expanded = rawPath === "~"
+		? os.homedir()
+		: rawPath.startsWith(`~${path.sep}`) || rawPath.startsWith("~/")
+			? path.join(os.homedir(), rawPath.slice(2))
+			: rawPath;
+	return path.isAbsolute(expanded) ? expanded : path.resolve(path.dirname(cardFilePath), expanded);
 }
 
 function readMarkdown(filePath: string): string | undefined {
@@ -98,6 +134,13 @@ export function readNamedAgentToolsFromFiles(files: readonly AgentAssetFile[], i
 	if (selection.toolsMode === "list") return selection.tools;
 	if (selection.toolsMode === "all") return ["all"];
 	return undefined;
+}
+
+export function readNamedAgentExtensionPathsFromFiles(files: readonly AgentAssetFile[], id: string): string[] | undefined {
+	const filePath = readNamedAgentFilePathFromFiles(files, id);
+	if (!filePath) return undefined;
+	const attributes = readFrontmatterAttributes(filePath) ?? {};
+	return parseStringList(attributes.extensions)?.map((entry) => resolveExtensionPath(entry, filePath));
 }
 
 export function readNamedAgentInstructionsFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {

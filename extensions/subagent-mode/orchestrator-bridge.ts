@@ -311,6 +311,7 @@ async function runRequest(
 		cwd: deps.getCwd?.(),
 		thinking: spec.thinking,
 		tools: spec.tools,
+		extensions: spec.extensions,
 		systemPrompt: spec.systemPrompt,
 		forkSessionFileForIndex: forkResolver
 			? (index) => forkResolver.sessionFileForIndex(index)

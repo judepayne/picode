@@ -32,6 +32,7 @@ export interface NormalizedDelegationRequest {
 	model?: string;
 	thinking?: string;
 	tools?: string[];
+	extensions?: string[];
 	systemPrompt?: string;
 	task?: string;
 	tasks?: DelegatedTaskInput[];

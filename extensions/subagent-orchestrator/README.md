@@ -318,6 +318,7 @@ Those cards currently define the child persona through:
 - `thinking`
 - `tools`
 - `ban_tools`
+- `extensions`
 - `maxSubagentDepth`
 - markdown-body instructions
 
@@ -333,6 +334,14 @@ Tool resolution for subagent cards works like this:
 - `ban_tools` subtracts from the resolved base set
 
 If the parent has active tools that the child runtime does not load, the child simply ignores those inherited names. Child processes intentionally run with a narrower explicit extension set than the parent runtime.
+
+Subagent cards can add child extensions without replacing picode's default child extension set. Use a single path or an inline comma list:
+
+```yaml
+extensions: ~/.pi/agent/extensions/openai-web-search.ts
+```
+
+If an added extension registers Pi tools, list those tool names explicitly in `tools` when the subagent needs them.
 
 ---
 

@@ -340,7 +340,13 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 					}
 				},
 			},
-			{ cwd },
+			{
+				cwd,
+				thinking: spec.thinking,
+				tools: spec.tools,
+				extensions: spec.extensions,
+				systemPrompt: spec.systemPrompt,
+			},
 			{ runId },
 		);
 	} catch (error) {

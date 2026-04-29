@@ -51,6 +51,7 @@ export interface RunSpec {
 	model?: string;
 	thinking?: string;
 	tools?: string[];
+	extensions?: string[];
 	systemPrompt?: string;
 	maxSubagentDepth?: number;
 	env?: Record<string, string>;

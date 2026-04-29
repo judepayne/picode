@@ -10,7 +10,7 @@ import { collectAgentFiles, collectSubagentFiles, type AgentAssetFile } from "..
 import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
-import { formatModelReference, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "./subagent-model.ts";
+import { formatModelReference, readNamedAgentExtensionPathsFromFiles, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
@@ -582,6 +582,7 @@ const subagentDepthCache = new Map<string, number | undefined>();
 const subagentModelCache = new Map<string, string | undefined>();
 const subagentThinkingCache = new Map<string, string | undefined>();
 const subagentToolSelectionCache = new Map<string, ToolSelectionSpec | undefined>();
+const subagentExtensionPathsCache = new Map<string, string[] | undefined>();
 const subagentInstructionsCache = new Map<string, string | undefined>();
 
 let resolveAgentAssetFiles: (() => AgentAssetFile[]) | undefined;
@@ -639,14 +640,21 @@ function readSubagentConfiguredToolSelection(agent: string): ToolSelectionSpec |
 	return value;
 }
 
+function readSubagentConfiguredExtensions(agent: string): string[] | undefined {
+	if (subagentExtensionPathsCache.has(agent)) return subagentExtensionPathsCache.get(agent);
+	const value = readNamedAgentExtensionPathsFromFiles(currentSubagentAssetFiles(), agent);
+	subagentExtensionPathsCache.set(agent, value);
+	return value;
+}
+
 function pathIncludesExtension(toolPath: string, extensionPath: string): boolean {
 	const normalizedToolPath = path.resolve(toolPath);
 	const normalizedExtensionPath = path.resolve(extensionPath);
 	return normalizedToolPath === normalizedExtensionPath || normalizedToolPath.startsWith(`${normalizedExtensionPath}${path.sep}`);
 }
 
-function getChildAvailableToolNames(pi: ExtensionAPI): string[] {
-	const childExtensionPaths = resolveDefaultChildExtensionPaths();
+function getChildAvailableToolNames(pi: ExtensionAPI, additionalExtensionPaths: string[] = []): string[] {
+	const childExtensionPaths = [...resolveDefaultChildExtensionPaths(), ...additionalExtensionPaths];
 	const availableTools: string[] = [];
 	const seen = new Set<string>();
 	for (const tool of pi.getAllTools()) {
@@ -675,14 +683,19 @@ function notifySubagentToolWarnings(ctx: ExtensionContext, agent: string, unknow
 	}
 }
 
-function resolveDelegatedSubagentTools(pi: ExtensionAPI, ctx: ExtensionContext, agent: string): string[] {
-	const resolved = resolveToolSelection(readSubagentConfiguredToolSelection(agent), {
+function resolveDelegatedSubagentTools(pi: ExtensionAPI, ctx: ExtensionContext, agent: string, additionalExtensionPaths?: string[]): string[] {
+	const selection = readSubagentConfiguredToolSelection(agent);
+	const resolved = resolveToolSelection(selection, {
 		defaultMode: "inherit",
-		availableTools: getChildAvailableToolNames(pi),
+		availableTools: getChildAvailableToolNames(pi, additionalExtensionPaths),
 		inheritedTools: pi.getActiveTools(),
 	});
-	notifySubagentToolWarnings(ctx, agent, resolved.unknownRequestedTools, resolved.unknownBannedTools);
-	return resolved.tools;
+	const childOnlyRequestedTools = additionalExtensionPaths && additionalExtensionPaths.length > 0 && selection?.toolsMode === "list"
+		? resolved.unknownRequestedTools.filter((tool) => !(selection.banTools ?? []).includes(tool))
+		: [];
+	const unknownRequestedTools = childOnlyRequestedTools.length > 0 ? [] : resolved.unknownRequestedTools;
+	notifySubagentToolWarnings(ctx, agent, unknownRequestedTools, resolved.unknownBannedTools);
+	return [...new Set([...resolved.tools, ...childOnlyRequestedTools])];
 }
 
 function readSubagentInstructions(agent: string): string | undefined {
@@ -698,11 +711,13 @@ function hydrateDelegationRequest(
 	request: NormalizedDelegationRequest,
 	currentThinking?: string,
 ): NormalizedDelegationRequest {
+	const extensions = request.extensions ?? readSubagentConfiguredExtensions(request.agent);
 	return {
 		...request,
 		model: request.model ?? resolveDelegatedSubagentModel(ctx, request.agent),
 		thinking: request.thinking ?? resolveDelegatedSubagentThinking(request.agent, currentThinking),
-		tools: request.tools ?? resolveDelegatedSubagentTools(pi, ctx, request.agent),
+		tools: request.tools ?? resolveDelegatedSubagentTools(pi, ctx, request.agent, extensions),
+		extensions,
 		systemPrompt: request.systemPrompt ?? readSubagentInstructions(request.agent),
 	};
 }
@@ -722,6 +737,11 @@ function precomputeAsyncForkSessionFiles(
 	}
 	const resolver = createForkContextResolver(sessionManager, request.context);
 	return Array.from({ length: childCount }, (_value, index) => resolver.sessionFileForIndex(index)).filter((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+function mergeDefaultChildExtensions(additionalExtensions: string[] | undefined): string[] | undefined {
+	if (additionalExtensions === undefined) return undefined;
+	return [...new Set([...resolveDefaultChildExtensionPaths(), ...additionalExtensions])];
 }
 
 function buildSubagentModeRunSpec(
@@ -747,6 +767,7 @@ function buildSubagentModeRunSpec(
 		maxSubagentDepth,
 		...(model ? { model } : {}),
 		...(request.tools !== undefined ? { tools: request.tools } : {}),
+		...(request.extensions !== undefined ? { extensions: mergeDefaultChildExtensions(request.extensions) } : {}),
 		...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
 		...(Array.isArray(childIds) && childIds.length > 0 ? { childIds } : {}),
 		...(Array.isArray(sessionFiles) && sessionFiles.length > 0 ? { sessionFiles } : {}),
@@ -1213,6 +1234,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	subagentModelCache.clear();
 	subagentThinkingCache.clear();
 	subagentToolSelectionCache.clear();
+	subagentExtensionPathsCache.clear();
 	subagentInstructionsCache.clear();
 	resolveAgentAssetFiles = () => collectAgentFiles(pi);
 	resolveSubagentAssetFiles = () => collectSubagentFiles(pi);
@@ -2112,6 +2134,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentModelCache.clear();
 		subagentThinkingCache.clear();
 		subagentToolSelectionCache.clear();
+		subagentExtensionPathsCache.clear();
 		subagentInstructionsCache.clear();
 		stickyUserSubagentSessions = [];
 		resolveAgentAssetFiles = undefined;
@@ -2348,8 +2371,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		refreshRunAggregates(requestId);
 		const pendingRequest = pending.get(requestId);
+		const agentLabel = existingRun?.agent?.trim() || "subagent";
 		pendingRequest?.onUpdate?.({
-			content: [{ type: "text", text: "Delegated scout run started." }],
+			content: [{ type: "text", text: `Delegated ${agentLabel} run started.` }],
 			details: { status: "running" },
 		});
 	});
@@ -2384,12 +2408,13 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		state.updateRun(evt.requestId, { updatedAt: Date.now() });
 		handleChildEvent(evt.requestId, evt);
 		const pendingRequest = pending.get(evt.requestId);
+		const agentLabel = evt.agent?.trim() || state.getRun(evt.requestId)?.agent?.trim() || "subagent";
 		pendingRequest?.onUpdate?.({
 			content: [{
 				type: "text",
 				text: typeof evt.currentTool === "string"
-					? `Delegated scout update: current tool ${evt.currentTool}${typeof evt.toolCount === "number" ? ` (${evt.toolCount})` : ""}.`
-					: "Delegated scout progress update.",
+					? `Delegated ${agentLabel} update: current tool ${evt.currentTool}${typeof evt.toolCount === "number" ? ` (${evt.toolCount})` : ""}.`
+					: `Delegated ${agentLabel} progress update.`,
 			}],
 			details: { status: "running" },
 		});

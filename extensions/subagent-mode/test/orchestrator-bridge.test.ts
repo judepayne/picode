@@ -198,10 +198,11 @@ describe("orchestrator-bridge: request lifecycle", () => {
 		bridge.dispose();
 	});
 
-	test("forwards spec thinking, tools, and systemPrompt to child execution options", async () => {
+	test("forwards spec thinking, tools, extensions, and systemPrompt to child execution options", async () => {
 		const bus = createBus();
 		let observedThinking: string | undefined;
 		let observedTools: string[] | undefined;
+		let observedExtensions: string[] | undefined;
 		let observedSystemPrompt: string | undefined;
 		const bridge = createOrchestratorBridge({
 			events: bus,
@@ -209,6 +210,7 @@ describe("orchestrator-bridge: request lifecycle", () => {
 			runChildOverride: async (req, callbacks, options) => {
 				observedThinking = options?.thinking;
 				observedTools = options?.tools;
+				observedExtensions = options?.extensions;
 				observedSystemPrompt = options?.systemPrompt;
 				const result = {
 					childId: req.childId,
@@ -242,6 +244,7 @@ describe("orchestrator-bridge: request lifecycle", () => {
 				task: "t",
 				thinking: "medium",
 				tools: ["read", "grep"],
+				extensions: ["/tmp/custom-extension.ts"],
 				systemPrompt: "You are a scout.",
 			},
 		});
@@ -249,6 +252,7 @@ describe("orchestrator-bridge: request lifecycle", () => {
 		await waitForEvent(bus, EVENT_MODE_REQUEST_RESPONSE);
 		assert.strictEqual(observedThinking, "medium");
 		assert.deepStrictEqual(observedTools, ["read", "grep"]);
+		assert.deepStrictEqual(observedExtensions, ["/tmp/custom-extension.ts"]);
 		assert.strictEqual(observedSystemPrompt, "You are a scout.");
 		bridge.dispose();
 	});

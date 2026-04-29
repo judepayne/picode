@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
 import type { AgentAssetFile } from "../../agent-assets/contract.ts";
-import { formatModelReference, normalizeThinkingLevel, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "../subagent-model.ts";
+import { formatModelReference, normalizeThinkingLevel, readNamedAgentExtensionPathsFromFiles, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "../subagent-model.ts";
 
 const tempDirs: string[] = [];
 
@@ -102,6 +102,21 @@ describe("subagent model metadata", () => {
 			toolsMode: "omitted",
 			banTools: ["delegate_subagent"],
 		});
+	});
+
+	it("reads additional child extension paths from the card", () => {
+		const root = makeRoot();
+		const filePath = path.join(root, "researcher.md");
+		fs.writeFileSync(
+			filePath,
+			"---\nname: Researcher\nextensions: [./local-ext.ts, ~/.pi/agent/extensions/openai-web-search.ts]\n---\nResearch\n",
+			"utf8",
+		);
+		const files = [assetFile(filePath)];
+		assert.deepEqual(readNamedAgentExtensionPathsFromFiles(files, "researcher"), [
+			path.join(root, "local-ext.ts"),
+			path.join(os.homedir(), ".pi", "agent", "extensions", "openai-web-search.ts"),
+		]);
 	});
 
 	it("normalizes supported thinking levels and rejects invalid ones", () => {
