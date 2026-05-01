@@ -26,20 +26,20 @@ afterEach(() => {
 });
 
 describe("resolveAgentAssetManifest", () => {
-	it("returns built-in assets when no overlay config exists", () => {
+	it("returns built-in cards when no overlay config exists", () => {
 		const root = makeRoot();
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
-		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nBuilder\n");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nprofile: builder\n---\nBuilder\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
-		assert.deepEqual(manifest.agents.map((file) => ({ fileName: file.fileName, origin: file.origin })), [{ fileName: "01-builder.md", origin: "native" }]);
-		assert.deepEqual(manifest.subagents.map((file) => ({ fileName: file.fileName, origin: file.origin })), [{ fileName: "scout.md", origin: "native" }]);
+		assert.deepEqual(manifest.agents, [{ name: "Builder", profile: "builder", prompt: "Builder" }]);
+		assert.deepEqual(manifest.subagents, [{ name: "Scout", prompt: "Scout" }]);
 		assert.deepEqual(manifest.diagnostics, []);
 	});
 
-	it("adds non-conflicting user assets from project settings.json", () => {
+	it("adds non-conflicting user cards from project settings.json", () => {
 		const root = makeRoot();
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
@@ -60,46 +60,103 @@ describe("resolveAgentAssetManifest", () => {
 		);
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
-		assert.deepEqual(manifest.agents.map((file) => file.fileName), ["01-builder.md", "05-writer.md"]);
-		assert.deepEqual(manifest.subagents.map((file) => file.fileName), ["reviewer.md", "scout.md"]);
+		assert.deepEqual(manifest.agents.map((card) => card.name), ["Builder", "Writer"]);
+		assert.deepEqual(manifest.subagents.map((card) => card.name), ["Reviewer", "Scout"]);
 		assert.deepEqual(manifest.diagnostics, []);
 	});
 
-	it("prefers user files on same-filename clashes when configured", () => {
+	it("merges a same-filename frontmatter-only overlay into a native card", () => {
 		const root = makeRoot();
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
 		const overlayAgentsDir = path.join(root, "custom-agents");
-		writeMarkdown(path.join(nativeAgentsDir, "03-designer.md"), "---\nname: Designer\n---\nNative\n");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nprofile: builder\nsubagents: scout, worker, reviewer\nmodel: openai/foo\n---\nNative prompt\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
-		writeMarkdown(path.join(overlayAgentsDir, "03-designer.md"), "---\nname: Designer\n---\nUser\n");
-		writeMarkdown(
-			path.join(root, ".pi", "settings.json"),
-			JSON.stringify({ picode: { agentsDir: "../custom-agents", agentsOnConflict: "prefer-user" } }, null, 2),
-		);
+		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nsubagents: scout, worker, reviewer, researcher\nmodel:\n---\n   \n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
-		assert.equal(manifest.agents[0]?.origin, "user");
-		assert.equal(path.basename(manifest.agents[0]?.filePath ?? ""), "03-designer.md");
-		assert.equal(manifest.agents[0]?.shadowedFilePath, path.join(nativeAgentsDir, "03-designer.md"));
+		assert.deepEqual(manifest.agents, [{
+			name: "Builder",
+			profile: "builder",
+			subagents: "scout, worker, reviewer, researcher",
+			model: "openai/foo",
+			prompt: "Native prompt",
+		}]);
 	});
 
-	it("keeps native files on same-filename clashes when configured", () => {
+	it("lets a same-filename overlay replace the prompt entirely when body is non-empty", () => {
 		const root = makeRoot();
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
 		const overlayAgentsDir = path.join(root, "custom-agents");
-		writeMarkdown(path.join(nativeAgentsDir, "03-designer.md"), "---\nname: Designer\n---\nNative\n");
+		writeMarkdown(path.join(nativeAgentsDir, "03-designer.md"), "---\nname: Designer\ncolor: green\n---\nNative prompt\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
-		writeMarkdown(path.join(overlayAgentsDir, "03-designer.md"), "---\nname: Designer\n---\nUser\n");
-		writeMarkdown(
-			path.join(root, ".pi", "settings.json"),
-			JSON.stringify({ picode: { agentsDir: "../custom-agents", agentsOnConflict: "prefer-native" } }, null, 2),
-		);
+		writeMarkdown(path.join(overlayAgentsDir, "03-designer.md"), "---\ncolor: blue\n---\nUser prompt\n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
-		assert.equal(manifest.agents[0]?.origin, "native");
-		assert.match(manifest.diagnostics.map((entry) => entry.message).join("\n"), /Ignoring user agent override 03-designer.md/);
+		assert.deepEqual(manifest.agents, [{ name: "Designer", color: "blue", prompt: "User prompt" }]);
+	});
+
+	it("allows explicit non-blank sentinels to override native values", () => {
+		const root = makeRoot();
+		const nativeAgentsDir = path.join(root, "native-agents");
+		const nativeSubagentsDir = path.join(root, "native-subagents");
+		const overlayAgentsDir = path.join(root, "custom-agents");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nmodel: openai/foo\n---\nNative\n");
+		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
+		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nmodel: -\n---\n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+
+		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
+		assert.equal(manifest.agents[0]?.model, "-");
+	});
+
+	it("skips user-only cards without a final name", () => {
+		const root = makeRoot();
+		const nativeAgentsDir = path.join(root, "native-agents");
+		const nativeSubagentsDir = path.join(root, "native-subagents");
+		const overlayAgentsDir = path.join(root, "custom-agents");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nBuilder\n");
+		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
+		writeMarkdown(path.join(overlayAgentsDir, "05-writer.md"), "---\nprofile: builder\n---\nWriter\n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+
+		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
+		assert.deepEqual(manifest.agents.map((card) => card.name), ["Builder"]);
+		assert.match(manifest.diagnostics.map((entry) => entry.message).join("\n"), /does not define a name/);
+	});
+
+	it("resolves extensions relative to the card that supplies the winning value", () => {
+		const root = makeRoot();
+		const nativeAgentsDir = path.join(root, "native-agents");
+		const nativeSubagentsDir = path.join(root, "native-subagents");
+		const overlaySubagentsDir = path.join(root, "custom-subagents");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nBuilder\n");
+		writeMarkdown(path.join(nativeSubagentsDir, "researcher.md"), "---\nname: Researcher\nextensions: ./native-ext.ts\n---\nNative\n");
+		writeMarkdown(path.join(overlaySubagentsDir, "researcher.md"), "---\nextensions: [./overlay-ext.ts]\n---\n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { subagentsDir: "../custom-subagents" } }, null, 2));
+
+		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
+		assert.equal(manifest.subagents[0]?.extensions, path.join(overlaySubagentsDir, "overlay-ext.ts"));
+	});
+
+	it("reports duplicate final names and keeps the first ordered card", () => {
+		const root = makeRoot();
+		const nativeAgentsDir = path.join(root, "native-agents");
+		const nativeSubagentsDir = path.join(root, "native-subagents");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nFirst\n");
+		writeMarkdown(path.join(nativeAgentsDir, "02-builder.md"), "---\nname: Builder\n---\nSecond\n");
+		writeMarkdown(path.join(nativeSubagentsDir, "research-a.md"), "---\nname: Research Assistant\n---\nFirst\n");
+		writeMarkdown(path.join(nativeSubagentsDir, "research-b.md"), "---\nname: research-assistant\n---\nSecond\n");
+
+		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
+		assert.deepEqual(manifest.agents, [{ name: "Builder", prompt: "First" }]);
+		assert.deepEqual(manifest.subagents, [{ name: "Research Assistant", prompt: "First" }]);
+		const messages = manifest.diagnostics.map((entry) => entry.message).join("\n");
+		assert.match(messages, /Duplicate agent name/);
+		assert.match(messages, /Duplicate subagent name/);
 	});
 
 	it("reports invalid config and missing overlay directories as diagnostics", () => {
@@ -124,12 +181,9 @@ describe("resolveAgentAssetManifest", () => {
 		const envOverlayDir = path.join(root, "env-overlay");
 		writeMarkdown(path.join(nativeAgentsDir, "03-designer.md"), "---\nname: Designer\n---\nNative\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
-		writeMarkdown(path.join(fileOverlayDir, "03-designer.md"), "---\nname: Designer\n---\nFile overlay\n");
-		writeMarkdown(path.join(envOverlayDir, "03-designer.md"), "---\nname: Designer\n---\nEnv overlay\n");
-		writeMarkdown(
-			path.join(root, ".pi", "settings.json"),
-			JSON.stringify({ picode: { agentsDir: "../file-overlay", agentsOnConflict: "prefer-native" } }, null, 2),
-		);
+		writeMarkdown(path.join(fileOverlayDir, "04-file.md"), "---\nname: File Overlay\n---\nFile overlay\n");
+		writeMarkdown(path.join(envOverlayDir, "05-env.md"), "---\nname: Env Overlay\n---\nEnv overlay\n");
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../file-overlay" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({
 			cwd: root,
@@ -138,10 +192,8 @@ describe("resolveAgentAssetManifest", () => {
 			env: {
 				HOME: path.join(root, "home"),
 				PICODE_AGENT_DIR: "./env-overlay",
-				PICODE_AGENT_OVERRIDE_ON_CONFLICT: "true",
 			},
 		});
-		assert.equal(manifest.agents[0]?.origin, "user");
-		assert.equal(manifest.agents[0]?.filePath, path.join(envOverlayDir, "03-designer.md"));
+		assert.deepEqual(manifest.agents.map((card) => card.name), ["Designer", "Env Overlay"]);
 	});
 });

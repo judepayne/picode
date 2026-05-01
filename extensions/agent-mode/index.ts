@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
-import { collectAgentAssetDiagnostics, collectAgentFiles } from "../agent-assets/contract.ts";
+import { collectAgentAssetDiagnostics, collectAgentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
@@ -235,14 +235,6 @@ function slugify(value: string): string {
 		.replace(/^-+|-+$/g, "") || "mode";
 }
 
-function titleizeSlug(value: string): string {
-	return value
-		.split(/[-_]+/)
-		.filter(Boolean)
-		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ") || "Mode";
-}
-
 function unquote(value: string): string {
 	const trimmed = value.trim();
 	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
@@ -310,57 +302,22 @@ function loadSettings(settingsPath: string): { settings: ModeSettings; error?: s
 	}
 }
 
-function parseFrontmatter(markdown: string): { attributes: Record<string, string>; body: string } {
-	if (!markdown.startsWith("---\n") && markdown !== "---") {
-		return { attributes: {}, body: markdown.trim() };
-	}
-
-	const lines = markdown.split(/\r?\n/);
-	if (lines[0]?.trim() !== "---") {
-		return { attributes: {}, body: markdown.trim() };
-	}
-
-	const attributes: Record<string, string> = {};
-	let endIndex = -1;
-	for (let i = 1; i < lines.length; i++) {
-		const line = lines[i] ?? "";
-		if (line.trim() === "---") {
-			endIndex = i;
-			break;
-		}
-		const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-		if (!match) continue;
-		attributes[match[1].toLowerCase()] = match[2];
-	}
-
-	if (endIndex < 0) {
-		return { attributes: {}, body: markdown.trim() };
-	}
-
-	return {
-		attributes,
-		body: lines.slice(endIndex + 1).join("\n").trim(),
-	};
-}
-
-function parseModeFile(filePath: string, markdown: string): ModeDefinition {
-	const { attributes, body } = parseFrontmatter(markdown);
-	const fallbackName = titleizeSlug(path.basename(filePath, ".md"));
-	const name = unquote(attributes.name ?? fallbackName);
-	const subagents = parseSubagents(attributes.subagents);
+export function modeFromAgentCard(card: AgentAssetCard): ModeDefinition {
+	const name = unquote(card.name);
+	const subagents = parseSubagents(card.subagents);
 
 	return {
 		id: slugify(name),
 		name,
-		description: attributes.description ? unquote(attributes.description) : undefined,
-		profile: unquote(attributes.profile ?? "default"),
-		color: attributes.color ? unquote(attributes.color) : undefined,
-		toolSelection: parseToolSelection({ tools: attributes.tools, banTools: attributes.ban_tools }),
+		description: card.description ? unquote(card.description) : undefined,
+		profile: unquote(card.profile ?? "default"),
+		color: card.color ? unquote(card.color) : undefined,
+		toolSelection: parseToolSelection({ tools: card.tools, banTools: card.ban_tools }),
 		subagents: subagents.length > 0 ? subagents : undefined,
-		bashPolicy: normalizeBashPolicy(attributes.bash),
-		thinkingLevel: normalizeThinkingLevel(normalizeOptionalFrontmatterString(attributes.thinking)),
-		model: normalizeOptionalFrontmatterString(attributes.model),
-		instructions: body,
+		bashPolicy: normalizeBashPolicy(card.bash),
+		thinkingLevel: normalizeThinkingLevel(normalizeOptionalFrontmatterString(card.thinking)),
+		model: normalizeOptionalFrontmatterString(card.model),
+		instructions: card.prompt ?? "",
 	};
 }
 
@@ -411,9 +368,9 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	function loadModes(): void {
 		loadError = undefined;
 		loadWarnings = [];
-		const resolvedFiles = collectAgentFiles(pi);
+		const cards = collectAgentCards(pi);
 		const diagnostics = collectAgentAssetDiagnostics(pi);
-		const discovered = new Map<string, { mode: ModeDefinition; orderKey: string }>();
+		const discovered = new Map<string, ModeDefinition>();
 		let lastError: string | undefined;
 
 		for (const diagnostic of diagnostics) {
@@ -425,22 +382,20 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		for (const assetFile of resolvedFiles) {
+		for (const card of cards) {
 			try {
-				const mode = parseModeFile(assetFile.filePath, fs.readFileSync(assetFile.filePath, "utf8"));
+				const mode = modeFromAgentCard(card);
 				if (discovered.has(mode.id)) continue;
-				discovered.set(mode.id, { mode, orderKey: assetFile.fileName.toLowerCase() });
+				discovered.set(mode.id, mode);
 			} catch (error) {
 				lastError = error instanceof Error ? error.message : String(error);
 			}
 		}
 
-		modes = [...discovered.values()]
-			.sort((a, b) => a.orderKey.localeCompare(b.orderKey) || a.mode.name.localeCompare(b.mode.name))
-			.map((entry) => entry.mode);
+		modes = [...discovered.values()];
 
 		if (modes.length === 0) {
-			loadError = lastError ?? loadWarnings[0] ?? "No agent mode files resolved from agent-assets.";
+			loadError = lastError ?? loadWarnings[0] ?? "No agent mode cards resolved from agent-assets.";
 		}
 
 		if (currentIndex >= modes.length) {

@@ -338,25 +338,28 @@ In `.pi/settings.json` or `~/.pi/agent/settings.json`:
 {
   "picode": {
     "agentsDir": "./custom-agents",
-    "subagentsDir": "./custom-subagents",
-    "agentsOnConflict": "prefer-user",
-    "subagentsOnConflict": "prefer-user"
+    "subagentsDir": "./custom-subagents"
   }
 }
 ```
 
 That lets you keep your own house style while still using the rest of the package.
 
-The conflict policy settings control what happens when a user overlay file has the same filename as a built-in one:
+A user file with a different filename is added as a new card. A user file with the same filename as a built-in card partially overrides that built-in card by shallow map merge: supplied frontmatter keys replace built-in keys, blank values inherit, and a non-empty body replaces the prompt entirely.
 
-- `prefer-user` means your overlay file wins and shadows the shipped file
-- `prefer-native` means the shipped file stays active and the conflicting user file is ignored
+For example, `custom-agents/01-builder.md` can contain only:
 
-That can be useful if you want to allow additive custom files in an overlay directory without accidentally replacing the built-in cards.
+```md
+---
+subagents: scout, worker, reviewer, researcher
+---
+```
+
+That keeps the built-in Builder prompt and all other Builder settings, but replaces the allowed subagent list.
 
 ### Minimal agent card example
 
-Agent cards are markdown files with YAML frontmatter. Here is the smallest useful example:
+Agent cards are markdown files with flat YAML-style frontmatter. Here is the smallest useful example:
 
 ```md
 ---
@@ -496,7 +499,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 - **Delegation layer** — [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md): `~subagent`, sync vs async, chains, parallel fan-out, status, logs, and handbacks.
 - **Child execution** — [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md): child `pi` processes, normalized events, sync/async executors, and depth propagation.
 - **Prompt interpolation** — [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md): `${...}` expansion, var storage, and the `/vars` command.
-- **Agent cards and overlays** — [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md): where cards come from, how overlays resolve, and `prefer-user` vs `prefer-native`.
+- **Agent cards and overlays** — [`extensions/agent-assets/README.md`](./extensions/agent-assets/README.md): where cards come from and how same-filename overlays partially override built-ins.
 
 ### Skills
 

@@ -1,16 +1,8 @@
-export const COLLECT_AGENT_ASSET_FILES_EVENT = "picode:collect-asset-files";
+export const COLLECT_AGENT_ASSET_CARDS_EVENT = "picode:collect-asset-cards";
 
 export type AgentAssetKind = "agent" | "subagent";
-export type AgentAssetOrigin = "native" | "user";
+export type AgentAssetCard = Record<string, string>;
 export type AgentAssetDiagnosticSeverity = "warning" | "error";
-
-export interface AgentAssetFile {
-	kind: AgentAssetKind;
-	filePath: string;
-	fileName: string;
-	origin: AgentAssetOrigin;
-	shadowedFilePath?: string;
-}
 
 export interface AgentAssetDiagnostic {
 	severity: AgentAssetDiagnosticSeverity;
@@ -18,16 +10,16 @@ export interface AgentAssetDiagnostic {
 	filePath?: string;
 }
 
-export interface AgentAssetFileEntry {
+export interface AgentAssetCardEntry {
 	source: string;
 	priority?: number;
-	agents?: AgentAssetFile[];
-	subagents?: AgentAssetFile[];
+	agents?: AgentAssetCard[];
+	subagents?: AgentAssetCard[];
 	diagnostics?: AgentAssetDiagnostic[];
 }
 
-export interface CollectAgentAssetFilesRequest {
-	entries: AgentAssetFileEntry[];
+export interface CollectAgentAssetCardsRequest {
+	entries: AgentAssetCardEntry[];
 }
 
 interface EventEmitterLike {
@@ -38,9 +30,30 @@ interface PiLike {
 	events: EventEmitterLike;
 }
 
-export function collectAgentAssetFileEntries(pi: PiLike): AgentAssetFileEntry[] {
-	const request: CollectAgentAssetFilesRequest = { entries: [] };
-	pi.events.emit(COLLECT_AGENT_ASSET_FILES_EVENT, request);
+function slugify(value: string): string {
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "") || "mode";
+}
+
+function unquote(value: string): string {
+	const trimmed = value.trim();
+	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+		return trimmed.slice(1, -1);
+	}
+	return trimmed;
+}
+
+function normalizedCardName(card: AgentAssetCard, _kind: AgentAssetKind): string | undefined {
+	const name = card.name ? unquote(card.name).trim() : "";
+	if (!name) return undefined;
+	return slugify(name);
+}
+
+export function collectAgentAssetCardEntries(pi: PiLike): AgentAssetCardEntry[] {
+	const request: CollectAgentAssetCardsRequest = { entries: [] };
+	pi.events.emit(COLLECT_AGENT_ASSET_CARDS_EVENT, request);
 	return [...request.entries].sort((a, b) => {
 		const priorityDiff = (b.priority ?? 0) - (a.priority ?? 0);
 		if (priorityDiff !== 0) return priorityDiff;
@@ -48,31 +61,32 @@ export function collectAgentAssetFileEntries(pi: PiLike): AgentAssetFileEntry[] 
 	});
 }
 
-function flattenUniqueFiles(entries: AgentAssetFileEntry[], key: AgentAssetKind): AgentAssetFile[] {
+function flattenUniqueCards(entries: AgentAssetCardEntry[], kind: AgentAssetKind): AgentAssetCard[] {
 	const seen = new Set<string>();
-	const out: AgentAssetFile[] = [];
+	const out: AgentAssetCard[] = [];
 	for (const entry of entries) {
-		const files = key === "agent" ? entry.agents : entry.subagents;
-		for (const file of files ?? []) {
-			if (seen.has(file.filePath)) continue;
-			seen.add(file.filePath);
-			out.push(file);
+		const cards = kind === "agent" ? entry.agents : entry.subagents;
+		for (const card of cards ?? []) {
+			const name = normalizedCardName(card, kind);
+			if (!name || seen.has(name)) continue;
+			seen.add(name);
+			out.push(card);
 		}
 	}
 	return out;
 }
 
-export function collectAgentFiles(pi: PiLike): AgentAssetFile[] {
-	return flattenUniqueFiles(collectAgentAssetFileEntries(pi), "agent");
+export function collectAgentCards(pi: PiLike): AgentAssetCard[] {
+	return flattenUniqueCards(collectAgentAssetCardEntries(pi), "agent");
 }
 
-export function collectSubagentFiles(pi: PiLike): AgentAssetFile[] {
-	return flattenUniqueFiles(collectAgentAssetFileEntries(pi), "subagent");
+export function collectSubagentCards(pi: PiLike): AgentAssetCard[] {
+	return flattenUniqueCards(collectAgentAssetCardEntries(pi), "subagent");
 }
 
 export function collectAgentAssetDiagnostics(pi: PiLike): AgentAssetDiagnostic[] {
 	const diagnostics: AgentAssetDiagnostic[] = [];
-	for (const entry of collectAgentAssetFileEntries(pi)) {
+	for (const entry of collectAgentAssetCardEntries(pi)) {
 		for (const diagnostic of entry.diagnostics ?? []) {
 			diagnostics.push(diagnostic);
 		}

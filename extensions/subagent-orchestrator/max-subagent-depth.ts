@@ -1,67 +1,10 @@
-import * as fs from "node:fs";
-
-import type { AgentAssetFile } from "../agent-assets/contract.ts";
+import type { AgentAssetCard } from "../agent-assets/contract.ts";
 import { currentSubagentDepth, normalizeMaxSubagentDepth, resolveCurrentMaxSubagentDepth } from "../subagent-mode/depth.ts";
+import { findNamedAgentCard } from "./agent-card-lookup.ts";
 
-function normalizeLookupToken(value: string): string {
-	return value.trim().toLowerCase();
-}
-
-function readFrontmatterName(filePath: string): string | undefined {
-	try {
-		const raw = fs.readFileSync(filePath, "utf8");
-		const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-		const nameMatch = fmMatch?.[1]?.match(/^name:\s*(.+?)\s*$/m);
-		return nameMatch?.[1]?.trim().toLowerCase() || undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function isExactFileNameMatch(fileName: string, normalizedId: string): boolean {
-	return fileName.toLowerCase() === `${normalizedId}.md`;
-}
-
-function isSuffixFileNameMatch(fileName: string, normalizedId: string): boolean {
-	return fileName.toLowerCase().endsWith(`-${normalizedId}.md`);
-}
-
-function parseFrontmatterMaxSubagentDepth(raw: string): number | undefined {
-	const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-	if (!fmMatch?.[1]) return undefined;
-	const depthMatch = fmMatch[1].match(/^maxSubagentDepth:\s*(-?\d+)\s*$/m);
-	if (!depthMatch?.[1]) return undefined;
-	return normalizeMaxSubagentDepth(depthMatch[1]);
-}
-
-export function readMarkdownMaxSubagentDepth(filePath: string): number | undefined {
-	try {
-		return parseFrontmatterMaxSubagentDepth(fs.readFileSync(filePath, "utf8"));
-	} catch {
-		return undefined;
-	}
-}
-
-export function findAgentAssetFile(files: readonly AgentAssetFile[], id: string): AgentAssetFile | undefined {
-	const normalizedId = normalizeLookupToken(id);
-	if (!normalizedId) return undefined;
-
-	const exactMatch = files.find((file) => isExactFileNameMatch(file.fileName, normalizedId));
-	if (exactMatch) return exactMatch;
-
-	const suffixMatch = files.find((file) => isSuffixFileNameMatch(file.fileName, normalizedId));
-	if (suffixMatch) return suffixMatch;
-
-	for (const file of files) {
-		if (readFrontmatterName(file.filePath) === normalizedId) return file;
-	}
-
-	return undefined;
-}
-
-export function readNamedAgentMaxSubagentDepthFromFiles(files: readonly AgentAssetFile[], id: string): number | undefined {
-	const file = findAgentAssetFile(files, id);
-	return file ? readMarkdownMaxSubagentDepth(file.filePath) : undefined;
+export function readNamedAgentMaxSubagentDepthFromCards(cards: readonly AgentAssetCard[], id: string): number | undefined {
+	const card = findNamedAgentCard(cards, id);
+	return normalizeMaxSubagentDepth(card?.maxSubagentDepth);
 }
 
 export interface ResolveDelegatedRunMaxSubagentDepthInput {

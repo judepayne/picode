@@ -1,11 +1,7 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-
-import type { AgentAssetFile } from "../agent-assets/contract.ts";
+import type { AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
-import { findAgentAssetFile } from "./max-subagent-depth.ts";
+import { findNamedAgentCard } from "./agent-card-lookup.ts";
 
 interface ModelLike {
 	provider?: unknown;
@@ -46,58 +42,9 @@ function parseStringList(value: string | undefined): string[] | undefined {
 	return out.length > 0 ? out : undefined;
 }
 
-function resolveExtensionPath(rawPath: string, cardFilePath: string): string {
-	const expanded = rawPath === "~"
-		? os.homedir()
-		: rawPath.startsWith(`~${path.sep}`) || rawPath.startsWith("~/")
-			? path.join(os.homedir(), rawPath.slice(2))
-			: rawPath;
-	return path.isAbsolute(expanded) ? expanded : path.resolve(path.dirname(cardFilePath), expanded);
-}
-
-function readMarkdown(filePath: string): string | undefined {
-	try {
-		return fs.readFileSync(filePath, "utf8");
-	} catch {
-		return undefined;
-	}
-}
-
-function parseFrontmatter(raw: string): { attributes: Record<string, string>; body: string } {
-	const fmMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-	if (!fmMatch?.[1]) {
-		return { attributes: {}, body: raw.trim() };
-	}
-	const attributes: Record<string, string> = {};
-	for (const line of fmMatch[1].split(/\r?\n/)) {
-		const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-		if (!match) continue;
-		attributes[match[1].toLowerCase()] = match[2] ?? "";
-	}
-	return {
-		attributes,
-		body: (fmMatch[2] ?? "").trim(),
-	};
-}
-
-function readFrontmatterAttributes(filePath: string): Record<string, string> | undefined {
-	const raw = readMarkdown(filePath);
-	if (!raw) return undefined;
-	return parseFrontmatter(raw).attributes;
-}
-
-function readFrontmatterStringAttribute(filePath: string, attribute: string): string | undefined {
-	const attributes = readFrontmatterAttributes(filePath);
-	return normalizeOptionalFrontmatterString(attributes?.[attribute.toLowerCase()]);
-}
-
-function readNamedAgentFilePathFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
-	return findAgentAssetFile(files, id)?.filePath;
-}
-
-function readNamedAgentAttributeFromFiles(files: readonly AgentAssetFile[], id: string, attribute: string): string | undefined {
-	const filePath = readNamedAgentFilePathFromFiles(files, id);
-	return filePath ? readFrontmatterStringAttribute(filePath, attribute) : undefined;
+function readNamedAgentAttributeFromCards(cards: readonly AgentAssetCard[], id: string, attribute: string): string | undefined {
+	const card = findNamedAgentCard(cards, id);
+	return normalizeOptionalFrontmatterString(card?.[attribute]);
 }
 
 export function normalizeThinkingLevel(value: string | undefined): string | undefined {
@@ -105,46 +52,36 @@ export function normalizeThinkingLevel(value: string | undefined): string | unde
 	return normalized && THINKING_LEVELS.has(normalized) ? normalized : undefined;
 }
 
-function readInstructionsFromFile(filePath: string | undefined): string | undefined {
-	if (!filePath) return undefined;
-	const raw = readMarkdown(filePath);
-	if (!raw) return undefined;
-	const { body } = parseFrontmatter(raw);
-	return body || undefined;
+export function readNamedAgentModelFromCards(cards: readonly AgentAssetCard[], id: string): string | undefined {
+	return readNamedAgentAttributeFromCards(cards, id, "model");
 }
 
-export function readNamedAgentModelFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
-	return readNamedAgentAttributeFromFiles(files, id, "model");
+export function readNamedAgentThinkingFromCards(cards: readonly AgentAssetCard[], id: string): string | undefined {
+	return normalizeThinkingLevel(readNamedAgentAttributeFromCards(cards, id, "thinking"));
 }
 
-export function readNamedAgentThinkingFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
-	return normalizeThinkingLevel(readNamedAgentAttributeFromFiles(files, id, "thinking"));
+export function readNamedAgentToolSelectionFromCards(cards: readonly AgentAssetCard[], id: string): ToolSelectionSpec | undefined {
+	const card = findNamedAgentCard(cards, id);
+	if (!card) return undefined;
+	return parseToolSelection({ tools: card.tools, banTools: card.ban_tools });
 }
 
-export function readNamedAgentToolSelectionFromFiles(files: readonly AgentAssetFile[], id: string): ToolSelectionSpec | undefined {
-	const filePath = readNamedAgentFilePathFromFiles(files, id);
-	if (!filePath) return undefined;
-	const attributes = readFrontmatterAttributes(filePath) ?? {};
-	return parseToolSelection({ tools: attributes.tools, banTools: attributes.ban_tools });
-}
-
-export function readNamedAgentToolsFromFiles(files: readonly AgentAssetFile[], id: string): string[] | undefined {
-	const selection = readNamedAgentToolSelectionFromFiles(files, id);
+export function readNamedAgentToolsFromCards(cards: readonly AgentAssetCard[], id: string): string[] | undefined {
+	const selection = readNamedAgentToolSelectionFromCards(cards, id);
 	if (!selection) return undefined;
 	if (selection.toolsMode === "list") return selection.tools;
 	if (selection.toolsMode === "all") return ["all"];
 	return undefined;
 }
 
-export function readNamedAgentExtensionPathsFromFiles(files: readonly AgentAssetFile[], id: string): string[] | undefined {
-	const filePath = readNamedAgentFilePathFromFiles(files, id);
-	if (!filePath) return undefined;
-	const attributes = readFrontmatterAttributes(filePath) ?? {};
-	return parseStringList(attributes.extensions)?.map((entry) => resolveExtensionPath(entry, filePath));
+export function readNamedAgentExtensionPathsFromCards(cards: readonly AgentAssetCard[], id: string): string[] | undefined {
+	const card = findNamedAgentCard(cards, id);
+	return parseStringList(card?.extensions);
 }
 
-export function readNamedAgentInstructionsFromFiles(files: readonly AgentAssetFile[], id: string): string | undefined {
-	return readInstructionsFromFile(readNamedAgentFilePathFromFiles(files, id));
+export function readNamedAgentPromptFromCards(cards: readonly AgentAssetCard[], id: string): string | undefined {
+	const card = findNamedAgentCard(cards, id);
+	return card?.prompt?.trim() || undefined;
 }
 
 export function formatModelReference(model: ModelLike | undefined): string | undefined {

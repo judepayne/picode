@@ -4,28 +4,19 @@ import * as path from "node:path";
 
 import type { AgentAssetDiagnostic } from "./contract.ts";
 
-export type AgentAssetConflictPolicy = "prefer-user" | "prefer-native";
-
-const DEFAULT_CONFLICT_POLICY: AgentAssetConflictPolicy = "prefer-native";
 const SETTINGS_FILE_NAME = "settings.json";
 const CONFIG_SECTION_KEY = "picode";
 const ENV_AGENT_DIR = "PICODE_AGENT_DIR";
 const ENV_SUBAGENT_DIR = "PICODE_SUBAGENT_DIR";
-const ENV_AGENT_CONFLICT = "PICODE_AGENT_OVERRIDE_ON_CONFLICT";
-const ENV_SUBAGENT_CONFLICT = "PICODE_SUBAGENT_OVERRIDE_ON_CONFLICT";
 
 interface PicodeSettingsShape {
 	agentsDir?: unknown;
 	subagentsDir?: unknown;
-	agentsOnConflict?: unknown;
-	subagentsOnConflict?: unknown;
 }
 
 export interface ResolvedAgentAssetsConfig {
 	agentsDir?: string;
 	subagentsDir?: string;
-	agentsOnConflict: AgentAssetConflictPolicy;
-	subagentsOnConflict: AgentAssetConflictPolicy;
 	projectConfigPath: string;
 	globalConfigPath: string;
 	diagnostics: AgentAssetDiagnostic[];
@@ -96,14 +87,6 @@ function resolveConfigPathValue(value: unknown, baseDir: string): string | undef
 	return path.isAbsolute(trimmed) ? path.normalize(trimmed) : path.resolve(baseDir, trimmed);
 }
 
-function normalizeConflictPolicy(value: unknown): AgentAssetConflictPolicy | undefined {
-	if (typeof value !== "string") return undefined;
-	const normalized = value.trim().toLowerCase();
-	if (normalized === "prefer-user") return "prefer-user";
-	if (normalized === "prefer-native") return "prefer-native";
-	return undefined;
-}
-
 function applyConfigShape(
 	resolved: ResolvedAgentAssetsConfig,
 	shape: PicodeSettingsShape,
@@ -119,27 +102,8 @@ function applyConfigShape(
 	if (shape.subagentsDir !== undefined && subagentsDir === undefined) {
 		pushDiagnostic(diagnostics, `${configPath} contains an invalid ${CONFIG_SECTION_KEY}.subagentsDir value.`, configPath, "error");
 	}
-	const agentsPolicy = normalizeConflictPolicy(shape.agentsOnConflict);
-	if (shape.agentsOnConflict !== undefined && agentsPolicy === undefined) {
-		pushDiagnostic(diagnostics, `${configPath} contains an invalid ${CONFIG_SECTION_KEY}.agentsOnConflict value. Expected "prefer-user" or "prefer-native".`, configPath, "error");
-	}
-	const subagentsPolicy = normalizeConflictPolicy(shape.subagentsOnConflict);
-	if (shape.subagentsOnConflict !== undefined && subagentsPolicy === undefined) {
-		pushDiagnostic(diagnostics, `${configPath} contains an invalid ${CONFIG_SECTION_KEY}.subagentsOnConflict value. Expected "prefer-user" or "prefer-native".`, configPath, "error");
-	}
 	if (agentsDir) resolved.agentsDir = agentsDir;
 	if (subagentsDir) resolved.subagentsDir = subagentsDir;
-	if (agentsPolicy) resolved.agentsOnConflict = agentsPolicy;
-	if (subagentsPolicy) resolved.subagentsOnConflict = subagentsPolicy;
-}
-
-function normalizeEnvConflictPolicy(value: string | undefined): AgentAssetConflictPolicy | undefined {
-	if (typeof value !== "string") return undefined;
-	const normalized = value.trim().toLowerCase();
-	if (!normalized) return undefined;
-	if (["prefer-user", "true", "1", "yes", "on"].includes(normalized)) return "prefer-user";
-	if (["prefer-native", "false", "0", "no", "off"].includes(normalized)) return "prefer-native";
-	return undefined;
 }
 
 function resolveEnvPath(value: string | undefined, cwd: string): string | undefined {
@@ -163,18 +127,8 @@ function applyEnvOverrides(
 	if (env[ENV_SUBAGENT_DIR] !== undefined && subagentsDir === undefined) {
 		pushDiagnostic(diagnostics, `${ENV_SUBAGENT_DIR} is set but empty or invalid.`, undefined, "error");
 	}
-	const agentsPolicy = normalizeEnvConflictPolicy(env[ENV_AGENT_CONFLICT]);
-	if (env[ENV_AGENT_CONFLICT] !== undefined && agentsPolicy === undefined) {
-		pushDiagnostic(diagnostics, `${ENV_AGENT_CONFLICT} has an invalid value. Use prefer-user/prefer-native or true/false.`, undefined, "error");
-	}
-	const subagentsPolicy = normalizeEnvConflictPolicy(env[ENV_SUBAGENT_CONFLICT]);
-	if (env[ENV_SUBAGENT_CONFLICT] !== undefined && subagentsPolicy === undefined) {
-		pushDiagnostic(diagnostics, `${ENV_SUBAGENT_CONFLICT} has an invalid value. Use prefer-user/prefer-native or true/false.`, undefined, "error");
-	}
 	if (agentsDir) resolved.agentsDir = agentsDir;
 	if (subagentsDir) resolved.subagentsDir = subagentsDir;
-	if (agentsPolicy) resolved.agentsOnConflict = agentsPolicy;
-	if (subagentsPolicy) resolved.subagentsOnConflict = subagentsPolicy;
 }
 
 export function loadAgentAssetsConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): ResolvedAgentAssetsConfig {
@@ -182,8 +136,6 @@ export function loadAgentAssetsConfig(cwd: string, env: NodeJS.ProcessEnv = proc
 	const globalConfigPath = getGlobalSettingsPath(env);
 	const projectConfigPath = getProjectSettingsPath(cwd);
 	const resolved: ResolvedAgentAssetsConfig = {
-		agentsOnConflict: DEFAULT_CONFLICT_POLICY,
-		subagentsOnConflict: DEFAULT_CONFLICT_POLICY,
 		globalConfigPath,
 		projectConfigPath,
 		diagnostics,

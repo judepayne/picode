@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildAgentCommandCompletions, isReadOnlyBashCommand } from "../index.ts";
+import { buildAgentCommandCompletions, isReadOnlyBashCommand, modeFromAgentCard } from "../index.ts";
 import { isDelegatedSubagentChildProcess } from "../runtime.ts";
 
 describe("agent-mode runtime", () => {
@@ -14,6 +14,35 @@ describe("agent-mode runtime", () => {
 	it("treats find as read-only and awk as non-read-only", () => {
 		assert.equal(isReadOnlyBashCommand("find . -name '*.ts'"), true);
 		assert.equal(isReadOnlyBashCommand("awk '{ print $1 }' file.txt"), false);
+	});
+
+	it("maps agent asset cards to mode definitions", () => {
+		const mode = modeFromAgentCard({
+			name: "Builder",
+			description: "Build things.",
+			profile: "builder",
+			color: "#ff0000",
+			tools: "all",
+			ban_tools: "vars",
+			subagents: "scout, worker",
+			bash: "read-only",
+			thinking: "-",
+			model: "-",
+			prompt: "Build prompt.",
+		});
+		assert.deepEqual(mode, {
+			id: "builder",
+			name: "Builder",
+			description: "Build things.",
+			profile: "builder",
+			color: "#ff0000",
+			toolSelection: { toolsMode: "all", banTools: ["vars"] },
+			subagents: ["scout", "worker"],
+			bashPolicy: "read-only",
+			thinkingLevel: undefined,
+			model: undefined,
+			instructions: "Build prompt.",
+		});
 	});
 
 	it("offers next/prev and agent-name completions for /agents", () => {

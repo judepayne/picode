@@ -6,18 +6,18 @@ import { keyHint, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv } from "./policy.ts";
-import { collectAgentFiles, collectSubagentFiles, type AgentAssetFile } from "../agent-assets/contract.ts";
+import { collectAgentCards, collectSubagentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
-import { formatModelReference, readNamedAgentExtensionPathsFromFiles, readNamedAgentInstructionsFromFiles, readNamedAgentModelFromFiles, readNamedAgentThinkingFromFiles, readNamedAgentToolSelectionFromFiles } from "./subagent-model.ts";
+import { formatModelReference, readNamedAgentExtensionPathsFromCards, readNamedAgentModelFromCards, readNamedAgentPromptFromCards, readNamedAgentThinkingFromCards, readNamedAgentToolSelectionFromCards } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
-import { readNamedAgentMaxSubagentDepthFromFiles, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
+import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
 import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
@@ -585,35 +585,35 @@ const subagentToolSelectionCache = new Map<string, ToolSelectionSpec | undefined
 const subagentExtensionPathsCache = new Map<string, string[] | undefined>();
 const subagentInstructionsCache = new Map<string, string | undefined>();
 
-let resolveAgentAssetFiles: (() => AgentAssetFile[]) | undefined;
-let resolveSubagentAssetFiles: (() => AgentAssetFile[]) | undefined;
+let resolveAgentCards: (() => AgentAssetCard[]) | undefined;
+let resolveSubagentCards: (() => AgentAssetCard[]) | undefined;
 let stickyUserSubagentSessions: StickyUserSubagentSession[] = [];
 
-function currentAgentAssetFiles(): AgentAssetFile[] {
-	return resolveAgentAssetFiles?.() ?? [];
+function currentAgentCards(): AgentAssetCard[] {
+	return resolveAgentCards?.() ?? [];
 }
 
-function currentSubagentAssetFiles(): AgentAssetFile[] {
-	return resolveSubagentAssetFiles?.() ?? [];
+function currentSubagentCards(): AgentAssetCard[] {
+	return resolveSubagentCards?.() ?? [];
 }
 
 function readModeMaxDepth(modeId: string): number | undefined {
 	if (modeDepthCache.has(modeId)) return modeDepthCache.get(modeId);
-	const value = readNamedAgentMaxSubagentDepthFromFiles(currentAgentAssetFiles(), modeId);
+	const value = readNamedAgentMaxSubagentDepthFromCards(currentAgentCards(), modeId);
 	modeDepthCache.set(modeId, value);
 	return value;
 }
 
 function readSubagentMaxDepth(agent: string): number | undefined {
 	if (subagentDepthCache.has(agent)) return subagentDepthCache.get(agent);
-	const value = readNamedAgentMaxSubagentDepthFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentMaxSubagentDepthFromCards(currentSubagentCards(), agent);
 	subagentDepthCache.set(agent, value);
 	return value;
 }
 
 function readSubagentConfiguredModel(agent: string): string | undefined {
 	if (subagentModelCache.has(agent)) return subagentModelCache.get(agent);
-	const value = readNamedAgentModelFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentModelFromCards(currentSubagentCards(), agent);
 	subagentModelCache.set(agent, value);
 	return value;
 }
@@ -624,7 +624,7 @@ function resolveDelegatedSubagentModel(ctx: ExtensionContext, agent: string): st
 
 function readSubagentConfiguredThinking(agent: string): string | undefined {
 	if (subagentThinkingCache.has(agent)) return subagentThinkingCache.get(agent);
-	const value = readNamedAgentThinkingFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentThinkingFromCards(currentSubagentCards(), agent);
 	subagentThinkingCache.set(agent, value);
 	return value;
 }
@@ -635,14 +635,14 @@ function resolveDelegatedSubagentThinking(agent: string, currentThinking: string
 
 function readSubagentConfiguredToolSelection(agent: string): ToolSelectionSpec | undefined {
 	if (subagentToolSelectionCache.has(agent)) return subagentToolSelectionCache.get(agent);
-	const value = readNamedAgentToolSelectionFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentToolSelectionFromCards(currentSubagentCards(), agent);
 	subagentToolSelectionCache.set(agent, value);
 	return value;
 }
 
 function readSubagentConfiguredExtensions(agent: string): string[] | undefined {
 	if (subagentExtensionPathsCache.has(agent)) return subagentExtensionPathsCache.get(agent);
-	const value = readNamedAgentExtensionPathsFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentExtensionPathsFromCards(currentSubagentCards(), agent);
 	subagentExtensionPathsCache.set(agent, value);
 	return value;
 }
@@ -700,7 +700,7 @@ function resolveDelegatedSubagentTools(pi: ExtensionAPI, ctx: ExtensionContext, 
 
 function readSubagentInstructions(agent: string): string | undefined {
 	if (subagentInstructionsCache.has(agent)) return subagentInstructionsCache.get(agent);
-	const value = readNamedAgentInstructionsFromFiles(currentSubagentAssetFiles(), agent);
+	const value = readNamedAgentPromptFromCards(currentSubagentCards(), agent);
 	subagentInstructionsCache.set(agent, value);
 	return value;
 }
@@ -1236,8 +1236,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	subagentToolSelectionCache.clear();
 	subagentExtensionPathsCache.clear();
 	subagentInstructionsCache.clear();
-	resolveAgentAssetFiles = () => collectAgentFiles(pi);
-	resolveSubagentAssetFiles = () => collectSubagentFiles(pi);
+	resolveAgentCards = () => collectAgentCards(pi);
+	resolveSubagentCards = () => collectSubagentCards(pi);
 
 	pi.registerMessageRenderer<OrchestratorRunMessageDetails>(ORCHESTRATOR_RUN_MESSAGE_TYPE, (message, _options, theme) => {
 		const details = resolveRunMessageDetails(message.details);
@@ -2137,8 +2137,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentExtensionPathsCache.clear();
 		subagentInstructionsCache.clear();
 		stickyUserSubagentSessions = [];
-		resolveAgentAssetFiles = undefined;
-		resolveSubagentAssetFiles = undefined;
+		resolveAgentCards = undefined;
+		resolveSubagentCards = undefined;
 	});
 
 	async function launchDelegatedRun(
