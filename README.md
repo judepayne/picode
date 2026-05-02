@@ -2,6 +2,8 @@
 
 A homage to OpenCode in Pi!
 
+npm: https://www.npmjs.com/package/@judepayne/picode
+
 ![picode preview](./img/picode-preview.png)
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
@@ -55,11 +57,13 @@ None of this is baked in. Every agent and subagent is just a markdown file. Don'
 
 ## Install and first run
 
-Install the package:
+Install the published npm package. This is the preferred install route:
 
 ```bash
 pi install npm:@judepayne/picode
 ```
+
+Package page: https://www.npmjs.com/package/@judepayne/picode
 
 Reload Pi:
 

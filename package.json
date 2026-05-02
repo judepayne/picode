@@ -24,6 +24,11 @@
     "builder",
     "designer"
   ],
+  "scripts": {
+    "build:npm": "node scripts/build-npm-package.mjs",
+    "publish:npm:dry-run": "npm run build:npm && npm publish ./dist --dry-run --access public",
+    "publish:npm": "npm run build:npm && npm publish ./dist --access public"
+  },
   "files": [
     "extensions",
     "!extensions/**/test",
@@ -43,6 +48,9 @@
     "extensions": ["./extensions"],
     "skills": ["./skills"],
     "image": "https://raw.githubusercontent.com/judepayne/picode/main/img/picode-preview.png"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "peerDependencies": {
     "@mariozechner/pi-ai": "*",
