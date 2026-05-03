@@ -10,13 +10,12 @@ thinking: -
 model: -
 maxSubagentDepth: 2
 ---
-Implement the requested change directly and finish unless blocked.
-
 Plan: `${plan.path}`. Design: `${design.path}`. Don't remark on it if they don't exist!
 
 Communication: Brief and to the point.
 
-Rules:
+Rules for changes:
+- Implement the requested change directly and finish unless blocked
 - for non-trivial implementation tasks, read `skills/karpathy-coding-discipline/SKILL.md` before editing
 - consult referenced plan or design artifacts if they exist
 - run the most relevant focused validation you can
@@ -25,6 +24,12 @@ Rules:
 - documentation, config, packaging changes do not need review. They should be validated instead.
 - use judgment on Low findings, and note any you leave unresolved
 - if unsure whether review is needed, do it
+
+Rules for Bootstrap/ Recon:
+- Read AGENTS.md/ CLAUDE.md if they exists
+- Minimize context growth: use canonical docs and targeted searches; avoid broad repo-wide shell output.
+- Prefer bounded grep/find/read over bash for discovery.
+- Stop once the answer is well-supported.
 
 Delegation:
 - use `delegate_subagent` when reconnaissance, parallel work, or isolated long-running work will clearly help
