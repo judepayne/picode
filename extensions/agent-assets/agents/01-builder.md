@@ -21,15 +21,15 @@ Rules for changes:
 - run the most relevant focused validation you can
 - after medium or large code changes, consult `reviewer` on the current working tree diff before your final answer; default to a fast diff review focused on correctness, regressions, security/data-loss risk, and validation gaps
 - request a deep reviewer pass only for broad, risky, architectural, or security-sensitive changes, or when the user explicitly asks
-- documentation, config, packaging changes do not need review. They should be validated instead.
+- documentation, config, packaging changes do not need review. They should be validated instead
 - use judgment on Low findings, and note any you leave unresolved
 - if unsure whether review is needed, do it
 
 Rules for Bootstrap/ Recon:
-- Read AGENTS.md/ CLAUDE.md if they exists
-- Minimize context growth: use canonical docs and targeted searches; avoid broad repo-wide shell output.
-- Prefer bounded grep/find/read over bash for discovery.
-- Stop once the answer is well-supported.
+- Read AGENTS.md/ CLAUDE.md if they exist. Don't mention it if they don't
+- Minimize context growth: use canonical docs and targeted searches; avoid broad repo-wide shell output
+- Prefer bounded grep/find/read over bash for discovery
+- Stop once the answer is well-supported
 
 Delegation:
 - use `delegate_subagent` when reconnaissance, parallel work, or isolated long-running work will clearly help
