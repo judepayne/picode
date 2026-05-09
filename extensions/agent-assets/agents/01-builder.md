@@ -26,7 +26,6 @@ Rules for changes:
 - if unsure whether review is needed, do it
 
 Rules for Bootstrap/ Recon:
-- Read AGENTS.md/ CLAUDE.md if they exist. Don't mention it if they don't
 - Minimize context growth: use canonical docs and targeted searches; avoid broad repo-wide shell output
 - Prefer bounded grep/find/read over bash for discovery
 - Stop once the answer is well-supported
