@@ -421,10 +421,22 @@ function substitutePlaceholders(
 	previousText: string,
 	chainDir: string,
 ): string {
-	return template
+	const escaped = new Map([
+		["__PICODE_ESCAPED_TASK__", "{task}"],
+		["__PICODE_ESCAPED_PREVIOUS__", "{previous}"],
+		["__PICODE_ESCAPED_CHAIN_DIR__", "{chain_dir}"],
+	]);
+	let output = template
+		.replace(/\\\{task\}/g, "__PICODE_ESCAPED_TASK__")
+		.replace(/\\\{previous\}/g, "__PICODE_ESCAPED_PREVIOUS__")
+		.replace(/\\\{chain_dir\}/g, "__PICODE_ESCAPED_CHAIN_DIR__")
 		.replace(/\{task\}/g, originalTask)
 		.replace(/\{previous\}/g, previousText)
 		.replace(/\{chain_dir\}/g, chainDir);
+	for (const [token, literal] of escaped) {
+		output = output.replaceAll(token, literal);
+	}
+	return output;
 }
 
 // ============================================================================

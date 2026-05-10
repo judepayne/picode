@@ -191,6 +191,11 @@ describe("prompt-vars", () => {
 		);
 	});
 
+	test("interpolatePrompt supports escaped placeholders", () => {
+		const rendered = interpolatePrompt("Literal: \\${project.name}; Real: ${project.name}", { "project.name": "Picode" });
+		assert.strictEqual(rendered, "Literal: ${project.name}; Real: Picode");
+	});
+
 	test("setting paths.plan updates derived plan vars", () => {
 		const cwd = makeWorkspace();
 		const planFile = path.join(cwd, "alt", "plan.md");

@@ -357,16 +357,18 @@ function handleToolEnd(
 	identity: NormalizerIdentity,
 	state: NormalizerState,
 ): ChildEvent[] {
-	if (!raw.toolName) return [];
-	const ok = raw.isError !== true;
-	const summary = summarizeResult(raw.result);
+	const toolName = raw.toolName ?? state.currentToolName;
+	const toolCallId = raw.toolCallId ?? state.currentToolCallId ?? "";
 	state.currentToolName = undefined;
 	state.currentToolCallId = undefined;
+	if (!toolName) return [];
+	const ok = raw.isError !== true;
+	const summary = summarizeResult(raw.result);
 	return [{
 		type: EVENT_CHILD_TOOL_END,
 		...baseEvent(identity),
-		toolName: raw.toolName,
-		toolCallId: raw.toolCallId ?? "",
+		toolName,
+		toolCallId,
 		ok,
 		resultSummary: summary,
 	}];
@@ -413,13 +415,19 @@ export function buildFinalResult(input: FinalizeInput): DelegatedChildResult {
 /**
  * Parse a single JSONL line safely. Returns undefined for blank lines or
  * non-JSON content — pi occasionally emits plain-text warnings during startup.
+ * Lines that look like JSON but fail to parse throw so callers can surface
+ * stream corruption instead of silently dropping it.
  */
 export function parseRawLine(line: string): RawPiEvent | undefined {
 	const trimmed = line.trim();
 	if (!trimmed) return undefined;
 	try {
 		return JSON.parse(trimmed) as RawPiEvent;
-	} catch {
+	} catch (error) {
+		if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`malformed JSON line: ${message}`);
+		}
 		return undefined;
 	}
 }

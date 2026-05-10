@@ -868,14 +868,19 @@ function hasMutatingAwkPattern(command: string): boolean {
 
 export function extractMutationTargets(command: string, cwd: string): MutationAnalysis {
 	const lower = command.toLowerCase();
+	const tokens = tokenizeShell(command);
+	const tokenizedFindDelete = tokens?.some((token, index) =>
+		normalizeShellToken(token).toLowerCase() === "find"
+		&& tokens.slice(index + 1).some((arg) => normalizeShellToken(arg) === "-delete")
+	) ?? false;
 	const mutating = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\btee\b|\bln\b|\binstall\b|\bchmod\b|\bchown\b|\bfind\b[^\n]*\s-delete\b|\bgit\s+clean\b|>|\bsed\b[^\n]*\s-i|\bperl\b[^\n]*\s-pi/.test(lower)
+		|| tokenizedFindDelete
 		|| hasMutatingAwkPattern(command);
 	const complex = SHELL_COMPLEXITY_PATTERN.test(command);
 	if (!mutating) {
 		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: "read-only command" };
 	}
 
-	const tokens = tokenizeShell(command);
 	if (complex && tokens && tokens.length > 0) {
 		return extractComplexMutationTargets(tokens, cwd);
 	}

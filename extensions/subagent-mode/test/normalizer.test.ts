@@ -171,10 +171,21 @@ describe("normalizer: stability invariants", () => {
 		assert.deepStrictEqual(events, []);
 	});
 
-	test("parseRawLine returns undefined for blank and malformed input", () => {
+	test("parseRawLine ignores plain text but throws for malformed JSON-looking input", () => {
 		assert.strictEqual(parseRawLine(""), undefined);
 		assert.strictEqual(parseRawLine("   \t  "), undefined);
 		assert.strictEqual(parseRawLine("not json"), undefined);
-		assert.strictEqual(parseRawLine("{ bad }"), undefined);
+		assert.throws(() => parseRawLine("{ bad }"), /malformed JSON line/);
+	});
+
+	test("tool end without toolName clears current tool state", () => {
+		const state = createNormalizerState();
+		const id = identity();
+		normalizeRawEvent({ type: "tool_execution_start", toolName: "read", toolCallId: "tool-1" }, id, state);
+		const events = normalizeRawEvent({ type: "tool_execution_end", result: "ok" }, id, state);
+		assert.equal(events[0]?.type, EVENT_CHILD_TOOL_END);
+		assert.equal(events[0]?.toolName, "read");
+		assert.equal(state.currentToolName, undefined);
+		assert.equal(state.currentToolCallId, undefined);
 	});
 });

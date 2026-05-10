@@ -1,5 +1,5 @@
 import type { AgentAssetCard } from "../agent-assets/contract.ts";
-import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
+import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { findNamedAgentCard } from "./agent-card-lookup.ts";
 
@@ -15,14 +15,6 @@ function normalizeString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const normalized = value.trim();
 	return normalized ? normalized : undefined;
-}
-
-function unquote(value: string): string {
-	const trimmed = value.trim();
-	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
 }
 
 function parseStringList(value: string | undefined): string[] | undefined {

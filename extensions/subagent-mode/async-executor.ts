@@ -274,6 +274,13 @@ export interface AsyncChildConfig {
 export async function runAsyncMain(configPath: string): Promise<void> {
 	const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8")) as AsyncChildConfig;
 	const { runId, spec, cwd, parentSessionFile } = cfg;
+	const controller = new AbortController();
+	const sigtermHandler = (): void => {
+		controller.abort();
+	};
+	process.on("SIGTERM", sigtermHandler);
+	process.on("SIGINT", sigtermHandler);
+
 	const dir = asyncRunDir(runId);
 	ensurePrivateDir(TEMP_ROOT_DIR);
 	ensurePrivateDir(dir);
@@ -303,13 +310,6 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 
 	// Lazy-import to avoid circular type resolution at module load time.
 	const { executeRun } = await import("./sync-executor.ts");
-
-	const controller = new AbortController();
-	const sigtermHandler = (): void => {
-		controller.abort();
-	};
-	process.on("SIGTERM", sigtermHandler);
-	process.on("SIGINT", sigtermHandler);
 
 	let result: DelegatedRunResult;
 	try {

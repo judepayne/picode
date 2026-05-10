@@ -169,8 +169,7 @@ function summarizeContinuation(record: OrchestratorContinuationRecord): Orchestr
 function parseCursor(cursor: string | undefined): number {
 	if (cursor === undefined) return 0;
 	const value = Number(cursor);
-	if (Number.isInteger(value) && value >= 0) return value;
-	throw new Error(`invalid cursor: ${cursor}`);
+	return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 export function createStateStore(rootDir: string) {
@@ -575,9 +574,8 @@ export function createStateStore(rootDir: string) {
 		ensureReady();
 		const filePath = nodeLogPath(childSessionId);
 		if (!fs.existsSync(filePath)) return { records: [], cursor: "0" };
-		const start = parseCursor(cursor);
 		const buffer = fs.readFileSync(filePath);
-		if (start > buffer.length) throw new Error(`invalid cursor: ${cursor}`);
+		const start = Math.min(parseCursor(cursor), buffer.length);
 		return {
 			records: parseJsonlBuffer(buffer, start),
 			cursor: String(buffer.length),

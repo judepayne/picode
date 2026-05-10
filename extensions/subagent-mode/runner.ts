@@ -233,7 +233,27 @@ function streamAndCollect(
 		const flushLine = (line: string): void => {
 			if (!line.trim()) return;
 			callbacks.onRawLine?.(line);
-			const raw = parseRawLine(line);
+			let raw: ReturnType<typeof parseRawLine>;
+			try {
+				raw = parseRawLine(line);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				callbacks.onEvent({
+					type: EVENT_CHILD_ERROR,
+					runId: identity.runId,
+					topLevelRunId: identity.topLevelRunId,
+					childId: identity.childId,
+					parentChildId: identity.parentChildId,
+					agent: identity.agent,
+					timestamp: Date.now(),
+					stepIndex: identity.stepIndex,
+					taskIndex: identity.taskIndex,
+					depth: identity.depth,
+					message,
+					fatal: false,
+				});
+				return;
+			}
 			if (!raw) return;
 			const events = normalizeRawEvent(raw, identity, state);
 			for (const event of events) callbacks.onEvent(event);

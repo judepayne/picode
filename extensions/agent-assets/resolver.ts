@@ -4,6 +4,7 @@ import * as path from "node:path";
 
 import type { AgentAssetCard, AgentAssetDiagnostic, AgentAssetKind } from "./contract.ts";
 import { loadAgentAssetsConfig, type ResolvedAgentAssetsConfig } from "./config.ts";
+import { normalizeOptionalFrontmatterString, unquote } from "./frontmatter-values.ts";
 
 export interface ResolvedAgentAssetManifest {
 	agents: AgentAssetCard[];
@@ -55,14 +56,6 @@ function slugify(value: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "") || "mode";
-}
-
-function unquote(value: string): string {
-	const trimmed = value.trim();
-	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
 }
 
 function parseStringList(value: string): string[] {
@@ -207,8 +200,17 @@ function normalizeCardName(_kind: AgentAssetKind, name: string): string {
 	return slugify(name);
 }
 
+const OPTIONAL_FRONTMATTER_KEYS = ["model", "thinking"];
+
 function finalizeCard(entry: InternalCardEntry): AgentAssetCard {
 	const card = { ...entry.card };
+	for (const key of OPTIONAL_FRONTMATTER_KEYS) {
+		if (key in card) {
+			const normalized = normalizeOptionalFrontmatterString(card[key]);
+			if (normalized) card[key] = normalized;
+			else delete card[key];
+		}
+	}
 	const extensionsSourceDir = entry.valueSourceDirs.extensions;
 	if (card.extensions && extensionsSourceDir) {
 		const extensions = resolveExtensionsValue(card.extensions, extensionsSourceDir);

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { collectAgentAssetDiagnostics, collectAgentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
-import { normalizeOptionalFrontmatterString } from "../agent-assets/frontmatter-values.ts";
+import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
@@ -44,7 +44,7 @@ const READ_ONLY_BASH_BLOCKLIST = [
 	/\bln\b/i,
 	/\btee\b/i,
 	/\btruncate\b/i,
-	/\bdd\b/i,
+	/\bdd\b(?=.*\bof=)/i,
 	/\bshred\b/i,
 	/(^|[^<])>(?!>)/,
 	/>>/,
@@ -240,14 +240,6 @@ function slugify(value: string): string {
 		.replace(/^-+|-+$/g, "") || "mode";
 }
 
-function unquote(value: string): string {
-	const trimmed = value.trim();
-	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
-}
-
 function parseCommaList(value: string | undefined): string[] {
 	if (!value) return [];
 	const trimmed = value.trim();
@@ -340,10 +332,28 @@ export function buildAgentCommandCompletions(prefix: string, modes: ModeDefiniti
 	return matches.length > 0 ? matches : null;
 }
 
+function isReadOnlyDdCommand(command: string): boolean {
+	const trimmed = command.trim();
+	if (!/^dd\b/i.test(trimmed)) return false;
+	// Keep dd deliberately conservative: shell quoting/escaping can hide `of=`
+	// from raw-string checks, so only simple key=value operands are allowed.
+	if (/[\\'"`$;&|<>]/.test(trimmed)) return false;
+	const tokens = trimmed.split(/\s+/);
+	const allowedKeys = new Set(["if", "ibs", "obs", "bs", "cbs", "skip", "iseek", "count", "status", "iflag", "conv"]);
+	for (const token of tokens.slice(1)) {
+		const match = token.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.+)$/);
+		if (!match) return false;
+		const key = match[1]?.toLowerCase();
+		if (!key || key === "of" || !allowedKeys.has(key)) return false;
+	}
+	return true;
+}
+
 export function isReadOnlyBashCommand(command: string): boolean {
 	const blocked = READ_ONLY_BASH_BLOCKLIST.some((pattern) => pattern.test(command));
-	const allowed = READ_ONLY_BASH_ALLOWLIST.some((pattern) => pattern.test(command));
-	return !blocked && allowed;
+	if (blocked) return false;
+	if (/^\s*dd\b/i.test(command)) return isReadOnlyDdCommand(command);
+	return READ_ONLY_BASH_ALLOWLIST.some((pattern) => pattern.test(command));
 }
 
 export default function agentModeExtension(pi: ExtensionAPI) {

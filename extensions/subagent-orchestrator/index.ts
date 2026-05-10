@@ -1291,13 +1291,17 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const children = state.listChildSessionsByRun(runId);
 		if (children.length === 0) return undefined;
-		if (typeof event.taskIndex === "number") {
-			const taskMatches = children.filter((child) => child.taskIndex === event.taskIndex);
-			if (taskMatches.length === 1) return taskMatches[0];
+		if (typeof event.stepIndex === "number" && typeof event.taskIndex === "number") {
+			const matches = children.filter((child) => child.stepIndex === event.stepIndex && child.taskIndex === event.taskIndex);
+			if (matches.length === 1) return matches[0];
 		}
 		if (typeof event.stepIndex === "number") {
-			const stepMatches = children.filter((child) => child.stepIndex === event.stepIndex && (typeof event.taskIndex !== "number" || child.taskIndex === event.taskIndex));
+			const stepMatches = children.filter((child) => child.stepIndex === event.stepIndex && child.taskIndex === undefined);
 			if (stepMatches.length === 1) return stepMatches[0];
+		}
+		if (typeof event.taskIndex === "number") {
+			const taskMatches = children.filter((child) => child.stepIndex === undefined && child.taskIndex === event.taskIndex);
+			if (taskMatches.length === 1) return taskMatches[0];
 		}
 		return children.length === 1 ? children[0] : undefined;
 	}

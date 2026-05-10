@@ -1,4 +1,5 @@
 import type { AgentAssetCard } from "../agent-assets/contract.ts";
+import { unquote } from "../agent-assets/frontmatter-values.ts";
 
 export function slugifyCardName(value: string): string {
 	return value
@@ -9,14 +10,6 @@ export function slugifyCardName(value: string): string {
 
 function normalizeLookupToken(value: string): string {
 	return value.trim().toLowerCase();
-}
-
-function unquote(value: string): string {
-	const trimmed = value.trim();
-	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
 }
 
 export function findNamedAgentCard(cards: readonly AgentAssetCard[], id: string): AgentAssetCard | undefined {

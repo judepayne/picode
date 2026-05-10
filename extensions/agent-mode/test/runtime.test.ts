@@ -11,8 +11,11 @@ describe("agent-mode runtime", () => {
 		assert.equal(isDelegatedSubagentChildProcess({}), false);
 	});
 
-	it("treats find as read-only and awk as non-read-only", () => {
+	it("treats find and read-only dd as read-only, but mutating commands as non-read-only", () => {
 		assert.equal(isReadOnlyBashCommand("find . -name '*.ts'"), true);
+		assert.equal(isReadOnlyBashCommand("dd if=input.bin bs=1 count=10"), true);
+		assert.equal(isReadOnlyBashCommand("dd if=input.bin of=output.bin bs=1 count=10"), false);
+		assert.equal(isReadOnlyBashCommand("dd if=input.bin o'f'=output.bin bs=1 count=10"), false);
 		assert.equal(isReadOnlyBashCommand("awk '{ print $1 }' file.txt"), false);
 	});
 

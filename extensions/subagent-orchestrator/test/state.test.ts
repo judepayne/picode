@@ -96,7 +96,8 @@ describe("subagent-orchestrator state store", () => {
 			const next = store.readNodeLogSince("child-1", "0");
 			assert.equal(next.records.length, 1);
 			assert.equal(store.readNodeLogSince("child-1", next.cursor).records.length, 0);
-			assert.throws(() => store.readNodeLogSince("child-1", "bogus"), /invalid cursor/);
+			assert.equal(store.readNodeLogSince("child-1", "bogus").records.length, 1);
+			assert.equal(store.readNodeLogSince("child-1", "999999").records.length, 0);
 
 			fs.writeFileSync(path.join(root, "runs", "run-2.json"), JSON.stringify({
 				orchestratorRunId: "run-2",

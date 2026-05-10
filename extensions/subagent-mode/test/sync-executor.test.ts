@@ -235,6 +235,26 @@ describe("executeRun: chain mode", () => {
 		assert.strictEqual(capturedTasks[2], "third sees: output-of-step2");
 	});
 
+	test("allows escaped chain placeholders", async () => {
+		const capturedTasks: string[] = [];
+		const runChild: RunChildFn = async (req) => {
+			capturedTasks.push(req.task);
+			return { childId: req.childId, agent: req.agent, status: "complete", finalText: "done" };
+		};
+		await executeRun(
+			{
+				mode: "chain",
+				context: "fresh",
+				task: "ORIGINAL",
+				chain: [{ agent: "step1", task: "literal \\{task}; real {task}; dir \\{chain_dir}; previous \\{previous}" }],
+			},
+			{ onEvent: () => {} },
+			{},
+			{ runChild },
+		);
+		assert.match(capturedTasks[0] ?? "", /^literal \{task\}; real ORIGINAL; dir \{chain_dir\}; previous \{previous\}$/);
+	});
+
 	test("stops chain on first failed step", async () => {
 		const { runChild } = makeMock({
 			step2: { status: "failed", error: "halt" },

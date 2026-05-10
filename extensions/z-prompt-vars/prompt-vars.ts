@@ -253,8 +253,13 @@ function getNestedValue(input: Record<string, unknown>, key: string): unknown {
 	return current;
 }
 
+function cloneJsonValue<T>(value: T): T {
+	if (value === undefined) return value;
+	return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function setNestedValue(input: VarsConfig, key: string, value: unknown): VarsConfig {
-	const next = structuredClone(input);
+	const next = cloneJsonValue(input);
 	const segments = key.split(".");
 	let current: Record<string, unknown> = next;
 	for (let index = 0; index < segments.length - 1; index += 1) {
@@ -270,7 +275,7 @@ function setNestedValue(input: VarsConfig, key: string, value: unknown): VarsCon
 }
 
 function unsetNestedValue(input: VarsConfig, key: string): VarsConfig {
-	const next = structuredClone(input);
+	const next = cloneJsonValue(input);
 	const segments = key.split(".");
 	const stack: Record<string, unknown>[] = [next];
 	let current: Record<string, unknown> = next;
@@ -295,13 +300,13 @@ function unsetNestedValue(input: VarsConfig, key: string): VarsConfig {
 }
 
 function deepMergeConfig(base: VarsConfig, override: VarsConfig): VarsConfig {
-	const result: VarsConfig = structuredClone(base);
+	const result: VarsConfig = cloneJsonValue(base);
 	for (const [key, value] of Object.entries(override)) {
 		const existing = result[key];
 		if (isPlainObject(existing) && isPlainObject(value)) {
 			result[key] = deepMergeConfig(existing, value);
 		} else {
-			result[key] = structuredClone(value);
+			result[key] = cloneJsonValue(value);
 		}
 	}
 	return result;
@@ -411,8 +416,9 @@ export function buildPromptVars(cwd: string, modeId?: string): VarsState {
 }
 
 export function interpolatePrompt(text: string, vars: PromptVarMap): string {
-	return text.replace(/\$\{([^}]+)\}/g, (match, rawKey: string) => {
-		const key = rawKey.trim();
+	return text.replace(/\\\$\{([^}]+)\}|\$\{([^}]+)\}/g, (match, escapedKey: string | undefined, rawKey: string | undefined) => {
+		if (escapedKey !== undefined) return `\${${escapedKey}}`;
+		const key = (rawKey ?? "").trim();
 		return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] ?? "" : match;
 	});
 }

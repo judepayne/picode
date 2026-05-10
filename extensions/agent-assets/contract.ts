@@ -1,3 +1,5 @@
+import { unquote } from "./frontmatter-values.ts";
+
 export const COLLECT_AGENT_ASSET_CARDS_EVENT = "picode:collect-asset-cards";
 
 export type AgentAssetKind = "agent" | "subagent";
@@ -35,14 +37,6 @@ function slugify(value: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "") || "mode";
-}
-
-function unquote(value: string): string {
-	const trimmed = value.trim();
-	if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-		return trimmed.slice(1, -1);
-	}
-	return trimmed;
 }
 
 function normalizedCardName(card: AgentAssetCard, _kind: AgentAssetKind): string | undefined {

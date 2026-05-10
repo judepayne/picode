@@ -99,7 +99,7 @@ describe("resolveAgentAssetManifest", () => {
 		assert.deepEqual(manifest.agents, [{ name: "Designer", color: "blue", prompt: "User prompt" }]);
 	});
 
-	it("allows explicit non-blank sentinels to override native values", () => {
+	it("normalizes optional frontmatter sentinels in resolved cards", () => {
 		const root = makeRoot();
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
@@ -110,7 +110,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
-		assert.equal(manifest.agents[0]?.model, "-");
+		assert.equal(manifest.agents[0]?.model, undefined);
 	});
 
 	it("skips user-only cards without a final name", () => {

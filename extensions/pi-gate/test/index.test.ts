@@ -24,6 +24,8 @@ describe("pi-gate bash mutation analysis", () => {
 		assert.equal(analysis.mutating, true);
 		assert.equal(analysis.reason, "find -delete targets");
 		assert.ok(analysis.paths.length >= 1);
+		assert.equal(extractMutationTargets("find . '-delete'", cwd).mutating, true);
+		assert.equal(extractMutationTargets("find . \\-delete", cwd).mutating, true);
 	});
 
 	it("treats mutating awk patterns as mutating", () => {
