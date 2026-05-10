@@ -195,7 +195,12 @@ export function buildChildPiArgs(input: BuildChildPiArgsInput): BuildChildPiArgs
 	if (input.tools !== undefined) {
 		const toolNames: string[] = [];
 		for (const tool of input.tools) {
-			if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) {
+			// Only treat as extension path if it's an unambiguous filesystem path.
+			// This avoids silently promoting tool names like "build.ts" or "deploy/dev"
+			// (accidental name collisions with `.ts`/`.js` suffixes or `/` in names).
+			const looksLikePath = tool.startsWith("/") || tool.startsWith("~") ||
+				(tool.startsWith(".") && (tool.endsWith(".ts") || tool.endsWith(".js")));
+			if (looksLikePath) {
 				toolExtensionPaths.push(tool);
 			} else {
 				toolNames.push(tool);

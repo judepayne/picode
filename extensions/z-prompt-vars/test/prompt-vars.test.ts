@@ -72,8 +72,10 @@ describe("prompt-vars", () => {
 		const varsFile = fs.readFileSync(getVarsConfigPath(cwd), "utf8");
 		const configFile = fs.readFileSync(getWriteLocationConfigPath(cwd), "utf8");
 
-		assert.deepStrictEqual(first.created.sort(), [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd)].sort());
-		assert.deepStrictEqual(second.existing.sort(), [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd)].sort());
+		// Bootstrap creates write-config, project vars, and global vars.
+		const expectedFirstCreated = [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd), getGlobalVarsConfigPath()].sort();
+		assert.deepStrictEqual(first.created.sort(), expectedFirstCreated);
+		assert.deepStrictEqual(second.existing.sort(), expectedFirstCreated);
 		assert.match(varsFile, /"paths"/);
 		assert.match(varsFile, /"defaultContext": "fresh"/);
 		assert.match(configFile, /"pi-location": "project"/);

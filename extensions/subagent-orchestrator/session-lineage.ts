@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 export interface SessionLineage {
 	files: ReadonlySet<string>;
@@ -12,14 +13,24 @@ interface SessionHeader {
 
 function readSessionHeader(sessionFile: string): SessionHeader | undefined {
 	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
-	const content = fs.readFileSync(sessionFile, "utf8");
-	const newlineIndex = content.indexOf("\n");
-	const firstLine = (newlineIndex >= 0 ? content.slice(0, newlineIndex) : content).trim();
-	if (!firstLine) return undefined;
+	// Read only the first 64KB to extract the header line, avoiding loading
+	// potentially multi-MB session files into memory just for the first line.
+	const fd = fs.openSync(sessionFile, "r");
 	try {
-		return JSON.parse(firstLine) as SessionHeader;
-	} catch {
-		return undefined;
+		const buf = Buffer.alloc(65536);
+		const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+		if (bytesRead === 0) return undefined;
+		const content = buf.toString("utf8", 0, bytesRead);
+		const newlineIndex = content.indexOf("\n");
+		const firstLine = (newlineIndex >= 0 ? content.slice(0, newlineIndex) : content).trim();
+		if (!firstLine) return undefined;
+		try {
+			return JSON.parse(firstLine) as SessionHeader;
+		} catch {
+			return undefined;
+		}
+	} finally {
+		fs.closeSync(fd);
 	}
 }
 

@@ -97,6 +97,7 @@ const GATE_SWITCH_PROFILE_EVENT = "gate:switch-profile";
 const POLICY_SCHEMA_FILE = "policy.schema.json";
 const BASE_PROFILE_NAME = "$base";
 const GATE_ERROR_STATUS = "gate:error";
+const MAX_SESSION_ALLOWS = 100;
 const SHELL_COMPLEXITY_PATTERN = /(^|[^\\])(\|\||&&|[;`]|\$\()/;
 const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "then", "do", "else", "elif", "fi"]);
 const PATH_SUBJECTS = new Set(["read", "edit", "list", "external_directory"]);
@@ -471,30 +472,25 @@ function mergePermissionLayers(layers: Array<PermissionConfig | undefined>): Mer
 	return merged;
 }
 
-function findAskRuleScope(config: PermissionConfig | undefined, scope: string): string | undefined {
-	if (config === undefined) return undefined;
-	if (typeof config === "string") {
-		return config === "ask" ? scope : undefined;
+function validateUnattendedProfile(policy: RawPolicy, requestedProfileName: string): string | undefined {
+	if (!resolveProfileOptions(policy, requestedProfileName).unattended) return undefined;
+	const merged = mergePermissionLayers(getProfileLayers(policy, requestedProfileName));
+	if (merged.globalActions.at(-1) === "ask") {
+		return `profiles.${requestedProfileName}.permission.* uses "ask", but unattended profiles only allow "allow" and "deny"`;
 	}
-	for (const [subject, rule] of Object.entries(config)) {
-		const subjectScope = `${scope}.${subject}`;
-		if (typeof rule === "string") {
-			if (rule === "ask") return subjectScope;
-			continue;
-		}
-		for (const [pattern, action] of Object.entries(rule)) {
-			if (action === "ask") return `${subjectScope}.${JSON.stringify(pattern)}`;
+	for (const [subject, rules] of Object.entries(merged.subjects)) {
+		for (let i = 0; i < rules.length; i++) {
+			const rule = rules[i];
+			if (!rule || rule.action !== "ask") continue;
+			const shadowed = rules.slice(i + 1).some((later) =>
+				later.action !== "ask" && (later.rawPattern === "*" || later.rawPattern === rule.rawPattern)
+			);
+			if (!shadowed) {
+				return `profiles.${requestedProfileName}.permission.${subject}.${JSON.stringify(rule.rawPattern)} uses "ask", but unattended profiles only allow "allow" and "deny"`;
+			}
 		}
 	}
 	return undefined;
-}
-
-function validateUnattendedProfile(policy: RawPolicy, requestedProfileName: string): string | undefined {
-	const profile = policy.profiles?.[requestedProfileName];
-	if (!profile?.unattended) return undefined;
-	const askRuleScope = findAskRuleScope(profile.permission, `profiles.${requestedProfileName}.permission`);
-	if (!askRuleScope) return undefined;
-	return `${askRuleScope} uses "ask", but unattended profiles only allow "allow" and "deny"`;
 }
 
 function compilePolicy(policy: RawPolicy, cwd: string, requestedProfileName: string): CompiledPolicy {
@@ -1012,6 +1008,8 @@ async function confirmDecision(
 	const choice = await ctx.ui.select(`${title}\n\n${message}`, ["Allow once", "Allow for session", "Deny"]);
 	if (choice === "Allow once") return { allow: true, sessionStored: false };
 	if (choice === "Allow for session") {
+		// Cap at MAX_SESSION_ALLOWS to prevent unbounded memory growth.
+		if (sessionAllows.size >= MAX_SESSION_ALLOWS) sessionAllows.clear();
 		sessionAllows.add(sessionKey);
 		updateStatus(ctx, profileName, sessionAllows, false, locked);
 		return { allow: true, sessionStored: true };
@@ -1195,6 +1193,15 @@ export default function piGate(pi: ExtensionAPI) {
 			const current = getCompiledPolicy(ctx.cwd).compiled?.profileName ?? "error";
 			const choice = await ctx.ui.select(`Select gate profile (current: ${current})`, profileNames);
 			if (!choice) return;
+			if (choice === current) {
+				// Selecting the current profile clears the override, falling back
+				// to GATE_PROFILE env var, policy.activeProfile, or $base.
+				selectedProfileOverride = undefined;
+				const fresh = getCompiledPolicy(ctx.cwd);
+				updateStatus(ctx, fresh.compiled?.profileName, sessionAllows, !fresh.compiled, profileLocked);
+				ctx.ui.notify(`Gate profile reset to ${fresh.compiled?.profileName ?? "error"}`, "info");
+				return;
+			}
 			const result = switchProfile(ctx, choice);
 			if (!result.ok) {
 				ctx.ui.notify(result.error, "warning");

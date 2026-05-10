@@ -1226,8 +1226,7 @@ function formatTree(details: OrchestratorTreeDetails): string {
 }
 
 export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
-	const stateRoot = path.join(process.cwd(), ".pi", "state", "subagent-orchestrator");
-	const state = createStateStore(stateRoot);
+	const state = createStateStore(path.join(process.cwd(), ".pi", "state", "subagent-orchestrator"));
 	state.ensureReady();
 	modeDepthCache.clear();
 	subagentDepthCache.clear();
@@ -1447,11 +1446,13 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				event = JSON.parse(rawLine) as LoggedChildEvent;
 			} catch {
 				warnDroppedChildEvent(run.orchestratorRunId, { type: "unknown" }, "encountered malformed async event line");
-				break;
+				offset = newlineIndex + 1;
+				continue;
 			}
 			if (typeof event.type !== "string") {
 				warnDroppedChildEvent(run.orchestratorRunId, event, "missing event type");
-				break;
+				offset = newlineIndex + 1;
+				continue;
 			}
 			if (event.type.startsWith("subagent:mode:child.")) {
 				handleChildEvent(run.orchestratorRunId, event, false);
@@ -2022,7 +2023,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return created;
 	}
 
-	function flushQueuedHandbacks(ctx?: ExtensionContext | null): void {
+	function flushQueuedHandbacks(ctx?: ExtensionContext | null, options?: { forceAgentDelivery?: boolean }): void {
 		const runtimeCtx = ctx ?? latestCtx;
 		if (!runtimeCtx) return;
 		const ownerModeId = findCurrentModeId(runtimeCtx);
@@ -2047,7 +2048,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		const agentHandbacks = unique.filter((entry) => normalizeHandbackConsumer(entry.consumer) !== "user");
 		if (agentHandbacks.length === 0) return;
-		if (!runtimeCtx.isIdle() || runtimeCtx.hasPendingMessages()) return;
+		if (!options?.forceAgentDelivery && (!runtimeCtx.isIdle() || runtimeCtx.hasPendingMessages())) return;
 		const agentHandbacksBySession = new Map<string, OrchestratorHandbackRecord[]>();
 		for (const handback of agentHandbacks) {
 			const sessionKey = handback.parentSessionId || "unknown-session";
@@ -2107,7 +2108,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		restoreRunMessageSnapshots(ctx.sessionManager.getBranch());
 		reconcileOwnedAsyncRuns(ctx);
 		reconcileDuplicateHandbacks(ctx);
-		flushQueuedHandbacks(ctx);
+		flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
 		updateUiStatus(ctx, true);
 		scheduleQueuedHandbackFlush();
 	});
@@ -2116,7 +2117,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		latestCtx = ctx;
 		reconcileOwnedAsyncRuns(ctx);
 		reconcileDuplicateHandbacks(ctx);
-		flushQueuedHandbacks(ctx);
+		flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
 		updateUiStatus(ctx, true);
 		scheduleQueuedHandbackFlush();
 	});

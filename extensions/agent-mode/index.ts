@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -195,7 +196,11 @@ function rewriteSessionFileRemovingLegacyModeContext(sessionFile: string | undef
 			else if (typeof entry.parentId === "string" && entry.parentId !== parentId) entry.parentId = parentId;
 		}
 
-		fs.writeFileSync(sessionFile, `${keptEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+		// Write to a temp file then rename for atomic replacement, reducing the
+		// risk of interleaving with concurrent session appends during startup.
+		const tmpFile = `${sessionFile}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+		fs.writeFileSync(tmpFile, `${keptEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
+		fs.renameSync(tmpFile, sessionFile);
 		return { removedCount };
 	} catch (error) {
 		return {
@@ -424,9 +429,13 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		currentIndex = 0;
 	}
 
+	let lastPersistedModeId: string | undefined;
+
 	function persistCurrentMode(): void {
 		const current = getCurrentMode();
 		if (!current) return;
+		if (current.id === lastPersistedModeId) return;
+		lastPersistedModeId = current.id;
 		pi.appendEntry(MODE_STATE_ENTRY_TYPE, {
 			modeId: current.id,
 			...(current.subagents && current.subagents.length > 0 ? { subagents: [...current.subagents] } : {}),

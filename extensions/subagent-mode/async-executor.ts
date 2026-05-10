@@ -296,6 +296,10 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 
 	const eventsPath = asyncRunEventsPath(runId);
 	const eventsStream = fs.createWriteStream(eventsPath, { flags: "a", mode: PRIVATE_FILE_MODE });
+	eventsStream.on("error", (err) => {
+		// Best-effort fallback: write errors should not crash the detached child.
+		// The parent will eventually time out if events are lost.
+	});
 
 	// Lazy-import to avoid circular type resolution at module load time.
 	const { executeRun } = await import("./sync-executor.ts");

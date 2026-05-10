@@ -368,6 +368,9 @@ function validateMutableVarKey(key: string): string {
 	if (RESERVED_DERIVED_VAR_KEYS.has(trimmed)) {
 		throw new Error(`Cannot set or unset derived var: ${trimmed}`);
 	}
+	if (trimmed === "paths") {
+		throw new Error('Cannot set "paths" directly. Use "paths.plan" or "paths.design" to set individual path values.');
+	}
 	if (trimmed.startsWith("paths.plan.") || trimmed.startsWith("paths.design.")) {
 		throw new Error(`Cannot set nested keys under ${trimmed.startsWith("paths.plan.") ? "paths.plan" : "paths.design"}; those keys are scalar path values.`);
 	}
@@ -483,6 +486,19 @@ export function bootstrapVarsFiles(cwd: string, modeId?: string): VarsBootstrapR
 		created.push(projectVarsPath);
 	} else {
 		existing.push(projectVarsPath);
+	}
+
+	// Also ensure the global vars file exists so bootstrap is complete regardless
+	// of which location writes go to. This avoids surprises when the user later
+	// switches write-location to "global" or uses global-scoped vars.
+	const globalVarsPath = getGlobalVarsConfigPath(writeLocation.varsFileName);
+	if (!fs.existsSync(globalVarsPath)) {
+		const initialConfig = defaultBootstrapVarsConfig();
+		fs.mkdirSync(path.dirname(globalVarsPath), { recursive: true });
+		fs.writeFileSync(globalVarsPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+		created.push(globalVarsPath);
+	} else {
+		existing.push(globalVarsPath);
 	}
 
 	return {

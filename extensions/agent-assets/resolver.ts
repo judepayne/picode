@@ -88,7 +88,11 @@ function resolveExtensionPath(rawPath: string, sourceDir: string): string {
 }
 
 function resolveExtensionsValue(value: string, sourceDir: string): string | undefined {
-	const resolved = parseStringList(value).map((entry) => resolveExtensionPath(entry, sourceDir));
+	const entries = parseStringList(value);
+	// Support the `-` sentinel convention (same as model/thinking):
+	// writing `extensions: -` in an overlay clears inherited extensions.
+	if (entries.length === 1 && entries[0] === "-") return undefined;
+	const resolved = entries.map((entry) => resolveExtensionPath(entry, sourceDir));
 	return resolved.length > 0 ? resolved.join(", ") : undefined;
 }
 

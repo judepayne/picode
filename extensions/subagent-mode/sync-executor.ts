@@ -275,43 +275,52 @@ async function runChain(
 	let previousText = "";
 	const originalTask = spec.task ?? "";
 
-	for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
-		const step = chain[stepIndex] as ChainStep;
+	try {
+		for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
+			const step = chain[stepIndex] as ChainStep;
 
-		if (step.parallel && step.parallel.length > 0) {
-			const stepResults = await runChainParallelStep({
-				runId,
-				topLevelRunId,
-				spec,
-				step,
-				stepIndex,
-				callbacks,
-				options,
-				previousText,
-				originalTask,
-				chainDir,
-				runChild,
-			});
-			results.push(...stepResults);
-			previousText = stepResults.map((r) => r.finalText ?? "").filter(Boolean).join("\n\n");
-			if (stepResults.some((r) => r.status !== "complete")) break;
-		} else {
-			const child = await runChainSingleStep({
-				runId,
-				topLevelRunId,
-				spec,
-				step,
-				stepIndex,
-				callbacks,
-				options,
-				previousText,
-				originalTask,
-				chainDir,
-				runChild,
-			});
-			results.push(child);
-			previousText = child.finalText ?? "";
-			if (child.status !== "complete") break;
+			if (step.parallel && step.parallel.length > 0) {
+				const stepResults = await runChainParallelStep({
+					runId,
+					topLevelRunId,
+					spec,
+					step,
+					stepIndex,
+					callbacks,
+					options,
+					previousText,
+					originalTask,
+					chainDir,
+					runChild,
+				});
+				results.push(...stepResults);
+				previousText = stepResults.map((r) => r.finalText ?? "").filter(Boolean).join("\n\n");
+				if (stepResults.some((r) => r.status !== "complete")) break;
+			} else {
+				const child = await runChainSingleStep({
+					runId,
+					topLevelRunId,
+					spec,
+					step,
+					stepIndex,
+					callbacks,
+					options,
+					previousText,
+					originalTask,
+					chainDir,
+					runChild,
+				});
+				results.push(child);
+				previousText = child.finalText ?? "";
+				if (child.status !== "complete") break;
+			}
+		}
+	} finally {
+		// Clean up chain temporary directory to avoid /tmp accumulation.
+		try {
+			fs.rmSync(chainDir, { force: true, recursive: true });
+		} catch {
+			// best effort
 		}
 	}
 

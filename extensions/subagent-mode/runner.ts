@@ -247,7 +247,14 @@ function streamAndCollect(
 		});
 
 		proc.stderr?.on("data", (chunk: Buffer) => {
-			stderrBuf += chunk.toString("utf-8");
+			const text = chunk.toString("utf-8");
+			if (stderrBuf.length + text.length > 20000) {
+				// Cap accumulation at ~20KB to prevent unbounded memory growth.
+				const overflow = stderrBuf.length + text.length - 20000;
+				stderrBuf = stderrBuf.slice(overflow) + text;
+			} else {
+				stderrBuf += text;
+			}
 		});
 
 		proc.once("error", (error) => {
