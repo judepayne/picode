@@ -59,7 +59,11 @@ const jitiCliPath: string | undefined = (() => {
 			const piRoot = resolvePiPackageRoot();
 			if (!piRoot) throw new Error("no pi package root");
 			const piRequire = createRequire(path.join(piRoot, "package.json"));
-			return path.join(path.dirname(piRequire.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs");
+			try {
+				return path.join(path.dirname(piRequire.resolve("jiti/package.json")), "lib/jiti-cli.mjs");
+			} catch {
+				return path.join(path.dirname(piRequire.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs");
+			}
 		},
 	];
 	for (const candidate of candidates) {
