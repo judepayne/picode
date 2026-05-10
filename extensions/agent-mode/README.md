@@ -146,6 +146,12 @@ Tool resolution for top-level modes is deterministic:
 
 ## Dependencies and relationships
 
+### Uses subagent-mode depth detection
+
+`agent-mode` imports `ENV_TOP_RUN_ID` from `../subagent-mode/depth.ts` to detect whether the current process is a delegated subagent child. If it is, agent-mode skips mode application entirely so that delegated children use their subagent card persona instead of inheriting the parent's Builder/Planner/Designer mode.
+
+This is a small but architecturally important dependency: without it, delegated subagents would accidentally run under the parent's top-level mode.
+
 ### Strong relationship with pi-gate
 
 `agent-mode` emits a profile-switch event that `pi-gate` can follow. That is how mode changes and permission changes stay in sync.

@@ -355,9 +355,9 @@ If an added extension registers Pi tools, list those tool names explicitly in `t
 
 The orchestrator reads the current top-level mode state to decide which subagents are allowed.
 
-### Benefits from `z-prompt-vars`
+### Hard dependency: `z-prompt-vars`
 
-The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars. This package seeds that default to `fresh`, but you can also set it to `continue` when you want repeated direct user follow-ups to stay in the same delegated thread until reload or shutdown.
+`subagent-orchestrator` directly imports `getMergedStoredVarValue` from `../z-prompt-vars/prompt-vars.ts` in `user-dispatch.ts`. The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars via this import. This package seeds that default to `fresh`, but you can also set it to `continue` when you want repeated direct user follow-ups to stay in the same delegated thread until reload or shutdown.
 
 ### Child runtime composition
 
