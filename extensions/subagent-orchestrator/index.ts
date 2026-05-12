@@ -20,11 +20,12 @@ import { createForkContextResolver, type ForkableSessionManager } from "../subag
 import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
-import { formatBackgroundFailureNotification, formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
+import { formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
 import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
+import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
 	upsertStickyUserSubagentSession,
@@ -33,7 +34,6 @@ import {
 } from "./sticky-user-sessions.ts";
 import type {
 	AsyncCompleteEvent,
-	AsyncStartedEvent,
 	ModeStateSessionEntry,
 	NormalizedDelegationRequest,
 	OrchestratorChildSessionRecord,
@@ -91,33 +91,6 @@ function warnOrchestratorDiagnostic(message: string, error?: unknown): void {
 	console.warn(`[subagent-orchestrator] ${message}${suffix}`);
 }
 
-function safeEventHandler(eventName: string, handler: (data: unknown) => void): (data: unknown) => void {
-	return (data: unknown): void => {
-		try {
-			handler(data);
-		} catch (error) {
-			warnOrchestratorDiagnostic(`event handler ${eventName} failed`, error);
-		}
-	};
-}
-
-interface SubagentModeChildResult {
-	childId: string;
-	agent: string;
-	status: "complete" | "failed" | "cancelled";
-	finalText?: string;
-	error?: string;
-	sessionFile?: string;
-	usage?: { input?: number; output?: number; total?: number };
-}
-
-interface SubagentModeRunResult {
-	runId: string;
-	mode: "single" | "parallel" | "chain";
-	status: "queued" | "running" | "complete" | "failed" | "cancelled";
-	results: SubagentModeChildResult[];
-}
-
 const DelegateTaskSchema = Type.Object({
 	task: Type.String({ description: "The subagent task to run." }),
 }, { additionalProperties: false });
@@ -146,12 +119,6 @@ const DelegateSubagentStatusParams = Type.Object({
 	cursor: Type.Optional(Type.String({ description: 'The cursor for action: "stream_next".' })),
 	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking events in log and stream responses." })),
 }, { additionalProperties: false });
-
-interface PendingRequest {
-	orchestratorRunId: string;
-	onUpdate?: (result: { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }) => void;
-	resolve: (response: ProgrammaticSubagentResponse) => void;
-}
 
 function errorResult(message: string, mode: "single" | "parallel" | "chain" = "single") {
 	return {
@@ -1149,30 +1116,6 @@ function isTerminal(status: RunStatus): boolean {
 
 function isRunning(status: RunStatus): boolean {
 	return status === "running";
-}
-
-interface LoggedChildEvent extends Record<string, unknown> {
-	type?: string;
-	runId?: string;
-	childId?: string;
-	parentChildId?: string;
-	agent?: string;
-	timestamp?: number;
-	stepIndex?: number;
-	taskIndex?: number;
-	sessionFile?: string;
-	toolName?: string;
-	toolCount?: number;
-	currentTool?: string;
-	recentOutput?: string;
-	ok?: boolean;
-	resultSummary?: string;
-	text?: string;
-	delta?: string;
-	summary?: string;
-	message?: string;
-	reason?: string;
-	result?: Record<string, unknown>;
 }
 
 function isThinkingEventType(type: string | undefined): boolean {
@@ -2503,226 +2446,42 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { orchestratorRunId, response };
 	}
 
-	pi.events.on(SUBAGENT_MODE_REQUEST_STARTED_EVENT, safeEventHandler(SUBAGENT_MODE_REQUEST_STARTED_EVENT, (data) => {
-		const requestId = (data as { requestId?: unknown })?.requestId;
-		if (typeof requestId !== "string") return;
-		const existingRun = state.getRun(requestId);
-		if (!existingRun || !isTerminal(existingRun.status)) {
-			state.updateRun(requestId, { status: "running", updatedAt: Date.now() });
-		}
-		refreshRunAggregates(requestId);
-		const pendingRequest = pending.get(requestId);
-		const agentLabel = existingRun?.agent?.trim() || "subagent";
-		pendingRequest?.onUpdate?.({
-			content: [{ type: "text", text: `Delegated ${agentLabel} run started.` }],
-			details: { status: "running" },
-		});
-	}));
-
-	const forwardLoggedChildEvent = safeEventHandler("subagent:mode:child.*", (data: unknown): void => {
-		const event = data as LoggedChildEvent & { requestId?: unknown };
-		if (typeof event.requestId !== "string") return;
-		if (event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
-			state.updateRun(event.requestId, { updatedAt: Date.now() });
-		}
-		handleChildEvent(event.requestId, event);
+	registerSubagentEventHandlers(pi, {
+		events: {
+			requestStarted: SUBAGENT_MODE_REQUEST_STARTED_EVENT,
+			requestResponse: SUBAGENT_MODE_REQUEST_RESPONSE_EVENT,
+			runComplete: SUBAGENT_MODE_RUN_COMPLETE_EVENT,
+			childStarted: SUBAGENT_MODE_CHILD_STARTED_EVENT,
+			childThinkingStart: SUBAGENT_MODE_CHILD_THINKING_START_EVENT,
+			childThinkingEnd: SUBAGENT_MODE_CHILD_THINKING_END_EVENT,
+			childTextDelta: SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT,
+			childTextFinal: SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT,
+			childToolStart: SUBAGENT_MODE_CHILD_TOOL_START_EVENT,
+			childToolEnd: SUBAGENT_MODE_CHILD_TOOL_END_EVENT,
+			childProgress: SUBAGENT_MODE_CHILD_PROGRESS_EVENT,
+			childError: SUBAGENT_MODE_CHILD_ERROR_EVENT,
+			childComplete: SUBAGENT_MODE_CHILD_COMPLETE_EVENT,
+			childCancelled: SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
+			legacyStarted: SUBAGENT_STARTED_EVENT,
+			legacyComplete: SUBAGENT_COMPLETE_EVENT,
+			notifySuppress: SUBAGENT_NOTIFY_SUPPRESS_EVENT,
+			widgetSuppress: SUBAGENT_WIDGET_SUPPRESS_EVENT,
+		},
+		state,
+		pending,
+		getLatestCtx: () => latestCtx,
+		handleChildEvent,
+		refreshRunAggregates,
+		adaptSubagentModeResponse,
+		toRunStatus,
+		summarizeAsyncFailure,
+		truncateDisplayText,
+		finalizeChildrenFromResults,
+		queueHandback,
+		flushQueuedHandbacks,
+		asyncErrorSummaryLimit: ASYNC_ERROR_SUMMARY_LIMIT,
+		completeEntryType: ORCHESTRATOR_COMPLETE_ENTRY_TYPE,
 	});
-
-	pi.events.on(SUBAGENT_MODE_CHILD_STARTED_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_THINKING_START_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_THINKING_END_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_TOOL_START_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_TOOL_END_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_ERROR_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_COMPLETE_EVENT, forwardLoggedChildEvent);
-	pi.events.on(SUBAGENT_MODE_CHILD_CANCELLED_EVENT, forwardLoggedChildEvent);
-
-	pi.events.on(SUBAGENT_MODE_CHILD_PROGRESS_EVENT, safeEventHandler(SUBAGENT_MODE_CHILD_PROGRESS_EVENT, (data) => {
-		const evt = data as LoggedChildEvent & {
-			requestId?: unknown;
-			currentTool?: unknown;
-			toolCount?: unknown;
-			recentOutput?: unknown;
-			taskIndex?: unknown;
-		};
-		if (typeof evt.requestId !== "string") return;
-		state.updateRun(evt.requestId, { updatedAt: Date.now() });
-		handleChildEvent(evt.requestId, evt);
-		const pendingRequest = pending.get(evt.requestId);
-		const agentLabel = evt.agent?.trim() || state.getRun(evt.requestId)?.agent?.trim() || "subagent";
-		pendingRequest?.onUpdate?.({
-			content: [{
-				type: "text",
-				text: typeof evt.currentTool === "string"
-					? `Delegated ${agentLabel} update: current tool ${evt.currentTool}${typeof evt.toolCount === "number" ? ` (${evt.toolCount})` : ""}.`
-					: `Delegated ${agentLabel} progress update.`,
-			}],
-			details: { status: "running" },
-		});
-	}));
-
-	pi.events.on(SUBAGENT_MODE_REQUEST_RESPONSE_EVENT, safeEventHandler(SUBAGENT_MODE_REQUEST_RESPONSE_EVENT, (data) => {
-		const payload = data as {
-			requestId?: unknown;
-			result?: SubagentModeRunResult | null;
-			ok?: boolean;
-			errorText?: string;
-			async?: boolean;
-			asyncDir?: string;
-			asyncId?: string;
-			pid?: number;
-		};
-		if (typeof payload.requestId !== "string") return;
-		const pendingRequest = pending.get(payload.requestId);
-		if (!pendingRequest) return;
-		pending.delete(payload.requestId);
-		pendingRequest.resolve(
-			adaptSubagentModeResponse(
-				payload.requestId,
-				payload.result ?? null,
-				payload.ok ?? false,
-				payload.errorText,
-				payload.async
-					? { asyncDir: payload.asyncDir, asyncId: payload.asyncId, pid: payload.pid }
-					: undefined,
-			),
-		);
-	}));
-
-	pi.events.on(SUBAGENT_MODE_RUN_COMPLETE_EVENT, safeEventHandler(SUBAGENT_MODE_RUN_COMPLETE_EVENT, (data) => {
-		const payload = data as {
-			requestId?: unknown;
-			runId?: unknown;
-			result?: SubagentModeRunResult;
-			async?: boolean;
-		};
-		// Sync runs resolve via request.response; run.complete during sync is
-		// informational only. Async runs rely on run.complete for the terminal
-		// transition — correlate by underlyingRunId.
-		if (!payload.async) return;
-		if (typeof payload.runId !== "string") return;
-		const result = payload.result;
-		if (!result) return;
-		const run = state.findRunByUnderlyingId(payload.runId);
-		if (!run) return;
-		const status = toRunStatus(result.status, result.status === "complete", result.status === "cancelled");
-		const summary = result.results
-			.map((r) => r.finalText ?? "")
-			.filter(Boolean)
-			.join("\n\n---\n\n")
-			|| `${result.mode} ${status}`;
-		const errorSummary = status === "failed" ? summarizeAsyncFailure(result, summary) : undefined;
-		const displaySummary = errorSummary ?? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary;
-		state.updateRun(run.orchestratorRunId, {
-			status,
-			updatedAt: Date.now(),
-			completedAt: Date.now(),
-			resultSummary: summary,
-			...(errorSummary ? { error: errorSummary } : {}),
-		});
-		finalizeChildrenFromResults(
-			run.orchestratorRunId,
-			result.results.map((r) => ({
-				agent: r.agent,
-				output: r.finalText,
-				finalOutput: r.finalText,
-				success: r.status === "complete",
-				sessionFile: r.sessionFile,
-			})),
-			summary,
-			status,
-			Date.now(),
-		);
-		pi.appendEntry(ORCHESTRATOR_COMPLETE_ENTRY_TYPE, {
-			orchestratorRunId: run.orchestratorRunId,
-			ownerModeId: run.ownerModeId,
-			status,
-			summary: displaySummary,
-			underlyingRunId: payload.runId,
-		});
-		if (status !== "cancelled") {
-			const updated = state.getRun(run.orchestratorRunId) ?? run;
-			queueHandback(updated, {
-				id: payload.runId,
-				status,
-				success: status === "complete",
-				cancelled: status === "cancelled",
-				summary: displaySummary,
-				results: result.results.map((r) => ({
-					agent: r.agent,
-					output: r.finalText,
-					finalOutput: r.finalText,
-					success: r.status === "complete",
-					sessionFile: r.sessionFile,
-				})),
-				timestamp: Date.now(),
-			} as AsyncCompleteEvent);
-			flushQueuedHandbacks(latestCtx);
-		}
-	}));
-
-	pi.events.on(SUBAGENT_STARTED_EVENT, safeEventHandler(SUBAGENT_STARTED_EVENT, (data) => {
-		const event = data as AsyncStartedEvent;
-		if (typeof event.id !== "string") return;
-		pi.events.emit(SUBAGENT_NOTIFY_SUPPRESS_EVENT, { asyncId: event.id });
-		pi.events.emit(SUBAGENT_WIDGET_SUPPRESS_EVENT, { asyncId: event.id });
-		const run = state.findRunByUnderlyingId(event.id);
-		if (!run) return;
-		state.updateRun(run.orchestratorRunId, {
-			underlyingRunId: event.id,
-			status: run.status === "cancelled" ? run.status : "running",
-			updatedAt: Date.now(),
-			...(typeof event.pid === "number" ? { pid: event.pid } : {}),
-			...(typeof event.asyncDir === "string" ? { asyncDir: event.asyncDir } : {}),
-		});
-		for (const child of state.listChildSessionsByRun(run.orchestratorRunId)) {
-			const updated = state.updateChildSession(child.childSessionId, {
-				underlyingRunId: event.id,
-				updatedAt: Date.now(),
-				...(typeof event.asyncDir === "string" ? { asyncDir: event.asyncDir } : {}),
-			});
-			if (updated) appendChildEntry(updated, "updated");
-		}
-		refreshRunAggregates(run.orchestratorRunId);
-	}));
-
-	pi.events.on(SUBAGENT_COMPLETE_EVENT, safeEventHandler(SUBAGENT_COMPLETE_EVENT, (data) => {
-		const event = data as AsyncCompleteEvent;
-		if (typeof event.id !== "string") return;
-		const run = state.findRunByUnderlyingId(event.id);
-		if (!run) return;
-		const status = toRunStatus(event.status, event.success, event.cancelled);
-		const summary = event.summary ?? `${event.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT} ${status}`;
-		const errorSummary = status === "failed" ? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary : undefined;
-		const displaySummary = errorSummary ?? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary;
-		state.updateRun(run.orchestratorRunId, {
-			status,
-			updatedAt: Date.now(),
-			completedAt: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
-			resultSummary: summary,
-			...(errorSummary ? { error: errorSummary } : {}),
-		});
-		finalizeChildrenFromResults(run.orchestratorRunId, event.results, summary, status, typeof event.timestamp === "number" ? event.timestamp : Date.now());
-		pi.appendEntry(ORCHESTRATOR_COMPLETE_ENTRY_TYPE, {
-			orchestratorRunId: run.orchestratorRunId,
-			ownerModeId: run.ownerModeId,
-			status,
-			summary: displaySummary,
-			underlyingRunId: event.id,
-		});
-		if (status !== "cancelled") {
-			queueHandback(state.getRun(run.orchestratorRunId) ?? run, event);
-			flushQueuedHandbacks(latestCtx);
-		}
-		if (latestCtx?.hasUI && status === "failed") {
-			latestCtx.ui.notify(
-				formatBackgroundFailureNotification(run.agent ?? event.agent, displaySummary),
-				"warning",
-			);
-		}
-	}));
 
 	pi.registerTool({
 		name: "delegate_subagent",
