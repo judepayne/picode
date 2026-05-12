@@ -377,7 +377,7 @@ export interface OrchestratorLogDetails {
 	records: OrchestratorNodeLogRecord[];
 }
 
-export interface OrchestratorStreamDetails {
+export interface OrchestratorLogCursorDetails {
 	childSessionId: string;
 	runId: string;
 	rootRunId?: string;
@@ -387,7 +387,7 @@ export interface OrchestratorStreamDetails {
 	cursor: string | null;
 }
 
-export interface OrchestratorStreamNextDetails {
+export interface OrchestratorLogNextDetails {
 	childSessionId: string;
 	runId: string;
 	rootRunId?: string;

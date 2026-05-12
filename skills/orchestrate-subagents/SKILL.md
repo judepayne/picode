@@ -136,14 +136,14 @@ Use this for async work after launch, and for monitoring active delegated trees.
 ```
 
 ```json
-{ "action": "stream", "childSessionId": "..." }
+{ "action": "log_cursor", "childSessionId": "..." }
 ```
 
 ```json
-{ "action": "stream_next", "childSessionId": "...", "cursor": "..." }
+{ "action": "log_next", "childSessionId": "...", "cursor": "..." }
 ```
 
-Optional for `log`, `stream`, and `stream_next`:
+Optional for `log`, `log_cursor`, and `log_next`:
 
 ```json
 { "includeThinking": true }
@@ -155,8 +155,8 @@ Behavior summary:
 - `tree` returns the current/latest delegated tree for the current mode by default.
 - `tree(runId)` inspects an explicit run within the current mode.
 - `log(childSessionId)` returns the full node history.
-- `stream(childSessionId)` is follow-only from now and returns `null` for terminal nodes.
-- `stream_next(childSessionId, cursor)` returns only new appended records plus the next cursor.
+- `log_cursor(childSessionId)` is follow-only from now and returns `null` for terminal nodes.
+- `log_next(childSessionId, cursor)` returns only new appended records plus the next cursor.
 - Thinking is hidden by default; opt in with `includeThinking: true`.
 - Older runs beyond the current/latest tree may require direct disk inspection.
 
@@ -183,8 +183,8 @@ When a background completion triggers a follow-up turn, treat it as orchestrator
 
 - `delegate_subagent_status` is mainly for async work and explicit inspection asks.
 - After a successful sync `delegate_subagent` call, do not call `delegate_subagent_status` to re-check the same run.
-- If an orchestrator completion/handback message is already present, do not immediately poll status again unless you need extra metadata or tree/log/stream details.
-- Prefer `tree` for the live descendant structure, `log` for a full per-node replay, and `stream` / `stream_next` for live follow behavior without replaying backlog.
+- If an orchestrator completion/handback message is already present, do not immediately poll status again unless you need extra metadata or tree/log details.
+- Prefer `tree` for the live descendant structure, `log` for a full per-node replay, and `log_cursor` / `log_next` for log follow behavior without replaying backlog.
 - Do not dig through async files on disk for current/latest work unless the orchestrator surface is insufficient or you are debugging persistence.
 
 ## Presenting child output
@@ -279,11 +279,11 @@ If you only see an orchestrator status line, do not assume the user wants a stat
 ```
 
 ```json
-{ "action": "stream", "childSessionId": "<child-session-id>" }
+{ "action": "log_cursor", "childSessionId": "<child-session-id>" }
 ```
 
 ```json
-{ "action": "stream_next", "childSessionId": "<child-session-id>", "cursor": "<cursor-from-stream-or-stream_next>" }
+{ "action": "log_next", "childSessionId": "<child-session-id>", "cursor": "<cursor-from-log_cursor-or-log_next>" }
 ```
 
 ```json

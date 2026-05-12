@@ -11,7 +11,7 @@ It decides:
 - how sync and async work are handled
 - how async work is tracked
 - how results are handed back
-- how logs, trees, streams, and cancellation work
+- how logs, trees, and cancellation work
 
 If `agent-mode` answers "what should the main agent be right now?", then `subagent-orchestrator` answers:
 
@@ -301,8 +301,8 @@ Actions include:
 - `select`
 - `tree`
 - `log`
-- `stream`
-- `stream_next`
+- `log_cursor`
+- `log_next`
 
 Use it when the agent needs to inspect or control a run rather than merely wait for the handback.
 

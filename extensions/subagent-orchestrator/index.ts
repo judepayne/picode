@@ -58,12 +58,12 @@ import type {
 	OrchestratorContinuationMessageDetails,
 	OrchestratorContinuationRecord,
 	OrchestratorHandbackRecord,
+	OrchestratorLogCursorDetails,
 	OrchestratorLogDetails,
+	OrchestratorLogNextDetails,
 	OrchestratorNodeLogRecord,
 	OrchestratorRunMessageDetails,
 	OrchestratorRunRecord,
-	OrchestratorStreamDetails,
-	OrchestratorStreamNextDetails,
 	OrchestratorTreeDetails,
 	OrchestratorTreeNodeDetails,
 	ProgrammaticResultEntry,
@@ -113,12 +113,12 @@ const DelegateSubagentParams = Type.Object({
 }, { additionalProperties: false });
 
 const DelegateSubagentStatusParams = Type.Object({
-	action: Type.String({ description: 'One of "list", "get", "cancel", "next", "prev", "select", "tree", "log", "stream", or "stream_next".' }),
+	action: Type.String({ description: 'One of "list", "get", "cancel", "next", "prev", "select", "tree", "log", "log_cursor", or "log_next".' }),
 	runId: Type.Optional(Type.String({ description: "The orchestrator run id for get/cancel/next/prev/select/tree." })),
 	childIndex: Type.Optional(Type.Number({ description: "The child index for action: \"select\"." })),
-	childSessionId: Type.Optional(Type.String({ description: 'The child session id for action: "log", "stream", or "stream_next".' })),
-	cursor: Type.Optional(Type.String({ description: 'The cursor for action: "stream_next".' })),
-	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking events in log and stream responses." })),
+	childSessionId: Type.Optional(Type.String({ description: 'The child session id for action: "log", "log_cursor", or "log_next".' })),
+	cursor: Type.Optional(Type.String({ description: 'The cursor for action: "log_next".' })),
+	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking events in log responses." })),
 }, { additionalProperties: false });
 
 function errorResult(message: string, mode: "single" | "parallel" | "chain" = "single") {
@@ -304,10 +304,10 @@ function renderStatusToolResult(
 }
 
 function summarizeStatusToolResult(args: Record<string, unknown>, result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean } | null): string {
-	if (result === null) return "Loaded delegated child stream terminal state.";
+	if (result === null) return "Loaded delegated child log terminal state.";
 	if (result.isError) return "Delegated subagent status failed.";
 	const details = asRecord(result.details);
-	if (details?.terminal === true && details.cursor === null) return "Loaded delegated child stream terminal state.";
+	if (details?.terminal === true && details.cursor === null) return "Loaded delegated child log terminal state.";
 	const action = typeof args.action === "string" ? args.action : "get";
 	const runId = typeof args.runId === "string" ? args.runId : undefined;
 	if (action === "list") return "Listed delegated runs.";
@@ -316,8 +316,8 @@ function summarizeStatusToolResult(args: Record<string, unknown>, result: { cont
 	if (action === "get") return runId ? `Loaded delegated run ${runId}.` : "Loaded delegated run details.";
 	if (action === "tree") return runId ? `Loaded delegated tree for ${runId}.` : "Loaded delegated tree.";
 	if (action === "log") return "Loaded delegated child log.";
-	if (action === "stream") return "Loaded delegated child stream cursor.";
-	if (action === "stream_next") return "Loaded delegated child stream updates.";
+	if (action === "log_cursor") return "Loaded delegated child log cursor.";
+	if (action === "log_next") return "Loaded delegated child log updates.";
 	const fallback = firstTextContent(result.content);
 	return fallback ? (lastNonEmptyLine(fallback) ?? fallback) : "Delegated subagent status updated.";
 }
@@ -2552,8 +2552,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "delegate_subagent_status",
 		label: "Delegated Subagent Status",
-		description: "List, inspect, focus, cancel, or inspect trees/logs/streams for orchestrated scout runs owned by the current mode.",
-		promptSnippet: 'delegate_subagent_status({ action: "list" | "get" | "cancel" | "next" | "prev" | "select" | "tree" | "log" | "stream" | "stream_next", runId?, childIndex?, childSessionId?, cursor?, includeThinking? })',
+		description: "List, inspect, focus, cancel, or inspect trees/logs for orchestrated scout runs owned by the current mode.",
+		promptSnippet: 'delegate_subagent_status({ action: "list" | "get" | "cancel" | "next" | "prev" | "select" | "tree" | "log" | "log_cursor" | "log_next", runId?, childIndex?, childSessionId?, cursor?, includeThinking? })',
 		promptGuidelines: [
 			"Use this only when the user explicitly asks to inspect, focus, or cancel a delegated run, or when completion information is otherwise unavailable.",
 			"Do not poll this tool immediately after an orchestrator handback or visible completion result unless you need extra metadata.",
@@ -2578,10 +2578,10 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				&& action !== "select"
 				&& action !== "tree"
 				&& action !== "log"
-				&& action !== "stream"
-				&& action !== "stream_next"
+				&& action !== "log_cursor"
+				&& action !== "log_next"
 			) {
-				return errorResult('action must be one of "list", "get", "cancel", "next", "prev", "select", "tree", "log", "stream", or "stream_next".');
+				return errorResult('action must be one of "list", "get", "cancel", "next", "prev", "select", "tree", "log", "log_cursor", or "log_next".');
 			}
 			reconcileOwnedAsyncRuns(ctx);
 			if (action === "list") {
@@ -2603,7 +2603,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					details,
 				};
 			}
-			if (action === "log" || action === "stream" || action === "stream_next") {
+			if (action === "log" || action === "log_cursor" || action === "log_next") {
 				if (typeof params.childSessionId !== "string" || !params.childSessionId.trim()) {
 					return errorResult(`childSessionId is required for ${action}.`);
 				}
@@ -2625,9 +2625,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 						details,
 					};
 				}
-				if (action === "stream") {
+				if (action === "log_cursor") {
 					if (isTerminal(child.status)) {
-						const details: OrchestratorStreamDetails = {
+						const details: OrchestratorLogCursorDetails = {
 							childSessionId: child.childSessionId,
 							runId: child.runId,
 							...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),
@@ -2642,7 +2642,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 						};
 					}
 					const currentCursor = state.readNodeLogSince(child.childSessionId).cursor;
-					const details: OrchestratorStreamDetails = {
+					const details: OrchestratorLogCursorDetails = {
 						childSessionId: child.childSessionId,
 						runId: child.runId,
 						...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),
@@ -2663,7 +2663,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					const message = error instanceof Error ? error.message : String(error);
 					return errorResult(message);
 				}
-				const details: OrchestratorStreamNextDetails = {
+				const details: OrchestratorLogNextDetails = {
 					childSessionId: child.childSessionId,
 					runId: child.runId,
 					...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),

@@ -151,4 +151,22 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			assert.match(result.content?.[0]?.text ?? "", /No subagent orchestrator runs found/);
 		});
 	});
+
+	test("delegate_subagent_status uses log action names", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			const tool = pi.tools.get("delegate_subagent_status");
+			assert.ok(tool);
+			const ctx = new FakeContext(process.cwd());
+
+			const accepted = await tool.execute("tool", { action: "log_cursor" }, new AbortController().signal, undefined, ctx);
+			assert.equal(accepted.isError, true);
+			assert.match(accepted.content?.[0]?.text ?? "", /childSessionId is required for log_cursor/);
+
+			const rejected = await tool.execute("tool", { action: "stream" }, new AbortController().signal, undefined, ctx);
+			assert.equal(rejected.isError, true);
+			assert.match(rejected.content?.[0]?.text ?? "", /log_cursor.*log_next/);
+		});
+	});
 });
