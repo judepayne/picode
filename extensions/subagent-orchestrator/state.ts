@@ -39,8 +39,16 @@ function sortByUpdatedAtDesc<T extends { updatedAt: number }>(items: T[]): T[] {
 	return [...items].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+const INDEX_SUMMARY_TEXT_LIMIT = 240;
+
 function sortRunsForTree<T extends { launchedAt: number; updatedAt: number }>(items: T[]): T[] {
 	return [...items].sort((a, b) => b.launchedAt - a.launchedAt || b.updatedAt - a.updatedAt);
+}
+
+function truncateIndexText(value: string | undefined, limit = INDEX_SUMMARY_TEXT_LIMIT): string | undefined {
+	if (typeof value !== "string" || !value.trim()) return undefined;
+	const normalized = value.trim();
+	return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }
 
 function listRecordJsonFiles(dir: string): string[] {
@@ -90,8 +98,8 @@ function summarizeRun(record: OrchestratorRunRecord): OrchestratorRunSummary {
 		taskSummary: record.taskSummary,
 		...(record.underlyingRunId ? { underlyingRunId: record.underlyingRunId } : {}),
 		...(record.asyncEventCursor !== undefined ? { asyncEventCursor: record.asyncEventCursor } : {}),
-		...(record.resultSummary ? { resultSummary: record.resultSummary } : {}),
-		...(record.error ? { error: record.error } : {}),
+		...(truncateIndexText(record.resultSummary) ? { resultSummary: truncateIndexText(record.resultSummary) } : {}),
+		...(truncateIndexText(record.error) ? { error: truncateIndexText(record.error) } : {}),
 		...(record.childSessionCount !== undefined ? { childSessionCount: record.childSessionCount } : {}),
 		...(record.activeChildCount !== undefined ? { activeChildCount: record.activeChildCount } : {}),
 		...(record.queuedHandbackCount !== undefined ? { queuedHandbackCount: record.queuedHandbackCount } : {}),
@@ -259,7 +267,20 @@ export function createStateStore(rootDir: string) {
 	}
 
 	function saveRunsIndex(index: OrchestratorIndexFile): void {
-		writeJsonFile(runsIndexPath, { version: 1, runs: sortByUpdatedAtDesc(index.runs) });
+		const runs = index.runs.map((run) => ({
+			...run,
+			...(truncateIndexText(run.resultSummary) ? { resultSummary: truncateIndexText(run.resultSummary) } : { resultSummary: undefined }),
+			...(truncateIndexText(run.error) ? { error: truncateIndexText(run.error) } : { error: undefined }),
+		}));
+		writeJsonFile(runsIndexPath, { version: 1, runs: sortByUpdatedAtDesc(runs) });
+	}
+
+	function upsertRunIndex(record: OrchestratorRunRecord): void {
+		const summary = summarizeRun(record);
+		const index = loadRunsIndex();
+		const runs = index.runs.filter((run) => run.orchestratorRunId !== record.orchestratorRunId);
+		runs.push(summary);
+		saveRunsIndex({ version: 1, runs });
 	}
 
 	function loadChildSessionsIndex(): OrchestratorChildSessionIndexFile {
@@ -279,6 +300,14 @@ export function createStateStore(rootDir: string) {
 
 	function saveChildSessionsIndex(index: OrchestratorChildSessionIndexFile): void {
 		writeJsonFile(childSessionsIndexPath, { version: 1, childSessions: sortByUpdatedAtDesc(index.childSessions) });
+	}
+
+	function upsertChildSessionIndex(record: OrchestratorChildSessionRecord): void {
+		const summary = summarizeChildSession(record);
+		const index = loadChildSessionsIndex();
+		const childSessions = index.childSessions.filter((child) => child.childSessionId !== record.childSessionId);
+		childSessions.push(summary);
+		saveChildSessionsIndex({ version: 1, childSessions });
 	}
 
 	function loadHandbacksIndex(): OrchestratorHandbackIndexFile {
@@ -329,7 +358,7 @@ export function createStateStore(rootDir: string) {
 	function saveRun(record: OrchestratorRunRecord): OrchestratorRunRecord {
 		ensureReady();
 		writeJsonFile(runPath(record.orchestratorRunId), record);
-		rebuildRunsIndex();
+		upsertRunIndex(record);
 		return record;
 	}
 
@@ -401,7 +430,7 @@ export function createStateStore(rootDir: string) {
 	function saveChildSession(record: OrchestratorChildSessionRecord): OrchestratorChildSessionRecord {
 		ensureReady();
 		writeJsonFile(childSessionPath(record.childSessionId), record);
-		rebuildChildSessionsIndex();
+		upsertChildSessionIndex(record);
 		return record;
 	}
 

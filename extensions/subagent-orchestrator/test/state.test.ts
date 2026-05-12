@@ -118,4 +118,33 @@ describe("subagent-orchestrator state store", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("keeps run index summaries compact while preserving full run records", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-orchestrator-state-"));
+		try {
+			const store = createStateStore(root);
+			store.ensureReady();
+			const longText = "x".repeat(1000);
+			store.createRun({
+				orchestratorRunId: "run-compact",
+				ownerModeId: "builder",
+				launchedAt: 1,
+				updatedAt: 1,
+				requestShape: "single",
+				async: true,
+				context: "fresh",
+				status: "failed",
+				taskSummary: "task",
+				resultSummary: longText,
+				error: longText,
+			});
+
+			assert.equal(store.getRun("run-compact")?.resultSummary, longText);
+			const index = JSON.parse(fs.readFileSync(path.join(root, "index.json"), "utf8"));
+			assert.equal(index.runs[0].resultSummary.length <= 240, true);
+			assert.equal(index.runs[0].error.length <= 240, true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

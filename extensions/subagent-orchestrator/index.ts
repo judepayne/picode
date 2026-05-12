@@ -77,6 +77,10 @@ const SUBAGENT_MODE_CHILD_ERROR_EVENT = "subagent:mode:child.error";
 const SUBAGENT_MODE_CHILD_COMPLETE_EVENT = "subagent:mode:child.complete";
 const SUBAGENT_MODE_CHILD_CANCELLED_EVENT = "subagent:mode:child.cancelled";
 const SUBAGENT_MODE_RUN_COMPLETE_EVENT = "subagent:mode:run.complete";
+const TEXT_DELTA_STATE_FLUSH_INTERVAL_MS = 500;
+const STATUS_LIST_LIMIT = 10;
+const STATUS_LIST_TEXT_LIMIT = 300;
+const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
 
 interface SubagentModeChildResult {
 	childId: string;
@@ -160,6 +164,24 @@ function lastNonEmptyLine(text: string | undefined): string | undefined {
 	if (typeof text !== "string") return undefined;
 	const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 	return lines.length > 0 ? lines[lines.length - 1] : undefined;
+}
+
+function truncateDisplayText(text: string | undefined, limit = STATUS_LIST_TEXT_LIMIT): string | undefined {
+	if (typeof text !== "string" || !text.trim()) return undefined;
+	const normalized = text.trim();
+	return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+function summarizeAsyncFailure(result: SubagentModeRunResult, fallback: string): string {
+	const lines = result.results
+		.map((child, index) => {
+			if (child.status !== "failed" && !child.error) return undefined;
+			const label = `${child.agent || DEFAULT_ORCHESTRATOR_CHILD_AGENT}[${index}]`;
+			const reason = child.error || lastNonEmptyLine(child.finalText) || child.status;
+			return `${label}: ${reason}`;
+		})
+		.filter((line): line is string => Boolean(line));
+	return truncateDisplayText(lines.join("\n") || fallback, ASYNC_ERROR_SUMMARY_LIMIT) ?? fallback;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -993,10 +1015,15 @@ function formatRunList(
 	childLookup?: (runId: string) => OrchestratorChildSessionRecord[],
 ): string {
 	if (runs.length === 0) return `No subagent orchestrator runs found for mode ${ownerModeId}.`;
+	const visibleRuns = runs.slice(0, STATUS_LIST_LIMIT);
 	const lines = [`Subagent orchestrator runs for mode ${ownerModeId}:`, ""];
-	for (const run of runs) {
+	if (runs.length > visibleRuns.length) {
+		lines.push(`Showing ${visibleRuns.length} of ${runs.length} runs. Use action: "get" with a runId for full details.`);
+		lines.push("");
+	}
+	for (const run of visibleRuns) {
 		lines.push(`- ${run.orchestratorRunId} | ${run.status} | ${run.requestShape} | async=${run.async} | context=${run.context} | origin=${normalizeRunOrigin(run.origin)}${run.agent ? ` | agent=${run.agent}` : ""}`);
-		lines.push(`  task: ${run.taskSummary}`);
+		lines.push(`  task: ${truncateDisplayText(run.taskSummary) ?? run.taskSummary}`);
 		lines.push(`  children: ${run.activeChildCount ?? 0}/${run.childSessionCount ?? 0} running | queued handbacks: ${run.queuedHandbackCount ?? 0}`);
 		if (run.selectedChildIndex !== undefined) lines.push(`  focused child: [${run.selectedChildIndex}]`);
 		const children = childLookup?.(run.orchestratorRunId) ?? [];
@@ -1014,10 +1041,31 @@ function formatRunList(
 				if (view) lines.push(`      view: ${view}`);
 			}
 		}
-		if (run.resultSummary) lines.push(`  result: ${run.resultSummary}`);
-		if (run.error) lines.push(`  error: ${run.error}`);
+		const resultSummary = truncateDisplayText(run.resultSummary);
+		const error = truncateDisplayText(run.error);
+		if (resultSummary) lines.push(`  result: ${resultSummary}`);
+		if (error) lines.push(`  error: ${error}`);
 	}
 	return lines.join("\n");
+}
+
+function summarizeRunForListDetails(run: OrchestratorRunRecord): Record<string, unknown> {
+	return {
+		orchestratorRunId: run.orchestratorRunId,
+		status: run.status,
+		requestShape: run.requestShape,
+		async: run.async,
+		context: run.context,
+		origin: normalizeRunOrigin(run.origin),
+		...(run.agent ? { agent: run.agent } : {}),
+		taskSummary: truncateDisplayText(run.taskSummary) ?? run.taskSummary,
+		childSessionCount: run.childSessionCount ?? 0,
+		activeChildCount: run.activeChildCount ?? 0,
+		queuedHandbackCount: run.queuedHandbackCount ?? 0,
+		...(run.selectedChildIndex !== undefined ? { selectedChildIndex: run.selectedChildIndex } : {}),
+		...(truncateDisplayText(run.resultSummary) ? { resultSummary: truncateDisplayText(run.resultSummary) } : {}),
+		...(truncateDisplayText(run.error) ? { error: truncateDisplayText(run.error) } : {}),
+	};
 }
 
 function formatRunDetails(run: OrchestratorRunRecord, children: OrchestratorChildSessionRecord[], handbacks: OrchestratorHandbackRecord[]): string {
@@ -1287,6 +1335,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	let latestCtx: ExtensionContext | null = null;
 	let queuedHandbackFlushTimer: ReturnType<typeof setTimeout> | null = null;
 	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
+	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const children = state.listChildSessionsByRun(runId);
@@ -1328,6 +1377,52 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			eventType: typeof event.type === "string" ? event.type : "unknown",
 			event,
 		});
+	}
+
+	function clearPendingTextDeltaState(childSessionId: string): void {
+		const pendingFlush = pendingTextDeltaFlushes.get(childSessionId);
+		if (!pendingFlush) return;
+		if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
+		pendingTextDeltaFlushes.delete(childSessionId);
+	}
+
+	function flushPendingTextDeltaState(childSessionId: string): void {
+		const pendingFlush = pendingTextDeltaFlushes.get(childSessionId);
+		if (!pendingFlush) return;
+		if (pendingFlush.timer) {
+			clearTimeout(pendingFlush.timer);
+			pendingFlush.timer = null;
+		}
+		const text = pendingFlush.chunks.join("");
+		pendingFlush.chunks = [];
+		if (!text) {
+			pendingTextDeltaFlushes.delete(childSessionId);
+			return;
+		}
+		const child = state.getChildSession(childSessionId);
+		if (!child || isTerminal(child.status)) {
+			pendingTextDeltaFlushes.delete(childSessionId);
+			return;
+		}
+		state.updateChildSession(childSessionId, {
+			status: child.status === "cancelled" ? child.status : "running",
+			updatedAt: Date.now(),
+			recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), text]),
+		});
+		refreshRunAggregates(pendingFlush.runId);
+	}
+
+	function scheduleTextDeltaStateFlush(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): void {
+		const delta = typeof event.delta === "string" ? event.delta : "";
+		if (!delta) return;
+		const pendingFlush = pendingTextDeltaFlushes.get(child.childSessionId) ?? { runId: child.runId, chunks: [], timer: null };
+		pendingFlush.chunks.push(delta);
+		pendingFlush.runId = child.runId;
+		if (!pendingFlush.timer) {
+			pendingFlush.timer = setTimeout(() => flushPendingTextDeltaState(child.childSessionId), TEXT_DELTA_STATE_FLUSH_INTERVAL_MS);
+			pendingFlush.timer.unref?.();
+		}
+		pendingTextDeltaFlushes.set(child.childSessionId, pendingFlush);
 	}
 
 	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
@@ -1412,6 +1507,14 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			return;
 		}
 		appendNodeLogForChild(child, event);
+		if (event.type === SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
+			scheduleTextDeltaStateFlush(child, event);
+			return;
+		}
+		if (event.type === SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT || event.type === SUBAGENT_MODE_CHILD_COMPLETE_EVENT || event.type === SUBAGENT_MODE_CHILD_CANCELLED_EVENT || event.type === SUBAGENT_MODE_CHILD_ERROR_EVENT) {
+			flushPendingTextDeltaState(child.childSessionId);
+			clearPendingTextDeltaState(child.childSessionId);
+		}
 		const updated = updateChildSessionFromEvent(child, event);
 		if (updated?.sessionFile) {
 			bindStickyUserSubagentSessionToRun(runId, {
@@ -2131,6 +2234,10 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		latestCtx?.ui.setEditorComponent(undefined);
 		latestCtx = null;
 		pending.clear();
+		for (const pendingFlush of pendingTextDeltaFlushes.values()) {
+			if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
+		}
+		pendingTextDeltaFlushes.clear();
 		clearQueuedHandbackFlushTimer();
 		clearUiStatusTimer();
 		clearRunMessageSnapshots();
@@ -2386,7 +2493,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	const forwardLoggedChildEvent = (data: unknown): void => {
 		const event = data as LoggedChildEvent & { requestId?: unknown };
 		if (typeof event.requestId !== "string") return;
-		state.updateRun(event.requestId, { updatedAt: Date.now() });
+		if (event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
+			state.updateRun(event.requestId, { updatedAt: Date.now() });
+		}
 		handleChildEvent(event.requestId, event);
 	};
 
@@ -2475,12 +2584,14 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			.filter(Boolean)
 			.join("\n\n---\n\n")
 			|| `${result.mode} ${status}`;
+		const errorSummary = status === "failed" ? summarizeAsyncFailure(result, summary) : undefined;
+		const displaySummary = errorSummary ?? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary;
 		state.updateRun(run.orchestratorRunId, {
 			status,
 			updatedAt: Date.now(),
 			completedAt: Date.now(),
 			resultSummary: summary,
-			...(status === "failed" ? { error: summary } : {}),
+			...(errorSummary ? { error: errorSummary } : {}),
 		});
 		finalizeChildrenFromResults(
 			run.orchestratorRunId,
@@ -2499,7 +2610,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			orchestratorRunId: run.orchestratorRunId,
 			ownerModeId: run.ownerModeId,
 			status,
-			summary,
+			summary: displaySummary,
 			underlyingRunId: payload.runId,
 		});
 		if (status !== "cancelled") {
@@ -2509,7 +2620,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				status,
 				success: status === "complete",
 				cancelled: status === "cancelled",
-				summary,
+				summary: displaySummary,
 				results: result.results.map((r) => ({
 					agent: r.agent,
 					output: r.finalText,
@@ -2555,19 +2666,21 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (!run) return;
 		const status = toRunStatus(event.status, event.success, event.cancelled);
 		const summary = event.summary ?? `${event.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT} ${status}`;
+		const errorSummary = status === "failed" ? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary : undefined;
+		const displaySummary = errorSummary ?? truncateDisplayText(summary, ASYNC_ERROR_SUMMARY_LIMIT) ?? summary;
 		state.updateRun(run.orchestratorRunId, {
 			status,
 			updatedAt: Date.now(),
 			completedAt: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
 			resultSummary: summary,
-			...(status === "failed" ? { error: summary } : {}),
+			...(errorSummary ? { error: errorSummary } : {}),
 		});
 		finalizeChildrenFromResults(run.orchestratorRunId, event.results, summary, status, typeof event.timestamp === "number" ? event.timestamp : Date.now());
 		pi.appendEntry(ORCHESTRATOR_COMPLETE_ENTRY_TYPE, {
 			orchestratorRunId: run.orchestratorRunId,
 			ownerModeId: run.ownerModeId,
 			status,
-			summary,
+			summary: displaySummary,
 			underlyingRunId: event.id,
 		});
 		if (status !== "cancelled") {
@@ -2576,7 +2689,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		if (latestCtx?.hasUI && status === "failed") {
 			latestCtx.ui.notify(
-				formatBackgroundFailureNotification(run.agent ?? event.agent, summary),
+				formatBackgroundFailureNotification(run.agent ?? event.agent, displaySummary),
 				"warning",
 			);
 		}
@@ -2686,7 +2799,10 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				const runs = state.listOwnedRuns(currentModeId);
 				return successText(
 					formatRunList(runs, currentModeId, (runId) => state.listChildSessionsByRun(runId)),
-					{ runs },
+					{
+						totalRuns: runs.length,
+						runs: runs.slice(0, STATUS_LIST_LIMIT).map(summarizeRunForListDetails),
+					},
 				);
 			}
 			if (action === "tree") {
