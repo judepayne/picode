@@ -393,6 +393,7 @@ What each key does:
 - `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `-` to leave it unset.
 - `model` — the preferred model. Use `-` to leave it unset.
 - `extensions` — subagent cards only: additional child extension paths to load on top of picode's default child extension set.
+- `maxSubagentDepth` — optional delegation depth cap. If omitted, the current inherited/default cap applies. `0` means the agent/subagent may run but cannot delegate further.
 
 `model` and `thinking` are optional. If you leave them out, leave them blank, or set them to `-`, picode falls back to your current Pi settings, which is useful if you want the same agent to run on different models depending on context.
 
@@ -405,6 +406,8 @@ Tool-selection semantics differ slightly by card type:
 - in both cases, omitted `ban_tools` means no subtraction
 
 For delegated subagents, inherited tools are still limited by what the child runtime actually loads. If a parent has a tool that the child runtime does not load, the child simply ignores that name.
+
+Depth caps are inherited and only get stricter as delegation nests: a child-specific `maxSubagentDepth` is bounded by the parent/current cap, and omitted values inherit that cap.
 
 Subagent cards can opt into extra child extensions without replacing picode's default child extension set. Use a single path or an inline comma list:
 

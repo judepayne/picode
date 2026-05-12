@@ -38,6 +38,14 @@ describe("readNamedAgentMaxSubagentDepthFromCards", () => {
 });
 
 describe("resolveDelegatedRunMaxSubagentDepth", () => {
+	test("uses the package default when no mode or child cap is configured", () => {
+		assert.strictEqual(resolveDelegatedRunMaxSubagentDepth({ currentDepth: 0 }), 2);
+	});
+
+	test("omitted child max inherits the parent mode cap", () => {
+		assert.strictEqual(resolveDelegatedRunMaxSubagentDepth({ currentDepth: 0, parentModeMaxSubagentDepth: 1 }), 1);
+	});
+
 	test("treats child max=0 as allow self but forbid further delegation", () => {
 		assert.strictEqual(resolveDelegatedRunMaxSubagentDepth({ currentDepth: 0, childAgentMaxSubagentDepth: 0 }), 1);
 	});

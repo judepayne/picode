@@ -132,7 +132,7 @@ Implement the requested change directly and finish unless blocked.
 | `bash` | `full` or `read-only` |
 | `thinking` | Preferred thinking level; use `-` to leave unset |
 | `model` | Preferred model; use `-` to leave unset |
-| `maxSubagentDepth` | Depth ceiling used by the delegation stack |
+| `maxSubagentDepth` | Optional delegation depth cap. If omitted, the inherited/default cap applies; `0` allows the agent to run but prevents further delegation. |
 
 The markdown body is the real instruction payload for the mode.
 

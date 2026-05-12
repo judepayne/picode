@@ -15,6 +15,24 @@ import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
+import {
+	EVENT_CHILD_CANCELLED as SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
+	EVENT_CHILD_COMPLETE as SUBAGENT_MODE_CHILD_COMPLETE_EVENT,
+	EVENT_CHILD_ERROR as SUBAGENT_MODE_CHILD_ERROR_EVENT,
+	EVENT_CHILD_PROGRESS as SUBAGENT_MODE_CHILD_PROGRESS_EVENT,
+	EVENT_CHILD_STARTED as SUBAGENT_MODE_CHILD_STARTED_EVENT,
+	EVENT_CHILD_TEXT_DELTA as SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT,
+	EVENT_CHILD_TEXT_FINAL as SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT,
+	EVENT_CHILD_THINKING_END as SUBAGENT_MODE_CHILD_THINKING_END_EVENT,
+	EVENT_CHILD_THINKING_START as SUBAGENT_MODE_CHILD_THINKING_START_EVENT,
+	EVENT_CHILD_TOOL_END as SUBAGENT_MODE_CHILD_TOOL_END_EVENT,
+	EVENT_CHILD_TOOL_START as SUBAGENT_MODE_CHILD_TOOL_START_EVENT,
+	EVENT_MODE_CANCEL as SUBAGENT_MODE_CANCEL_EVENT,
+	EVENT_MODE_REQUEST as SUBAGENT_MODE_REQUEST_EVENT,
+	EVENT_MODE_REQUEST_RESPONSE as SUBAGENT_MODE_REQUEST_RESPONSE_EVENT,
+	EVENT_MODE_REQUEST_STARTED as SUBAGENT_MODE_REQUEST_STARTED_EVENT,
+	EVENT_RUN_COMPLETE as SUBAGENT_MODE_RUN_COMPLETE_EVENT,
+} from "../subagent-mode/types.ts";
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
 import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
@@ -60,23 +78,6 @@ const SUBAGENT_STARTED_EVENT = "subagent:started";
 const SUBAGENT_COMPLETE_EVENT = "subagent:complete";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
 
-// Runner contract — delegation flows through agent/extensions/subagent-mode/.
-const SUBAGENT_MODE_REQUEST_EVENT = "subagent:mode:request";
-const SUBAGENT_MODE_REQUEST_STARTED_EVENT = "subagent:mode:request.started";
-const SUBAGENT_MODE_REQUEST_RESPONSE_EVENT = "subagent:mode:request.response";
-const SUBAGENT_MODE_CANCEL_EVENT = "subagent:mode:cancel";
-const SUBAGENT_MODE_CHILD_STARTED_EVENT = "subagent:mode:child.started";
-const SUBAGENT_MODE_CHILD_THINKING_START_EVENT = "subagent:mode:child.thinking.start";
-const SUBAGENT_MODE_CHILD_THINKING_END_EVENT = "subagent:mode:child.thinking.end";
-const SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT = "subagent:mode:child.text.delta";
-const SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT = "subagent:mode:child.text.final";
-const SUBAGENT_MODE_CHILD_TOOL_START_EVENT = "subagent:mode:child.tool.start";
-const SUBAGENT_MODE_CHILD_TOOL_END_EVENT = "subagent:mode:child.tool.end";
-const SUBAGENT_MODE_CHILD_PROGRESS_EVENT = "subagent:mode:child.progress";
-const SUBAGENT_MODE_CHILD_ERROR_EVENT = "subagent:mode:child.error";
-const SUBAGENT_MODE_CHILD_COMPLETE_EVENT = "subagent:mode:child.complete";
-const SUBAGENT_MODE_CHILD_CANCELLED_EVENT = "subagent:mode:child.cancelled";
-const SUBAGENT_MODE_RUN_COMPLETE_EVENT = "subagent:mode:run.complete";
 const TEXT_DELTA_STATE_FLUSH_INTERVAL_MS = 500;
 const STATUS_LIST_LIMIT = 10;
 const STATUS_LIST_TEXT_LIMIT = 300;

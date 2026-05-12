@@ -73,6 +73,15 @@ Child runs are launched with an explicit extension set so the child environment 
 
 It carries delegation identity through environment variables so nested delegation can still be tracked as a tree instead of degenerating into unrelated child runs.
 
+The depth/identity env contract is:
+
+| Env var | Meaning |
+| --- | --- |
+| `PI_SUBAGENT_DEPTH` | Current nesting depth (`0` for the top-level agent process). |
+| `PI_SUBAGENT_MAX_DEPTH` | Absolute depth ceiling; the runner refuses to spawn another child when `depth >= max`. |
+| `PI_SUBAGENT_TOP_RUN_ID` | Root delegated run id, propagated unchanged through nested runs. |
+| `PI_SUBAGENT_PARENT_CHILD_ID` | Direct parent child id for grandchild lineage. |
+
 ---
 
 ## Should you use it directly?

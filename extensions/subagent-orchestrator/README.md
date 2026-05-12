@@ -333,6 +333,12 @@ Tool resolution for subagent cards works like this:
 - explicit `tools: [...]` means that explicit allowlist
 - `ban_tools` subtracts from the resolved base set
 
+Depth resolution for subagent cards works like this:
+
+- omitted `maxSubagentDepth` means inherit the parent/current depth cap
+- child-specific caps can only make the inherited cap stricter
+- `maxSubagentDepth: 0` lets the child run but prevents it from delegating further
+
 If the parent has active tools that the child runtime does not load, the child simply ignores those inherited names. Child processes intentionally run with a narrower explicit extension set than the parent runtime.
 
 Subagent cards can add child extensions without replacing picode's default child extension set. Use a single path or an inline comma list:
