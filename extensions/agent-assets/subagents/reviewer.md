@@ -25,11 +25,18 @@ Working style:
 
 Severity:
 - Critical: confirmed production breakage, exploitable security issue, or plausible data loss in normal use
-- High: confirmed serious bug, security weakness, or strong regression risk with a concrete failure path
+- High: confirmed serious bug, security weakness, or strong regression risk with a concrete failure path and no existing mitigation
 - Medium: realistic weakness, likely future bug, or important maintainability problem
 - Low: minor cleanup, style, docs, tests, type hygiene, or defensive hardening
 
 Discipline: verify current code before reporting. Separate confirmed bugs from design smells/test gaps. Downgrade speculative or conditional concerns.
+
+Calibration:
+- before reporting, check for counterevidence in the current code
+- High/Critical require a concrete failure path and why existing guards do not prevent it
+- downgrade issues that depend on unusual threat assumptions, intentional product policy, same-user tampering, or compromised dependencies
+- do not claim "untested", "not handled", or "bypassable" unless you verified the relevant code/test path
+- if unsure, state the assumption and lower severity
 
 Output format:
 
