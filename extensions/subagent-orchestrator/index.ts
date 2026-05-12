@@ -82,6 +82,25 @@ const STATUS_LIST_LIMIT = 10;
 const STATUS_LIST_TEXT_LIMIT = 300;
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
 
+function formatUnknownError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function warnOrchestratorDiagnostic(message: string, error?: unknown): void {
+	const suffix = error === undefined ? "" : `: ${formatUnknownError(error)}`;
+	console.warn(`[subagent-orchestrator] ${message}${suffix}`);
+}
+
+function safeEventHandler(eventName: string, handler: (data: unknown) => void): (data: unknown) => void {
+	return (data: unknown): void => {
+		try {
+			handler(data);
+		} catch (error) {
+			warnOrchestratorDiagnostic(`event handler ${eventName} failed`, error);
+		}
+	};
+}
+
 interface SubagentModeChildResult {
 	childId: string;
 	agent: string;
@@ -1331,6 +1350,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	});
 
 	const pending = new Map<string, PendingRequest>();
+	const asyncFallbackWarnings = new Set<string>();
 	const uiStatusKey = "subagent-orchestrator";
 	let latestCtx: ExtensionContext | null = null;
 	let queuedHandbackFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1767,6 +1787,13 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		refreshRunAggregates(runId);
 	}
 
+	function warnAsyncFallbackOnce(filePath: string, error: unknown): void {
+		const key = `${filePath}:${formatUnknownError(error)}`;
+		if (asyncFallbackWarnings.has(key)) return;
+		asyncFallbackWarnings.add(key);
+		warnOrchestratorDiagnostic(`could not read async completion artifact ${filePath}`, error);
+	}
+
 	function readAsyncCompletionFallback(run: OrchestratorRunRecord): AsyncCompleteEvent | undefined {
 		if (!run.asyncDir) return undefined;
 		const resultPath = path.join(run.asyncDir, "result.json");
@@ -1801,7 +1828,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 						sessionFile: result.results?.[0]?.sessionFile,
 					};
 				}
-			} catch {
+			} catch (error) {
+				warnAsyncFallbackOnce(resultPath, error);
 				// fall through to legacy fallback
 			}
 		}
@@ -1840,7 +1868,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				asyncDir: run.asyncDir,
 				sessionFile: status.sessionFile,
 			};
-		} catch {
+		} catch (error) {
+			warnAsyncFallbackOnce(statusPath, error);
 			return undefined;
 		}
 	}
@@ -2474,7 +2503,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { orchestratorRunId, response };
 	}
 
-	pi.events.on(SUBAGENT_MODE_REQUEST_STARTED_EVENT, (data) => {
+	pi.events.on(SUBAGENT_MODE_REQUEST_STARTED_EVENT, safeEventHandler(SUBAGENT_MODE_REQUEST_STARTED_EVENT, (data) => {
 		const requestId = (data as { requestId?: unknown })?.requestId;
 		if (typeof requestId !== "string") return;
 		const existingRun = state.getRun(requestId);
@@ -2488,16 +2517,16 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			content: [{ type: "text", text: `Delegated ${agentLabel} run started.` }],
 			details: { status: "running" },
 		});
-	});
+	}));
 
-	const forwardLoggedChildEvent = (data: unknown): void => {
+	const forwardLoggedChildEvent = safeEventHandler("subagent:mode:child.*", (data: unknown): void => {
 		const event = data as LoggedChildEvent & { requestId?: unknown };
 		if (typeof event.requestId !== "string") return;
 		if (event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
 			state.updateRun(event.requestId, { updatedAt: Date.now() });
 		}
 		handleChildEvent(event.requestId, event);
-	};
+	});
 
 	pi.events.on(SUBAGENT_MODE_CHILD_STARTED_EVENT, forwardLoggedChildEvent);
 	pi.events.on(SUBAGENT_MODE_CHILD_THINKING_START_EVENT, forwardLoggedChildEvent);
@@ -2510,7 +2539,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	pi.events.on(SUBAGENT_MODE_CHILD_COMPLETE_EVENT, forwardLoggedChildEvent);
 	pi.events.on(SUBAGENT_MODE_CHILD_CANCELLED_EVENT, forwardLoggedChildEvent);
 
-	pi.events.on(SUBAGENT_MODE_CHILD_PROGRESS_EVENT, (data) => {
+	pi.events.on(SUBAGENT_MODE_CHILD_PROGRESS_EVENT, safeEventHandler(SUBAGENT_MODE_CHILD_PROGRESS_EVENT, (data) => {
 		const evt = data as LoggedChildEvent & {
 			requestId?: unknown;
 			currentTool?: unknown;
@@ -2532,9 +2561,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			}],
 			details: { status: "running" },
 		});
-	});
+	}));
 
-	pi.events.on(SUBAGENT_MODE_REQUEST_RESPONSE_EVENT, (data) => {
+	pi.events.on(SUBAGENT_MODE_REQUEST_RESPONSE_EVENT, safeEventHandler(SUBAGENT_MODE_REQUEST_RESPONSE_EVENT, (data) => {
 		const payload = data as {
 			requestId?: unknown;
 			result?: SubagentModeRunResult | null;
@@ -2560,9 +2589,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					: undefined,
 			),
 		);
-	});
+	}));
 
-	pi.events.on(SUBAGENT_MODE_RUN_COMPLETE_EVENT, (data) => {
+	pi.events.on(SUBAGENT_MODE_RUN_COMPLETE_EVENT, safeEventHandler(SUBAGENT_MODE_RUN_COMPLETE_EVENT, (data) => {
 		const payload = data as {
 			requestId?: unknown;
 			runId?: unknown;
@@ -2632,9 +2661,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			} as AsyncCompleteEvent);
 			flushQueuedHandbacks(latestCtx);
 		}
-	});
+	}));
 
-	pi.events.on(SUBAGENT_STARTED_EVENT, (data) => {
+	pi.events.on(SUBAGENT_STARTED_EVENT, safeEventHandler(SUBAGENT_STARTED_EVENT, (data) => {
 		const event = data as AsyncStartedEvent;
 		if (typeof event.id !== "string") return;
 		pi.events.emit(SUBAGENT_NOTIFY_SUPPRESS_EVENT, { asyncId: event.id });
@@ -2657,9 +2686,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			if (updated) appendChildEntry(updated, "updated");
 		}
 		refreshRunAggregates(run.orchestratorRunId);
-	});
+	}));
 
-	pi.events.on(SUBAGENT_COMPLETE_EVENT, (data) => {
+	pi.events.on(SUBAGENT_COMPLETE_EVENT, safeEventHandler(SUBAGENT_COMPLETE_EVENT, (data) => {
 		const event = data as AsyncCompleteEvent;
 		if (typeof event.id !== "string") return;
 		const run = state.findRunByUnderlyingId(event.id);
@@ -2693,7 +2722,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				"warning",
 			);
 		}
-	});
+	}));
 
 	pi.registerTool({
 		name: "delegate_subagent",

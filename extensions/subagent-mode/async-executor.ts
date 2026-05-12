@@ -83,6 +83,11 @@ export function isAsyncAvailable(): boolean {
 
 const PRIVATE_DIR_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
+const MAX_MANIFEST_DIAGNOSTICS = 20;
+
+function formatUnknownError(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
 
 function ensurePrivateDir(dirPath: string): void {
 	fs.mkdirSync(dirPath, { recursive: true, mode: PRIVATE_DIR_MODE });
@@ -181,6 +186,7 @@ export function watchCompletion(runId: string, deps: WatchCompletionDeps): Compl
 	const startedAt = Date.now();
 	let stopped = false;
 	let fired = false;
+	let lastReadErrorMessage: string | undefined;
 
 	const stopTimer = (timer: NodeJS.Timeout | undefined): void => {
 		if (timer) clearInterval(timer);
@@ -204,8 +210,14 @@ export function watchCompletion(runId: string, deps: WatchCompletionDeps): Compl
 			stopped = true;
 			stopTimer(timer);
 			deps.onComplete(runId, parsed.result);
-		} catch {
-			// Partial write; try again on next tick.
+		} catch (error) {
+			// Partial write or corrupted artifact; try again on next tick, but keep
+			// a diagnostic so persistent failures do not degrade into opaque timeouts.
+			const message = formatUnknownError(error);
+			if (message !== lastReadErrorMessage) {
+				lastReadErrorMessage = message;
+				console.warn(`[subagent-mode] failed to read async result ${resultPath}: ${message}`);
+			}
 		}
 	};
 
@@ -301,11 +313,27 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 	};
 	writeManifest(manifest);
 
+	const recordDiagnostic = (message: string, error?: unknown): void => {
+		const suffix = error === undefined ? "" : `: ${formatUnknownError(error)}`;
+		manifest.diagnostics = [...(manifest.diagnostics ?? []), `${message}${suffix}`].slice(-MAX_MANIFEST_DIAGNOSTICS);
+		manifest.updatedAt = Date.now();
+		try {
+			writeManifest(manifest);
+		} catch {
+			// If even the manifest cannot be updated, there is no more durable
+			// channel available in the detached child.
+		}
+	};
+
 	const eventsPath = asyncRunEventsPath(runId);
 	const eventsStream = fs.createWriteStream(eventsPath, { flags: "a", mode: PRIVATE_FILE_MODE });
-	eventsStream.on("error", (err) => {
-		// Best-effort fallback: write errors should not crash the detached child.
-		// The parent will eventually time out if events are lost.
+	let recordedEventsStreamError = false;
+	eventsStream.on("error", (error) => {
+		// Best-effort fallback: write errors should not crash the detached child,
+		// but they should be visible in run.json for post-mortem debugging.
+		if (recordedEventsStreamError) return;
+		recordedEventsStreamError = true;
+		recordDiagnostic("async event stream write failed", error);
 	});
 
 	// Lazy-import to avoid circular type resolution at module load time.
@@ -321,8 +349,8 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 
 					try {
 						eventsStream.write(`${JSON.stringify(event)}\n`);
-					} catch {
-						// best effort
+					} catch (error) {
+						recordDiagnostic("async event write threw", error);
 					}
 					// Reflect child lifecycle in manifest
 					if ("childId" in event && event.type === "subagent:mode:child.started") {

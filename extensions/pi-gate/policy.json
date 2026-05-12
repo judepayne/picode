@@ -53,10 +53,21 @@
       "wget*|*zsh*": "ask",
       "chmod * 777*": "ask",
       "chown *": "ask",
-      "rm -rf /": "deny",
-      "rm -fr /": "deny",
+      "rm *--no-preserve-root*": "deny",
+      "rm -rf /*": "deny",
+      "rm -fr /*": "deny",
+      "rm -r -f /*": "deny",
+      "rm -f -r /*": "deny",
+      "rm -Rf /*": "deny",
+      "rm -rF /*": "deny",
+      "rm --recursive --force /*": "deny",
+      "rm --force --recursive /*": "deny",
       "rm -rf ~*": "deny",
-      "rm -fr ~*": "deny"
+      "rm -fr ~*": "deny",
+      "rm -r -f ~*": "deny",
+      "rm -f -r ~*": "deny",
+      "rm -Rf ~*": "deny",
+      "rm -rF ~*": "deny"
     }
   },
   "profiles": {

@@ -280,6 +280,7 @@ export interface AsyncRunManifest {
 	endedAt: number | null;
 	spec: RunSpec;
 	children: AsyncChildManifestEntry[];
+	diagnostics?: string[];
 }
 
 export interface AsyncResultFile {
