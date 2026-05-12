@@ -178,6 +178,15 @@ describe("normalizer: stability invariants", () => {
 		assert.throws(() => parseRawLine("{ bad }"), /malformed JSON line/);
 	});
 
+	test("text buffer is capped when text_end never arrives", () => {
+		const state = createNormalizerState();
+		const id = identity();
+		const largeDelta = `${"a".repeat(50)}${"b".repeat(1_000_000)}`;
+		normalizeRawEvent({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: largeDelta } }, id, state);
+		assert.equal(state.textBuffer.length, 1_000_000);
+		assert.equal(state.textBuffer, "b".repeat(1_000_000));
+	});
+
 	test("tool end without toolName clears current tool state", () => {
 		const state = createNormalizerState();
 		const id = identity();

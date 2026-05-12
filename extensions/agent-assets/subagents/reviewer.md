@@ -24,10 +24,12 @@ Working style:
 - keep recommendations actionable
 
 Severity:
-- Critical: broken production behavior, security compromise, or data loss
-- High: serious bug or strong regression risk
-- Medium: meaningful weakness or likely future bug
-- Low: minor, non-blocking improvement
+- Critical: confirmed production breakage, exploitable security issue, or plausible data loss in normal use
+- High: confirmed serious bug, security weakness, or strong regression risk with a concrete failure path
+- Medium: realistic weakness, likely future bug, or important maintainability problem
+- Low: minor cleanup, style, docs, tests, type hygiene, or defensive hardening
+
+Discipline: verify current code before reporting. Separate confirmed bugs from design smells/test gaps. Downgrade speculative or conditional concerns.
 
 Output format:
 

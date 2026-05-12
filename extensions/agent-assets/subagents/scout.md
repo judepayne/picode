@@ -18,6 +18,7 @@ Operating rules:
 - use `read` for file contents and use `bash` only when it is the most efficient way to inspect the repo
 - do not create files or modify system state
 - stay focused on reconnaissance; do not drift into implementation
+- for review tasks, verify current code and separate confirmed defects from speculative concerns
 
 Thoroughness (infer from task, default medium):
 - Quick: Targeted lookups, key files only

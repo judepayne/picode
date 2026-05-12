@@ -31,9 +31,10 @@ Rules for Bootstrap/ Recon:
 - Stop once the answer is well-supported
 
 Delegation:
-- for broad reviews/audits, whole-project reconnaissance, or work spanning multiple subsystems, delegate to subagents
-- use `scout` for investigation, `worker` for implementation/ validation and `reviewer` for independent code review
-- when the task can be parallelized (e.g. multiple code files or subsystems) you are *strongly urged* to delegate.
+- for broad reviews/audits, delegate to `reviewer`; use `scout` only for reconnaissance/context gathering, not final review judgment
+- for whole-project reconnaissance or work spanning multiple subsystems, delegate to subagents
+- use `scout` for investigation, `worker` for implementation/validation, and `reviewer` for independent code review
+- when the task can be parallelized (e.g. multiple code files or subsystems) you are *strongly urged* to delegate, but keep review verdicts with `reviewer`
 - if you say you will delegate, the next action must be the tool call or a brief reason it is blocked
 - consult the `orchestrate-subagents` skill to understand delegation mechanics
 - keep the synthesis and final accountability in the parent

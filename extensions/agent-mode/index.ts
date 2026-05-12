@@ -390,11 +390,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 		for (const diagnostic of diagnostics) {
 			const message = diagnostic.filePath ? `${diagnostic.message} (${diagnostic.filePath})` : diagnostic.message;
-			if (diagnostic.severity === "error") {
-				loadWarnings.push(message);
-			} else {
-				loadWarnings.push(message);
-			}
+			loadWarnings.push(`${diagnostic.severity}: ${message}`);
 		}
 
 		for (const card of cards) {
@@ -504,7 +500,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 	async function applyCurrentMode(
 		ctx: ExtensionContext,
-		options?: { persist?: boolean },
+		options?: { persist?: boolean; notify?: boolean },
 	): Promise<void> {
 		const current = getCurrentMode();
 		updateStatus(ctx);

@@ -268,13 +268,8 @@ function streamAndCollect(
 
 		proc.stderr?.on("data", (chunk: Buffer) => {
 			const text = chunk.toString("utf-8");
-			if (stderrBuf.length + text.length > 20000) {
-				// Cap accumulation at ~20KB to prevent unbounded memory growth.
-				const overflow = stderrBuf.length + text.length - 20000;
-				stderrBuf = stderrBuf.slice(overflow) + text;
-			} else {
-				stderrBuf += text;
-			}
+			// Keep the most recent ~20KB so noisy stderr cannot grow unbounded.
+			stderrBuf = (stderrBuf + text).slice(-20000);
 		});
 
 		proc.once("error", (error) => {

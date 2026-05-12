@@ -46,6 +46,8 @@ import {
 	type UsageTotals,
 } from "./types.ts";
 
+const MAX_TEXT_BUFFER_CHARS = 1_000_000;
+
 // ============================================================================
 // Raw event shapes (narrow; only fields we consume are typed)
 // ============================================================================
@@ -175,6 +177,10 @@ function truncate(value: string, max: number): string {
 	return `${value.slice(0, max - 1)}…`;
 }
 
+function appendTextBuffer(state: NormalizerState, delta: string): void {
+	state.textBuffer = (state.textBuffer + delta).slice(-MAX_TEXT_BUFFER_CHARS);
+}
+
 function extractAssistantTextFromMessage(message: RawMessage | undefined): string | undefined {
 	if (!message?.content) return undefined;
 	const parts = message.content
@@ -266,7 +272,7 @@ function handleMessageUpdate(
 		case "text_delta": {
 			const delta = typeof inner.delta === "string" ? inner.delta : "";
 			if (!delta) return [];
-			state.textBuffer += delta;
+			appendTextBuffer(state, delta);
 			return [{ type: EVENT_CHILD_TEXT_DELTA, ...baseEvent(identity), delta }];
 		}
 
