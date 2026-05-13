@@ -45,6 +45,8 @@ import { createStateStore } from "./state.ts";
 import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
 import { createSubagentStreamService, emitSubagentStreamRecord, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
 import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
+import { createTapController } from "./tap-controller.ts";
+import { buildTapRoots } from "./tap-navigation.ts";
 import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
@@ -1312,6 +1314,27 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
 	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 	const devStreamFileClosers = new Map<string, () => void>();
+	const tapController = createTapController({
+		getRoots: (ctx) => {
+			const ownerModeId = findCurrentModeId(ctx);
+			if (!ownerModeId) return [];
+			const lineage = currentSessionLineage(ctx);
+			const runs = state.listOwnedRuns(ownerModeId)
+				.filter((run) => runMatchesSessionLineage(run, lineage) && !isTerminal(run.status));
+			const rootRunIds = new Set(runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
+			const children = state.listChildSessions()
+				.filter((child) => child.ownerModeId === ownerModeId)
+				.filter((child) => childSessionMatchesSessionLineage(child, lineage))
+				.filter((child) => rootRunIds.has(child.rootRunId ?? child.runId));
+			return buildTapRoots(runs, children);
+		},
+		openStream: (childSessionId, handler) => openSubagentStream(childSessionId, handler),
+		onPoll: (ctx) => {
+			reconcileOwnedAsyncRuns(ctx);
+			flushQueuedHandbacks(ctx, { forceAgentDelivery: false });
+		},
+		warn: warnOrchestratorDiagnostic,
+	});
 
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const children = state.listChildSessionsByRun(runId);
@@ -1629,6 +1652,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			updatedAt: Date.now(),
 		});
 		refreshRunMessageSnapshot(runId);
+		tapController.refresh();
 		updateUiStatus();
 	}
 
@@ -1678,6 +1702,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			failedAgents,
 		}, (text) => runtimeCtx.ui.theme.fg("error", runtimeCtx.ui.theme.bold(text)));
 		runtimeCtx.ui.setStatus(uiStatusKey, statusText);
+		tapController.refresh();
 	}
 
 	function updateUiStatus(ctx?: ExtensionContext | null, immediate = false): void {
@@ -2190,6 +2215,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		latestCtx = ctx;
+		tapController.handleCtx(ctx);
 		state.ensureReady();
 		if (ctx.hasUI) {
 			ctx.ui.setEditorComponent((tui, theme, keybindings) => new SubagentEditor(
@@ -2209,6 +2235,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 
 	pi.on("turn_end", async (_event, ctx) => {
 		latestCtx = ctx;
+		tapController.handleCtx(ctx);
 		reconcileOwnedAsyncRuns(ctx);
 		reconcileDuplicateHandbacks(ctx);
 		flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
@@ -2217,6 +2244,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		tapController.dispose();
 		latestCtx?.ui.setStatus(uiStatusKey, undefined);
 		latestCtx?.ui.setEditorComponent(undefined);
 		latestCtx = null;
