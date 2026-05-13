@@ -42,7 +42,8 @@
     "package.json"
   ],
   "exports": {
-    "./agent-assets-contract": "./extensions/agent-assets/contract.ts"
+    "./agent-assets-contract": "./extensions/agent-assets/contract.ts",
+    "./subagent-orchestrator": "./extensions/subagent-orchestrator/index.ts"
   },
   "pi": {
     "extensions": ["./extensions"],

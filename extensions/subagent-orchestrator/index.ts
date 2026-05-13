@@ -43,6 +43,8 @@ import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, for
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
 import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
+import { createSubagentStreamService, emitSubagentStreamRecord, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
+import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
 import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
@@ -83,6 +85,8 @@ const STATUS_LIST_LIMIT = 10;
 const STATUS_LIST_TEXT_LIMIT = 300;
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
 
+export { openSubagentStream, subagentStreamTopic, createJsonlFileSubagentStreamHandler, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler };
+
 function formatUnknownError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
@@ -110,6 +114,12 @@ const DelegateSubagentParams = Type.Object({
 	], { description: "Execution context for child subagents." })),
 	childSessionId: Type.Optional(Type.String({ description: 'Explicit child session id to continue when context is "continue".' })),
 	showRunCard: Type.Optional(Type.Boolean({ description: "Show a visible subagent orchestrator run card in the UI. Defaults to false." })),
+}, { additionalProperties: false });
+
+const DevSubagentStreamToFileParams = Type.Object({
+	childSessionId: Type.String({ description: "The child session id to stream." }),
+	filePath: Type.String({ description: "JSONL file path to append sanitized stream events to." }),
+	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking boundary/summary events. Defaults to false." })),
 }, { additionalProperties: false });
 
 const DelegateSubagentStatusParams = Type.Object({
@@ -1239,6 +1249,7 @@ function formatTree(details: OrchestratorTreeDetails): string {
 export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	const state = createStateStore(path.join(process.cwd(), ".pi", "state", "subagent-orchestrator"));
 	state.ensureReady();
+	setActiveSubagentStreamService(createSubagentStreamService(pi, state));
 	modeDepthCache.clear();
 	subagentDepthCache.clear();
 	subagentModelCache.clear();
@@ -1300,6 +1311,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	let queuedHandbackFlushTimer: ReturnType<typeof setTimeout> | null = null;
 	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
 	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
+	const devStreamFileClosers = new Map<string, () => void>();
 
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const children = state.listChildSessionsByRun(runId);
@@ -1334,13 +1346,15 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	}
 
 	function appendNodeLogForChild(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorNodeLogRecord {
-		return state.appendNodeLogRecord(child.childSessionId, {
+		const record = state.appendNodeLogRecord(child.childSessionId, {
 			runId: child.runId,
 			...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),
 			timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
 			eventType: typeof event.type === "string" ? event.type : "unknown",
 			event,
 		});
+		emitSubagentStreamRecord(pi, record, child);
+		return record;
 	}
 
 	function clearPendingTextDeltaState(childSessionId: string): void {
@@ -2211,6 +2225,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
 		}
 		pendingTextDeltaFlushes.clear();
+		for (const close of devStreamFileClosers.values()) close();
+		devStreamFileClosers.clear();
 		clearQueuedHandbackFlushTimer();
 		clearUiStatusTimer();
 		clearRunMessageSnapshots();
@@ -2546,6 +2562,31 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					...(typeof details.asyncDir === "string" ? { asyncDir: details.asyncDir } : {}),
 				},
 			);
+		},
+	});
+
+	pi.registerTool({
+		name: "dev_subagent_stream_to_file",
+		label: "Dev Subagent Stream To File",
+		description: "Development helper: open a sanitized subagent stream and append events to a JSONL file.",
+		parameters: DevSubagentStreamToFileParams,
+		async execute(_toolCallId, params) {
+			if (typeof params.childSessionId !== "string" || !params.childSessionId.trim()) return errorResult("childSessionId is required.");
+			if (typeof params.filePath !== "string" || !params.filePath.trim()) return errorResult("filePath is required.");
+			const childSessionId = params.childSessionId.trim();
+			const filePath = path.resolve(process.cwd(), params.filePath.trim());
+			devStreamFileClosers.get(childSessionId)?.();
+			const close = openSubagentStream(
+				childSessionId,
+				createJsonlFileSubagentStreamHandler(filePath),
+				{ includeThinking: params.includeThinking === true },
+			);
+			devStreamFileClosers.set(childSessionId, close);
+			return successText(`Opened subagent stream ${childSessionId} to ${filePath}.`, {
+				childSessionId,
+				filePath,
+				topic: subagentStreamTopic(childSessionId),
+			});
 		},
 	});
 
