@@ -25,6 +25,7 @@
     "designer"
   ],
   "scripts": {
+    "test": "node --test \"extensions/**/*.test.ts\"",
     "build:npm": "node scripts/build-npm-package.mjs",
     "publish:npm:dry-run": "npm run build:npm && npm publish ./dist --dry-run --access public",
     "publish:npm": "npm run build:npm && npm publish ./dist --access public"
