@@ -13,7 +13,7 @@ import {
 } from "../../subagent-mode/types.ts";
 import { createStateStore } from "../state.ts";
 import { createJsonlFileSubagentStreamHandler } from "../stream-handlers.ts";
-import { createSubagentStreamService, emitSubagentStreamRecord, type SubagentStreamEvent } from "../stream.ts";
+import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";
 import type { OrchestratorChildSessionRecord } from "../types.ts";
 
 class FakeEventBus {
@@ -112,7 +112,7 @@ describe("subagent stream service", () => {
 		await flushHandlers();
 		assert.equal(events.length, 3);
 		assert.equal(events[2]?.replay, false);
-		assert.deepEqual(events[2]?.event, { type: EVENT_CHILD_TOOL_END, toolName: "read", toolCallId: "tool-1", ok: true, resultElided: true, resultSummary: "string" });
+		assert.deepEqual(events[2]?.event, { type: EVENT_CHILD_TOOL_END, toolName: "read", toolCallId: "tool-1", ok: true, resultElided: true, resultPreview: "result", resultSummary: "string" });
 
 		close();
 		const afterClose = state.appendNodeLogRecord(child.childSessionId, {
@@ -200,6 +200,25 @@ describe("subagent stream service", () => {
 		const lines = readFileSync(filePath, "utf8").trim().split("\n");
 		assert.equal(lines.length, 1);
 		assert.equal(JSON.parse(lines[0]!).event.delta, "logged");
+	});
+
+	test("replays delegated task events", async () => {
+		const state = tempState();
+		const pi = new FakePi();
+		const child = state.createChildSession(childRecord({ taskSummary: "Inspect stream code" }));
+		state.appendNodeLogRecord(child.childSessionId, {
+			runId: child.runId,
+			rootRunId: child.rootRunId,
+			timestamp: 10,
+			eventType: EVENT_SUBAGENT_TASK,
+			event: { type: EVENT_SUBAGENT_TASK, agent: "scout", task: "Inspect stream code" },
+		});
+
+		const events: SubagentStreamEvent[] = [];
+		createSubagentStreamService(pi as never, state).open(child.childSessionId, (event) => events.push(event));
+		await flushHandlers();
+		assert.equal(events.length, 1);
+		assert.deepEqual(events[0]?.event, { type: EVENT_SUBAGENT_TASK, agent: "scout", task: "Inspect stream code" });
 	});
 
 	test("elides tool args and hides thinking by default", async () => {

@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, test } from "node:test";
+import { afterEach, before, describe, test } from "node:test";
+import { initTheme } from "@mariozechner/pi-coding-agent";
 
+import { EVENT_CHILD_TEXT_DELTA } from "../../subagent-mode/types.ts";
 import { createTapController } from "../tap-controller.ts";
 import type { TapRunRoot } from "../tap-navigation.ts";
-import type { SubagentStreamEvent, SubagentStreamHandler } from "../stream.ts";
+import { EVENT_SUBAGENT_TASK, type SubagentStreamEvent, type SubagentStreamHandler } from "../stream.ts";
 
 const CTRL_SLASH = "\x1b[47;5u";
 const CTRL_DOT = "\x1b[46;5u";
 const CTRL_DOT_REPEAT = "\x1b[46;5:2u";
 const CTRL_DOT_RELEASE = "\x1b[46;5:3u";
+const CTRL_O = "\x0f";
 const ESC = "\x1b";
 const realDateNow = Date.now;
 
@@ -55,11 +58,12 @@ function ctx() {
 	let inputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
 	const widgets = new Map<string, string[] | undefined>();
 	const statuses = new Map<string, string | undefined>();
+	let toolsExpanded = false;
 	return {
 		context: {
 			hasUI: true,
 			ui: {
-				theme: { bold: (text: string) => `**${text}**`, fg: (color: string, text: string) => `<${color}>${text}</${color}>` },
+				theme: { bold: (text: string) => `**${text}**`, fg: (color: string, text: string) => `<${color}>${text}</${color}>`, bg: (color: string, text: string) => `<${color}>${text}</${color}>` },
 				onTerminalInput(handler: typeof inputHandler) {
 					inputHandler = handler;
 					return () => {
@@ -68,12 +72,18 @@ function ctx() {
 				},
 				setWidget(key: string, content: string[] | ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined) {
 					const lines = typeof content === "function"
-						? content(undefined, undefined).render(120).map((line) => line.trimEnd())
+						? content(undefined, this.theme).render(120).map((line) => line.trimEnd())
 						: content;
 					widgets.set(key, lines);
 				},
 				setStatus(key: string, text: string | undefined) {
 					statuses.set(key, text);
+				},
+				getToolsExpanded() {
+					return toolsExpanded;
+				},
+				setToolsExpanded(expanded: boolean) {
+					toolsExpanded = expanded;
 				},
 			},
 		},
@@ -85,6 +95,8 @@ function ctx() {
 	};
 }
 
+before(() => initTheme(undefined, false));
+
 describe("tap controller", () => {
 	test("ctrl slash opens at root and does not immediately enter on repeated input", () => {
 		let now = 1000;
@@ -95,7 +107,7 @@ describe("tap controller", () => {
 
 		assert.deepEqual(fake.input(CTRL_SLASH), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: <warning>**run 1**</warning> > scout 1");
-		assert.match(fake.widgets.get("subagent-orchestrator-tap")?.[0] ?? "", /^─+$/);
+		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
 
 		assert.deepEqual(fake.input(CTRL_SLASH), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: <warning>**run 1**</warning> > scout 1");
@@ -106,6 +118,7 @@ describe("tap controller", () => {
 
 		assert.deepEqual(fake.input(ESC), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: <warning>**run 1**</warning> > scout 1");
+		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
 		assert.deepEqual(fake.input(ESC), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: <warning>**run 1**</warning> > scout 1");
 		now += 301;
@@ -144,7 +157,7 @@ describe("tap controller", () => {
 			getRoots: roots,
 			openStream: (childSessionId: string, handler: SubagentStreamHandler) => {
 				opened.push(childSessionId);
-				handler({ childSessionId, runId: "run-1", cursor: "1", eventType: "event", event: {}, replay: true } satisfies SubagentStreamEvent);
+				handler({ childSessionId, runId: "run-1", cursor: "1", eventType: EVENT_SUBAGENT_TASK, event: { task: "inspect files" }, replay: true } satisfies SubagentStreamEvent);
 				return () => { closed += 1; };
 			},
 		});
@@ -155,7 +168,7 @@ describe("tap controller", () => {
 		fake.input(CTRL_SLASH);
 		assert.deepEqual(opened, ["child-1"]);
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: run 1 > <warning>**scout 1**</warning>");
-		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.[1], "event");
+		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.join("\n").includes("inspect files"), true);
 
 		controller.dispose();
 		assert.equal(closed, 1);
@@ -183,11 +196,11 @@ describe("tap controller", () => {
 		fake.input(CTRL_DOT);
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: run 1 > scout 1, <warning>**scout 2**</warning>");
 
-		handlers.get("child-1")?.({ childSessionId: "child-1", runId: "run-1", cursor: "1", eventType: "old-event", event: {}, replay: false });
+		handlers.get("child-1")?.({ childSessionId: "child-1", runId: "run-1", cursor: "1", eventType: EVENT_CHILD_TEXT_DELTA, event: { delta: "old-event" }, replay: false });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: run 1 > scout 1, <warning>**scout 2**</warning>");
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("old-event"), false);
 
-		handlers.get("child-2")?.({ childSessionId: "child-2", runId: "run-1", cursor: "2", eventType: "new-event", event: {}, replay: false });
+		handlers.get("child-2")?.({ childSessionId: "child-2", runId: "run-1", cursor: "2", eventType: EVENT_CHILD_TEXT_DELTA, event: { delta: "new-event" }, replay: false });
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("new-event"), true);
 	});
 
@@ -201,7 +214,7 @@ describe("tap controller", () => {
 			openStream: (childSessionId: string, handler: SubagentStreamHandler) => {
 				attempts += 1;
 				if (attempts === 1) throw new Error("boom");
-				handler({ childSessionId, runId: "run-1", cursor: "2", eventType: "recovered", event: {}, replay: true } satisfies SubagentStreamEvent);
+				handler({ childSessionId, runId: "run-1", cursor: "2", eventType: EVENT_CHILD_TEXT_DELTA, event: { delta: "recovered" }, replay: true } satisfies SubagentStreamEvent);
 				return () => {};
 			},
 		});
@@ -214,6 +227,28 @@ describe("tap controller", () => {
 		controller.refresh();
 		assert.equal(attempts, 2);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("recovered"), true);
+	});
+
+	test("ctrl o toggles transcript tool result expansion", () => {
+		let now = 1000;
+		Date.now = () => now;
+		const fake = ctx();
+		const controller = createTapController({
+			getRoots: roots,
+			openStream: (childSessionId: string, handler: SubagentStreamHandler) => {
+				handler({ childSessionId, runId: "run-1", cursor: "1", eventType: "subagent:mode:child.tool.start", event: { toolName: "read", toolCallId: "tool-1", command: 'read {"path":"file.ts"}' }, replay: true });
+				handler({ childSessionId, runId: "run-1", cursor: "2", eventType: "subagent:mode:child.tool.end", event: { toolName: "read", toolCallId: "tool-1", ok: true, resultPreview: "file contents" }, replay: true });
+				return () => {};
+			},
+		});
+		controller.handleCtx(fake.context as never);
+
+		fake.input(CTRL_SLASH);
+		now += 301;
+		fake.input(CTRL_SLASH);
+		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.join("\n").includes("file contents"), false);
+		assert.deepEqual(fake.input(CTRL_O), { consume: true });
+		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.join("\n").includes("file contents"), true);
 	});
 
 	test("key release and repeat events do not navigate between siblings", () => {

@@ -43,7 +43,7 @@ import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, for
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
 import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
-import { createSubagentStreamService, emitSubagentStreamRecord, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
+import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
 import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
 import { createTapController } from "./tap-controller.ts";
 import { buildTapRoots } from "./tap-navigation.ts";
@@ -2355,8 +2355,14 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			selectedChildIndex: childSessions[0]?.childIndex,
 		} satisfies OrchestratorRunRecord);
 		for (const child of childSessions) {
-			state.createChildSession(child);
-			appendChildEntry(child, "created");
+			const created = state.createChildSession(child);
+			appendNodeLogForChild(created, {
+				type: EVENT_SUBAGENT_TASK,
+				agent: created.agent,
+				timestamp: created.createdAt,
+				task: created.taskSummary,
+			});
+			appendChildEntry(created, "created");
 		}
 
 		let settled = false;

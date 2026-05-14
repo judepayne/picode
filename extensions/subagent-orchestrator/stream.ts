@@ -12,8 +12,11 @@ import type { createStateStore } from "./state.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorNodeLogRecord } from "./types.ts";
 
 export const SUBAGENT_STREAM_TOPIC_PREFIX = "picode:subagent-stream:";
+export const EVENT_SUBAGENT_TASK = "picode:subagent.task" as const;
 
 const STREAM_SUMMARY_LIMIT = 500;
+const STREAM_TASK_LIMIT = 8000;
+const STREAM_TOOL_RESULT_LIMIT = 1000;
 
 export interface SubagentStreamEvent {
 	childSessionId: string;
@@ -150,6 +153,12 @@ function sanitizeNodeLogRecord(record: OrchestratorNodeLogRecord, child: Orchest
 
 function sanitizeEventPayload(eventType: string, event: Record<string, unknown>): Record<string, unknown> {
 	switch (eventType) {
+		case EVENT_SUBAGENT_TASK:
+			return compactRecord({
+				type: event.type,
+				agent: event.agent,
+				task: truncateString(stringField(event.task), STREAM_TASK_LIMIT),
+			});
 		case EVENT_CHILD_TOOL_START:
 			return compactRecord({
 				type: event.type,
@@ -166,6 +175,7 @@ function sanitizeEventPayload(eventType: string, event: Record<string, unknown>)
 				toolCallId: event.toolCallId,
 				ok: event.ok,
 				resultElided: true,
+				resultPreview: truncateString(stringField(event.resultSummary), STREAM_TOOL_RESULT_LIMIT),
 				resultSummary: summarizeResultShape(event.resultSummary),
 			});
 		case EVENT_CHILD_TEXT_FINAL: {

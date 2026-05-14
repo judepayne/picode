@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isKeyRelease, isKeyRepeat, matchesKey, Text } from "@mariozechner/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
 import type { SubagentStreamEvent, SubagentStreamHandler } from "./stream.ts";
-import { formatTapCrumb, formatTapFooterTree, moveTapSelection, normalizeTapSelection, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
-import { appendTapWidgetEvent, createTapWidgetState, renderTapWidgetLines, resetTapWidget, TAP_STATUS_KEY, TAP_WIDGET_KEY } from "./tap-widget.ts";
+import { formatTapFooterTree, moveTapSelection, normalizeTapSelection, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
+import { appendTapTranscriptEvent, createTapTranscriptComponent, createTapTranscriptState, resetTapTranscript, setTapTranscriptToolsExpanded, TAP_STATUS_KEY, TAP_TRANSCRIPT_KEY } from "./tap-transcript.ts";
 
 export interface TapController {
 	handleCtx(ctx: ExtensionContext): void;
@@ -37,7 +37,7 @@ export function createTapController(input: TapControllerInput): TapController {
 	let polling = false;
 	let openedAt = 0;
 	let movedUpToRootAt = 0;
-	const widget = createTapWidgetState();
+	const transcript = createTapTranscriptState();
 
 	function clearStream(): void {
 		streamGeneration += 1;
@@ -48,8 +48,12 @@ export function createTapController(input: TapControllerInput): TapController {
 
 	function render(ctx = latestCtx): void {
 		if (!ctx?.hasUI || !active) return;
-		const lines = renderTapWidgetLines(widget);
-		ctx.ui.setWidget(TAP_WIDGET_KEY, () => new Text(lines.map((line) => line || " ").join("\n"), 0, 0), { placement: "aboveEditor" });
+		setTapTranscriptToolsExpanded(transcript, ctx.ui.getToolsExpanded());
+		if (selection?.childSessionId) {
+			ctx.ui.setWidget(TAP_TRANSCRIPT_KEY, (tui, theme) => createTapTranscriptComponent(transcript, tui, theme), { placement: "aboveEditor" });
+		} else {
+			ctx.ui.setWidget(TAP_TRANSCRIPT_KEY, undefined);
+		}
 		const footerTree = formatTapFooterTree(
 			roots,
 			selection,
@@ -99,8 +103,7 @@ export function createTapController(input: TapControllerInput): TapController {
 		const nextChildSessionId = node?.childSessionId;
 		if (nextChildSessionId === subscribedChildSessionId) return;
 		clearStream();
-		resetTapWidget(widget, {
-			crumb: formatTapCrumb(roots, selection),
+		resetTapTranscript(transcript, {
 			...(nextChildSessionId ? { selectedChildSessionId: nextChildSessionId } : {}),
 		});
 		if (!nextChildSessionId) {
@@ -114,7 +117,7 @@ export function createTapController(input: TapControllerInput): TapController {
 		try {
 			closeStream = input.openStream(nextChildSessionId, (event: SubagentStreamEvent) => {
 				if (generation !== streamGeneration || event.childSessionId !== subscribedChildSessionId) return;
-				appendTapWidgetEvent(widget, event);
+				appendTapTranscriptEvent(transcript, event);
 				render();
 			});
 		} catch (error) {
@@ -122,7 +125,7 @@ export function createTapController(input: TapControllerInput): TapController {
 			if (subscribedChildSessionId === nextChildSessionId) subscribedChildSessionId = undefined;
 			closeStream = undefined;
 			input.warn?.(`failed to open tap stream for ${nextChildSessionId}`, error);
-			appendTapWidgetEvent(widget, {
+			appendTapTranscriptEvent(transcript, {
 				childSessionId: nextChildSessionId,
 				runId: "",
 				cursor: "",
@@ -151,7 +154,7 @@ export function createTapController(input: TapControllerInput): TapController {
 		openedAt = Date.now();
 		ensurePollTimer();
 		selection = { rootIndex: 0 };
-		resetTapWidget(widget, { crumb: formatTapCrumb(roots, selection) });
+		resetTapTranscript(transcript, {});
 		subscribeSelectedChild(ctx);
 		render(ctx);
 		return true;
@@ -178,9 +181,10 @@ export function createTapController(input: TapControllerInput): TapController {
 		const isLeftKey = matchesKey(data, "ctrl+,");
 		const isRightKey = matchesKey(data, "ctrl+.");
 		const isUpKey = matchesKey(data, "escape");
+		const isToolsExpandKey = matchesKey(data, "ctrl+o");
 		const isTapKey = isDownKey || isLeftKey || isRightKey || isUpKey;
-		if (isTapKey && (isKeyRelease(data) || isKeyRepeat(data))) {
-			return active ? { consume: true } : undefined;
+		if ((isTapKey || isToolsExpandKey) && (isKeyRelease(data) || isKeyRepeat(data))) {
+			return isTapKey && active ? { consume: true } : undefined;
 		}
 		if (!active) {
 			if (!isDownKey) return undefined;
@@ -205,6 +209,15 @@ export function createTapController(input: TapControllerInput): TapController {
 			if (wasAtChild && active && !selection?.childSessionId) movedUpToRootAt = Date.now();
 			return { consume: true };
 		}
+		if (isToolsExpandKey) {
+			const ctx = latestCtx;
+			if (!ctx?.hasUI) return undefined;
+			const expanded = !ctx.ui.getToolsExpanded();
+			ctx.ui.setToolsExpanded(expanded);
+			setTapTranscriptToolsExpanded(transcript, expanded);
+			render(ctx);
+			return { consume: true };
+		}
 		return undefined;
 	}
 
@@ -219,7 +232,7 @@ export function createTapController(input: TapControllerInput): TapController {
 		roots = [];
 		clearPollTimer();
 		clearStream();
-		latestCtx?.ui.setWidget(TAP_WIDGET_KEY, undefined);
+		latestCtx?.ui.setWidget(TAP_TRANSCRIPT_KEY, undefined);
 		latestCtx?.ui.setStatus(TAP_STATUS_KEY, undefined);
 	}
 
