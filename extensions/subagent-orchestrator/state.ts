@@ -130,6 +130,7 @@ function summarizeChildSession(record: OrchestratorChildSessionRecord): Orchestr
 		...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
 		...(record.currentTool ? { currentTool: record.currentTool } : {}),
 		...(record.toolCount !== undefined ? { toolCount: record.toolCount } : {}),
+		...(record.failedToolCount !== undefined ? { failedToolCount: record.failedToolCount } : {}),
 		...(record.recentOutput && record.recentOutput.length > 0 ? { recentOutput: [...record.recentOutput] } : {}),
 		...(record.resultSummary ? { resultSummary: record.resultSummary } : {}),
 		...(record.error ? { error: record.error } : {}),

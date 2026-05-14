@@ -1316,17 +1316,14 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	const devStreamFileClosers = new Map<string, () => void>();
 	const tapController = createTapController({
 		getRoots: (ctx) => {
-			const ownerModeId = findCurrentModeId(ctx);
-			if (!ownerModeId) return [];
-			const lineage = currentSessionLineage(ctx);
-			const runs = state.listOwnedRuns(ownerModeId)
-				.filter((run) => runMatchesSessionLineage(run, lineage) && !isTerminal(run.status));
-			const rootRunIds = new Set(runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
+			const visibility = buildFooterLifecycleVisibility(ctx, { includeUserRuns: true });
+			if (!visibility) return [];
+			const rootRunIds = new Set(visibility.runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
 			const children = state.listChildSessions()
-				.filter((child) => child.ownerModeId === ownerModeId)
-				.filter((child) => childSessionMatchesSessionLineage(child, lineage))
+				.filter((child) => child.ownerModeId === visibility.ownerModeId)
+				.filter((child) => childSessionMatchesSessionLineage(child, visibility.lineage))
 				.filter((child) => rootRunIds.has(child.rootRunId ?? child.runId));
-			return buildTapRoots(runs, children);
+			return buildTapRoots(visibility.runs, children);
 		},
 		openStream: (childSessionId, handler) => openSubagentStream(childSessionId, handler),
 		onPoll: (ctx) => {
@@ -1447,6 +1444,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				return state.updateChildSession(child.childSessionId, {
 					updatedAt: now,
 					...(typeof event.toolName === "string" ? { currentTool: event.toolName } : {}),
+					...(event.ok === false ? { failedToolCount: (child.failedToolCount ?? 0) + 1 } : {}),
 				});
 			case SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT:
 				return state.updateChildSession(child.childSessionId, {
@@ -1666,28 +1664,42 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		uiStatusTimer = null;
 	}
 
-	function applyUiStatus(ctx?: ExtensionContext | null): void {
+	function buildFooterLifecycleVisibility(ctx?: ExtensionContext | null, options?: { includeUserRuns?: boolean }): { ownerModeId: string; lineage: ReturnType<typeof currentSessionLineage>; runs: OrchestratorRunRecord[]; queuedHandbacks: OrchestratorHandbackRecord[] } | undefined {
 		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx?.hasUI) return;
+		if (!runtimeCtx) return undefined;
 		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) {
-			runtimeCtx.ui.setStatus(uiStatusKey, undefined);
-			return;
-		}
+		if (!ownerModeId) return undefined;
 		const lineage = currentSessionLineage(runtimeCtx);
-		const runs = state.listOwnedRuns(ownerModeId).filter((run) =>
-			runMatchesSessionLineage(run, lineage) && normalizeRunOrigin(run.origin) !== "user"
-		);
-		const activeChildren = runs.reduce((total, run) => total + (run.activeChildCount ?? 0), 0);
 		const queuedHandbacks = state.listHandbacks().filter((record) =>
 			record.status === "queued"
 			&& record.ownerModeId === ownerModeId
 			&& handbackMatchesSessionLineage(record, lineage)
 			&& normalizeHandbackConsumer(record.consumer) !== "user"
-		).length;
-		const activeRuns = runs.filter((run) => !isTerminal(run.status)).length;
-		const failedAgents = Array.from(runs
-			.filter((run) => run.status === "failed" && run.failureAcknowledgedAt === undefined)
+		);
+		const queuedHandbackRunIds = new Set(queuedHandbacks.map((record) => record.runId));
+		const runs = state.listOwnedRuns(ownerModeId)
+			.filter((run) => runMatchesSessionLineage(run, lineage))
+			.filter((run) => options?.includeUserRuns === true || normalizeRunOrigin(run.origin) !== "user")
+			.filter((run) =>
+				!isTerminal(run.status)
+				|| queuedHandbackRunIds.has(run.orchestratorRunId)
+				|| run.terminalStatusNotifiedAt === undefined
+				|| (run.status === "failed" && run.failureAcknowledgedAt === undefined)
+			);
+		return { ownerModeId, lineage, runs, queuedHandbacks };
+	}
+
+	function applyUiStatus(ctx?: ExtensionContext | null): void {
+		const runtimeCtx = ctx ?? latestCtx;
+		if (!runtimeCtx?.hasUI) return;
+		const visibility = buildFooterLifecycleVisibility(runtimeCtx);
+		if (!visibility) {
+			runtimeCtx.ui.setStatus(uiStatusKey, undefined);
+			return;
+		}
+		const activeChildren = visibility.runs.reduce((total, run) => total + (run.activeChildCount ?? 0), 0);
+		const failedAgents = Array.from(visibility.runs
+			.filter((run) => run.status === "failed" && (run.failureAcknowledgedAt === undefined || run.terminalStatusNotifiedAt === undefined))
 			.reduce((counts, run) => {
 				const agent = run.agent?.trim().toLowerCase() || "subagent";
 				counts.set(agent, (counts.get(agent) ?? 0) + 1);
@@ -1696,9 +1708,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			.entries())
 			.map(([agent, count]) => ({ agent, count }));
 		const statusText = formatFooterStatus({
-			activeRuns,
+			activeRuns: visibility.runs.length,
 			activeChildren,
-			queuedHandbacks,
+			queuedHandbacks: visibility.queuedHandbacks.length,
 			failedAgents,
 		}, (text) => runtimeCtx.ui.theme.fg("error", runtimeCtx.ui.theme.bold(text)));
 		runtimeCtx.ui.setStatus(uiStatusKey, statusText);
@@ -1719,18 +1731,17 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		uiStatusTimer.unref?.();
 	}
 
-	function acknowledgeVisibleFailedRuns(ctx?: ExtensionContext | null): void {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx) return;
-		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) return;
-		const lineage = currentSessionLineage(runtimeCtx);
+	function acknowledgeVisibleTerminalRuns(ctx?: ExtensionContext | null): void {
+		const visibility = buildFooterLifecycleVisibility(ctx, { includeUserRuns: true });
+		if (!visibility) return;
 		const now = Date.now();
-		for (const run of state.listOwnedRuns(ownerModeId)) {
-			if (!runMatchesSessionLineage(run, lineage)) continue;
-			if (normalizeRunOrigin(run.origin) === "user") continue;
-			if (run.status !== "failed" || run.failureAcknowledgedAt !== undefined) continue;
-			state.updateRun(run.orchestratorRunId, { failureAcknowledgedAt: now, updatedAt: now });
+		for (const run of visibility.runs) {
+			if (!isTerminal(run.status)) continue;
+			state.updateRun(run.orchestratorRunId, {
+				...(run.terminalStatusNotifiedAt === undefined ? { terminalStatusNotifiedAt: now } : {}),
+				...(run.status === "failed" && run.failureAcknowledgedAt === undefined ? { failureAcknowledgedAt: now } : {}),
+				updatedAt: now,
+			});
 		}
 	}
 
@@ -1747,12 +1758,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (!run) return;
 		if (!run.async && !display) return;
 		const details = refreshRunMessageSnapshot(runId);
-		if (!display) {
-			if (run.async && isTerminal(run.status) && run.terminalStatusNotifiedAt === undefined) {
-				state.updateRun(runId, { terminalStatusNotifiedAt: Date.now() });
-			}
-			return;
-		}
+		if (!display) return;
 		const lineage = currentSessionLineage(runtimeCtx);
 		if (!runMatchesSessionLineage(run, lineage)) return;
 		pi.sendMessage({
@@ -2183,7 +2189,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	pi.on("input", async (event, ctx) => {
 		latestCtx = ctx;
 		if (event.source !== "interactive") return { action: "continue" };
-		acknowledgeVisibleFailedRuns(ctx);
+		acknowledgeVisibleTerminalRuns(ctx);
 		updateUiStatus(ctx, true);
 		if ((event.images?.length ?? 0) > 0) return { action: "continue" };
 		const currentMode = findCurrentModeState(ctx);

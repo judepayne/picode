@@ -134,6 +134,7 @@ export interface OrchestratorChildSessionRecord {
 	sessionFile?: string;
 	currentTool?: string;
 	toolCount?: number;
+	failedToolCount?: number;
 	progressStatus?: string;
 	recentOutput?: string[];
 	finalAnswer?: string;
@@ -163,6 +164,7 @@ export interface OrchestratorChildSessionSummary {
 	sessionFile?: string;
 	currentTool?: string;
 	toolCount?: number;
+	failedToolCount?: number;
 	recentOutput?: string[];
 	resultSummary?: string;
 	error?: string;

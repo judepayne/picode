@@ -59,6 +59,7 @@ export function createTapController(input: TapControllerInput): TapController {
 			selection,
 			(text) => ctx.ui.theme.fg("warning", ctx.ui.theme.bold(text)),
 			(text) => ctx.ui.theme.fg("dim", text),
+			(text) => ctx.ui.theme.fg("error", ctx.ui.theme.bold(text)),
 		);
 		ctx.ui.setStatus(TAP_STATUS_KEY, footerTree ? `::: ${footerTree}` : undefined);
 	}

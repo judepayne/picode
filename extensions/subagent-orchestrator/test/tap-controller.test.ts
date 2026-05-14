@@ -36,6 +36,17 @@ function roots(): TapRunRoot[] {
 	}];
 }
 
+function failedRoots(): TapRunRoot[] {
+	const [root] = roots();
+	return [{
+		...root!,
+		children: [{
+			...root!.children[0]!,
+			status: "failed",
+		}],
+	}];
+}
+
 function twoScoutRoots(): TapRunRoot[] {
 	const [root] = roots();
 	return [{
@@ -125,6 +136,15 @@ describe("tap controller", () => {
 		assert.deepEqual(fake.input(ESC), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), undefined);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
+	});
+
+	test("failed unselected footer nodes render in error style", () => {
+		const fake = ctx();
+		const controller = createTapController({ getRoots: failedRoots, openStream: () => () => {} });
+		controller.handleCtx(fake.context as never);
+
+		fake.input(CTRL_SLASH);
+		assert.equal(fake.statuses.get("subagent-orchestrator-tap"), "::: <warning>**run 1**</warning> > <error>**scout 1**</error>");
 	});
 
 	test("active tap polls until closed", async () => {

@@ -11,6 +11,7 @@ export interface TapTreeNode {
 	taskSummary: string;
 	currentTool?: string;
 	toolCount?: number;
+	failedToolCount?: number;
 	children: TapTreeNode[];
 }
 
@@ -73,6 +74,7 @@ function toTapNode(child: OrchestratorChildSessionRecord): TapTreeNode {
 		taskSummary: child.taskSummary,
 		...(child.currentTool ? { currentTool: child.currentTool } : {}),
 		...(child.toolCount !== undefined ? { toolCount: child.toolCount } : {}),
+		...(child.failedToolCount !== undefined ? { failedToolCount: child.failedToolCount } : {}),
 		children: [],
 	};
 }
@@ -229,15 +231,18 @@ function formatFooterNode(
 	selectedChildSessionId: string | undefined,
 	highlight: (text: string) => string,
 	dim: (text: string) => string,
+	failed: (text: string) => string,
 ): string {
 	const label = agentLabel(node);
 	const displayLabel = node.childSessionId === selectedChildSessionId
 		? highlight(label)
-		: node.status === "complete"
-			? dim(label)
-			: label;
+		: node.status === "failed" || (node.failedToolCount ?? 0) > 0
+			? failed(label)
+			: node.status === "complete"
+				? dim(label)
+				: label;
 	if (node.children.length === 0) return displayLabel;
-	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, highlight, dim)).join(", ")}`;
+	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, highlight, dim, failed)).join(", ")}`;
 }
 
 export function formatTapFooterTree(
@@ -245,12 +250,13 @@ export function formatTapFooterTree(
 	selection: TapSelection | undefined,
 	highlight: (text: string) => string = (text) => text,
 	dim: (text: string) => string = (text) => text,
+	failed: (text: string) => string = (text) => text,
 ): string | undefined {
 	const normalized = normalizeTapSelection(roots, selection);
 	if (!normalized) return undefined;
 	return roots.map((root, rootIndex) => {
 		const rootLabel = rootIndex === normalized.rootIndex && !normalized.childSessionId ? highlight(root.label) : root.label;
 		if (root.children.length === 0) return rootLabel;
-		return `${rootLabel} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, highlight, dim)).join(", ")}`;
+		return `${rootLabel} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, highlight, dim, failed)).join(", ")}`;
 	}).join(", ");
 }
