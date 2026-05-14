@@ -126,6 +126,57 @@ describe("subagent stream service", () => {
 		assert.equal(events.length, 3);
 	});
 
+	test("extracts tool result text content for preview", async () => {
+		const state = tempState();
+		const pi = new FakePi();
+		const child = state.createChildSession(childRecord());
+		state.appendNodeLogRecord(child.childSessionId, {
+			runId: child.runId,
+			rootRunId: child.rootRunId,
+			timestamp: 11,
+			eventType: EVENT_CHILD_TOOL_END,
+			event: {
+				type: EVENT_CHILD_TOOL_END,
+				agent: "scout",
+				toolName: "read",
+				toolCallId: "tool-1",
+				ok: true,
+				resultSummary: JSON.stringify({ content: [{ type: "text", text: "actual file contents" }], details: {} }),
+			},
+		});
+
+		const events: SubagentStreamEvent[] = [];
+		createSubagentStreamService(pi as never, state).open(child.childSessionId, (event) => events.push(event));
+		await flushHandlers();
+		assert.equal(events[0]?.event.resultPreview, "actual file contents");
+		assert.equal(String(events[0]?.event.resultPreview).includes('"content"'), false);
+	});
+
+	test("extracts tool result text from truncated JSON wrapper", async () => {
+		const state = tempState();
+		const pi = new FakePi();
+		const child = state.createChildSession(childRecord());
+		state.appendNodeLogRecord(child.childSessionId, {
+			runId: child.runId,
+			rootRunId: child.rootRunId,
+			timestamp: 11,
+			eventType: EVENT_CHILD_TOOL_END,
+			event: {
+				type: EVENT_CHILD_TOOL_END,
+				agent: "scout",
+				toolName: "read",
+				toolCallId: "tool-1",
+				ok: true,
+				resultSummary: '{"content":[{"type":"text","text":"export type ParentModeId = string;\\nexport type DelegatedAgent = string;\\nexport type RunStatus = \\"queued\\" | \\"running\\"…',
+			},
+		});
+
+		const events: SubagentStreamEvent[] = [];
+		createSubagentStreamService(pi as never, state).open(child.childSessionId, (event) => events.push(event));
+		await flushHandlers();
+		assert.equal(events[0]?.event.resultPreview, 'export type ParentModeId = string;\nexport type DelegatedAgent = string;\nexport type RunStatus = "queued" | "running"…');
+	});
+
 	test("replays exclusively after a stored cursor", async () => {
 		const state = tempState();
 		const pi = new FakePi();

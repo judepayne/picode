@@ -175,7 +175,7 @@ function sanitizeEventPayload(eventType: string, event: Record<string, unknown>)
 				toolCallId: event.toolCallId,
 				ok: event.ok,
 				resultElided: true,
-				resultPreview: truncateString(stringField(event.resultSummary), STREAM_TOOL_RESULT_LIMIT),
+				resultPreview: previewToolResult(event.resultSummary),
 				resultSummary: summarizeResultShape(event.resultSummary),
 			});
 		case EVENT_CHILD_TEXT_FINAL: {
@@ -270,6 +270,39 @@ function formatToolCommand(toolName: string, args: Record<string, unknown>): str
 
 function shapeRecord(value: Record<string, unknown>): Record<string, unknown> {
 	return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, Array.isArray(entry) ? "array" : typeof entry]));
+}
+
+function previewToolResult(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		const record = asRecord(parsed);
+		const content = Array.isArray(record?.content) ? record.content : undefined;
+		const textParts = content
+			?.map((item) => asRecord(item))
+			.flatMap((item) => stringField(item?.text) ?? []);
+		const text = textParts?.join("\n").trim();
+		if (text) return truncateString(text, STREAM_TOOL_RESULT_LIMIT);
+	} catch {
+		const text = extractTruncatedJsonTextField(value);
+		if (text) return truncateString(text, STREAM_TOOL_RESULT_LIMIT);
+	}
+	return truncateString(value, STREAM_TOOL_RESULT_LIMIT);
+}
+
+function extractTruncatedJsonTextField(value: string): string | undefined {
+	const match = value.match(/"text"\s*:\s*"((?:\\.|[^"\\])*)/s);
+	if (!match?.[1]) return undefined;
+	try {
+		return JSON.parse(`"${match[1]}"`) as string;
+	} catch {
+		return match[1]
+			.replace(/\\n/g, "\n")
+			.replace(/\\t/g, "\t")
+			.replace(/\\r/g, "\r")
+			.replace(/\\"/g, '"')
+			.replace(/\\\\/g, "\\");
+	}
 }
 
 function summarizeResultShape(value: unknown): string | undefined {
