@@ -223,3 +223,34 @@ export function formatTapCrumb(roots: TapRunRoot[], selection: TapSelection | un
 	}
 	return `tap: ${parts.join(" > ")}`;
 }
+
+function formatFooterNode(
+	node: TapTreeNode,
+	selectedChildSessionId: string | undefined,
+	highlight: (text: string) => string,
+	dim: (text: string) => string,
+): string {
+	const label = agentLabel(node);
+	const displayLabel = node.childSessionId === selectedChildSessionId
+		? highlight(label)
+		: node.status === "complete"
+			? dim(label)
+			: label;
+	if (node.children.length === 0) return displayLabel;
+	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, highlight, dim)).join(", ")}`;
+}
+
+export function formatTapFooterTree(
+	roots: TapRunRoot[],
+	selection: TapSelection | undefined,
+	highlight: (text: string) => string = (text) => text,
+	dim: (text: string) => string = (text) => text,
+): string | undefined {
+	const normalized = normalizeTapSelection(roots, selection);
+	if (!normalized) return undefined;
+	return roots.map((root, rootIndex) => {
+		const rootLabel = rootIndex === normalized.rootIndex && !normalized.childSessionId ? highlight(root.label) : root.label;
+		if (root.children.length === 0) return rootLabel;
+		return `${rootLabel} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, highlight, dim)).join(", ")}`;
+	}).join(", ");
+}

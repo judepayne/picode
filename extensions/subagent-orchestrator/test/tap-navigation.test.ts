@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { buildTapRoots, formatTapCrumb, moveTapSelection } from "../tap-navigation.ts";
+import { buildTapRoots, formatTapCrumb, formatTapFooterTree, moveTapSelection } from "../tap-navigation.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorRunRecord } from "../types.ts";
 
 function run(id: string, overrides: Partial<OrchestratorRunRecord> = {}): OrchestratorRunRecord {
@@ -89,5 +89,22 @@ describe("tap navigation", () => {
 		assert.deepEqual(roots.map((root) => root.label), ["run 1", "user"]);
 		assert.equal(roots[1]!.children[0]!.childSessionId, "user-child");
 		assert.equal(formatTapCrumb(roots, { rootIndex: 1, childSessionId: "user-child" }), "tap: user > scout 1");
+	});
+
+	test("footer tree shows all roots and highlights current root or child", () => {
+		const roots = buildTapRoots(
+			[run("run-a", { launchedAt: 200 }), run("run-b", { launchedAt: 100 }), run("user-run", { origin: "user", launchedAt: 50 })],
+			[
+				child("child-a", "run-a", 0, { status: "complete" }),
+				child("child-b", "run-a", 1),
+				child("child-c", "run-b", 0),
+				child("user-child", "user-run", 0),
+			],
+		);
+		const highlight = (text: string) => `[${text}]`;
+		const dim = (text: string) => `(${text})`;
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, highlight, dim), "[run 1] > (scout 1), scout 2, run 2 > scout 1, user > scout 1");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, highlight, dim), "run 1 > (scout 1), [scout 2], run 2 > scout 1, user > scout 1");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, highlight, dim), "run 1 > (scout 1), scout 2, run 2 > scout 1, user > [scout 1]");
 	});
 });
