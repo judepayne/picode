@@ -21,6 +21,14 @@ function run(id: string, overrides: Partial<OrchestratorRunRecord> = {}): Orches
 	};
 }
 
+const formatters = {
+	running: (text: string) => `{${text}}`,
+	queued: (text: string) => `?${text}?`,
+	complete: (text: string) => `(${text})`,
+	failed: (text: string) => `!${text}!`,
+	selected: (text: string) => `[${text}]`,
+};
+
 function child(id: string, runId: string, index: number, overrides: Partial<OrchestratorChildSessionRecord> = {}): OrchestratorChildSessionRecord {
 	return {
 		childSessionId: id,
@@ -53,10 +61,12 @@ describe("tap navigation", () => {
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0 }, "left").selection, { rootIndex: 1 });
 	});
 
-	test("root down enters first child and root up closes", () => {
+	test("root down enters a run root and root up closes", () => {
 		const roots = buildTapRoots([run("run-a")], [child("child-a", "run-a", 0)]);
+		assert.deepEqual(moveTapSelection(roots, {}, "down").selection, { rootIndex: 0 });
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0 }, "down").selection, { rootIndex: 0, childSessionId: "child-a" });
-		assert.equal(moveTapSelection(roots, { rootIndex: 0 }, "up").close, true);
+		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0 }, "up").selection, {});
+		assert.equal(moveTapSelection(roots, {}, "up").close, true);
 	});
 
 	test("child left and right cycle siblings", () => {
@@ -88,24 +98,56 @@ describe("tap navigation", () => {
 		);
 		assert.deepEqual(roots.map((root) => root.label), ["run 1", "user"]);
 		assert.equal(roots[1]!.children[0]!.childSessionId, "user-child");
-		assert.equal(formatTapCrumb(roots, { rootIndex: 1, childSessionId: "user-child" }), "tap: user > scout 1");
+		assert.equal(formatTapCrumb(roots, { rootIndex: 1, childSessionId: "user-child" }), "tap: root > user > scout 1");
 	});
 
-	test("footer tree shows all roots and styles current, complete, failed, and tool-failed children", () => {
+	test("footer tree shows all roots and styles queued, running, complete, failed, selected, and tool-failed children", () => {
 		const roots = buildTapRoots(
-			[run("run-a", { launchedAt: 200 }), run("run-b", { launchedAt: 100 }), run("user-run", { origin: "user", launchedAt: 50 })],
+			[run("run-a", { launchedAt: 200 }), run("run-b", { launchedAt: 100 }), run("user-run", { origin: "user", launchedAt: 50, status: "queued" })],
 			[
 				child("child-a", "run-a", 0, { status: "complete" }),
 				child("child-b", "run-a", 1, { status: "failed" }),
 				child("child-c", "run-b", 0, { status: "complete", failedToolCount: 1 }),
-				child("user-child", "user-run", 0),
+				child("user-child", "user-run", 0, { status: "queued" }),
 			],
 		);
-		const highlight = (text: string) => `[${text}]`;
-		const dim = (text: string) => `(${text})`;
-		const failed = (text: string) => `!${text}!`;
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, highlight, dim, failed), "[run 1] > (scout 1), !scout 2!, run 2 > !scout 1!, user > scout 1");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, highlight, dim, failed), "run 1 > (scout 1), [scout 2], run 2 > !scout 1!, user > scout 1");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, highlight, dim, failed), "run 1 > (scout 1), !scout 2!, run 2 > !scout 1!, user > [scout 1]");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > (scout 1), !scout 2!, run 2 > !scout 1!, user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, formatters), "root > [● run 1] > (scout 1), !scout 2!, run 2 > !scout 1!, user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, formatters), "root > run 1 > (scout 1), [!● scout 2!], run 2 > !scout 1!, user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, formatters), "root > run 1 > (scout 1), !scout 2!, run 2 > !scout 1!, user > [?● scout 1?]");
+	});
+
+	test("queued async non-chain child in a running or started run renders as running", () => {
+		const runningRoots = buildTapRoots(
+			[run("run-a", { status: "running" })],
+			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single" })],
+		);
+		assert.equal(formatTapFooterTree(runningRoots, {}, formatters), "● root > run 1 > {scout 1}");
+
+		const startedRoots = buildTapRoots(
+			[run("run-a", { status: "queued" })],
+			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single", asyncDir: "/tmp/async-run" })],
+		);
+		assert.equal(formatTapFooterTree(startedRoots, {}, formatters), "● root > run 1 > {scout 1}");
+
+		const syncRoots = buildTapRoots(
+			[run("run-a", { status: "running", async: false })],
+			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single", async: false })],
+		);
+		assert.equal(formatTapFooterTree(syncRoots, {}, formatters), "● root > run 1 > ?scout 1?");
+	});
+
+	test("footer tree uses arrow separators for chain steps and commas for parallel siblings", () => {
+		const roots = buildTapRoots(
+			[run("chain-run", { requestShape: "chain", launchedAt: 200 }), run("parallel-run", { requestShape: "parallel", launchedAt: 100 })],
+			[
+				child("step-1", "chain-run", 0, { requestShape: "chain", stepIndex: 0, status: "complete" }),
+				child("step-2", "chain-run", 1, { requestShape: "chain", stepIndex: 1, status: "running" }),
+				child("step-3", "chain-run", 2, { requestShape: "chain", stepIndex: 2, status: "queued" }),
+				child("parallel-1", "parallel-run", 0, { requestShape: "parallel" }),
+				child("parallel-2", "parallel-run", 1, { requestShape: "parallel" }),
+			],
+		);
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "step-2" }, formatters), "root > run 1 > (scout 1) → [{● scout 2}] → ?scout 3?, run 2 > {scout 1}, {scout 2}");
 	});
 });

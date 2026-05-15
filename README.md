@@ -264,10 +264,7 @@ Like agents, subagents are just markdown cards. You can add your own specialists
 Picode surfaces delegated work through three layers:
 
 - **Launch notification** — a brief confirmation that the subagent started (e.g. "Scout running in background"). Healthy user-started runs do not stay pinned.
-- **Footer status** — compact aggregate status for background activity:
-  - `subagents:1 run` — one top-level run in flight
-  - `subagents:2 active · 1 waiting` — two children running, one handback queued
-  - `subagents: failed scout` — a failure, visible until your next message
+- **Footer tree** — compact tree status for background activity. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chains, and `,` for parallel siblings. Node color indicates lifecycle: green running, amber queued, grey complete, red failed.
 - **Run cards** — detailed per-run view when explicitly requested or when `showRunCard: true` is set. Shows the current task, active/finished children, live tool usage, session file locations, recent output, and final summary.
 
 When something fails, ask the main agent to inspect it:

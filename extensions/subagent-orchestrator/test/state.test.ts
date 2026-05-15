@@ -46,6 +46,23 @@ describe("subagent-orchestrator state store", () => {
 				createdAt: 1,
 				updatedAt: 2,
 			});
+			store.createChildSession({
+				childSessionId: "child-2",
+				runId: "run-2",
+				rootRunId: "run-2",
+				ownerModeId: "designer",
+				parentSessionId: "session-1",
+				requestShape: "single",
+				async: true,
+				context: "fork",
+				agent: "worker",
+				childIndex: 0,
+				childKey: "single:0",
+				status: "queued",
+				taskSummary: "B",
+				createdAt: 1,
+				updatedAt: 2,
+			});
 			store.createHandback({
 				handbackId: "handback-1",
 				runId: "run-1",
@@ -75,6 +92,8 @@ describe("subagent-orchestrator state store", () => {
 
 			assert.equal(store.listChildSessionsByRun("run-1").length, 1);
 			assert.equal(store.listChildSessionsByRootRunId("run-1").length, 1);
+			assert.deepEqual(store.listChildSessionsByRootRunIds(["run-1", "run-2"]).map((child) => child.childSessionId), ["child-1", "child-2"]);
+			assert.deepEqual(store.listChildSessionsByRootRunIds([]), []);
 			assert.deepEqual(store.listChildSessionsByRun("run-1")[0]?.recentOutput, ["line 1", "line 2"]);
 			assert.equal(store.getRun("run-1")?.selectedChildIndex, 0);
 			assert.equal(store.getRun("run-1")?.origin, "user");

@@ -38,7 +38,7 @@ import { createForkContextResolver, type ForkableSessionManager } from "../subag
 import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
-import { formatFooterStatus, formatUserLaunchNotification } from "./footer-status.ts";
+import { formatUserLaunchNotification } from "./footer-status.ts";
 import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
@@ -46,7 +46,7 @@ import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TI
 import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
 import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
 import { createTapController } from "./tap-controller.ts";
-import { buildTapRoots } from "./tap-navigation.ts";
+import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, type TapRunRoot } from "./tap-navigation.ts";
 import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
@@ -83,6 +83,10 @@ const SUBAGENT_COMPLETE_EVENT = "subagent:complete";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
 
 const TEXT_DELTA_STATE_FLUSH_INTERVAL_MS = 500;
+const ASYNC_EVENT_TAIL_INTERVAL_MS = 250;
+const ASYNC_EVENT_TAIL_MAX_LINES = 100;
+const ASYNC_EVENT_TAIL_MAX_BYTES = 64 * 1024;
+const ASYNC_EVENT_TAIL_MAX_LINE_BYTES = 2 * 1024 * 1024;
 const STATUS_LIST_LIMIT = 10;
 const STATUS_LIST_TEXT_LIMIT = 300;
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
@@ -478,6 +482,12 @@ function summarizeTasks(request: NormalizedDelegationRequest): string {
 
 function getRequestedModeLabel(request: NormalizedDelegationRequest): "single" | "parallel" | "chain" {
 	return request.shape;
+}
+
+function shouldMarkChildRunningAtLaunch(request: NormalizedDelegationRequest, child: OrchestratorChildSessionRecord): boolean {
+	if (!request.async) return false;
+	if (request.shape !== "chain") return true;
+	return (child.stepIndex ?? child.childIndex) === 0;
 }
 
 function normalizeAllowedSubagents(value: unknown): string[] | undefined {
@@ -1312,25 +1322,23 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	let latestCtx: ExtensionContext | null = null;
 	let queuedHandbackFlushTimer: ReturnType<typeof setTimeout> | null = null;
 	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastUiStatusText: string | undefined;
 	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 	const devStreamFileClosers = new Map<string, () => void>();
+	const asyncEventTailers = new Map<string, ReturnType<typeof setInterval>>();
 	const tapController = createTapController({
-		getRoots: (ctx) => {
-			const visibility = buildFooterLifecycleVisibility(ctx, { includeUserRuns: true });
-			if (!visibility) return [];
-			const rootRunIds = new Set(visibility.runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
-			const children = state.listChildSessions()
-				.filter((child) => child.ownerModeId === visibility.ownerModeId)
-				.filter((child) => childSessionMatchesSessionLineage(child, visibility.lineage))
-				.filter((child) => rootRunIds.has(child.rootRunId ?? child.runId));
-			return buildTapRoots(visibility.runs, children);
-		},
+		getRoots: (ctx) => buildVisibleTapRoots(ctx, { includeUserRuns: true }),
 		openStream: (childSessionId, handler) => openSubagentStream(childSessionId, handler),
-		onPoll: (ctx) => {
-			reconcileOwnedAsyncRuns(ctx);
+		onPoll: (ctx, selectedChildSessionId) => {
+			reconcileTapAsyncRuns(ctx, selectedChildSessionId);
 			flushQueuedHandbacks(ctx, { forceAgentDelivery: false });
 		},
+		pollIntervalMs: 2_000,
 		warn: warnOrchestratorDiagnostic,
+		onClose: () => {
+			lastUiStatusText = undefined;
+			updateUiStatus(latestCtx, true);
+		},
 	});
 
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
@@ -1407,7 +1415,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			updatedAt: Date.now(),
 			recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), text]),
 		});
-		refreshRunAggregates(pendingFlush.runId);
+		refreshRunMessageSnapshot(pendingFlush.runId);
 	}
 
 	function scheduleTextDeltaStateFlush(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): void {
@@ -1425,17 +1433,18 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 
 	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const now = typeof event.timestamp === "number" ? event.timestamp : Date.now();
+		const runningStatus = isTerminal(child.status) ? child.status : "running";
 		switch (event.type) {
 			case SUBAGENT_MODE_CHILD_STARTED_EVENT:
 				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "running",
+					status: runningStatus,
 					updatedAt: now,
 					...(typeof event.childId === "string" ? { executionChildId: event.childId } : {}),
 					...(typeof event.sessionFile === "string" ? { sessionFile: event.sessionFile } : {}),
 				});
 			case SUBAGENT_MODE_CHILD_TOOL_START_EVENT:
 				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "running",
+					status: runningStatus,
 					updatedAt: now,
 					...(typeof event.toolName === "string" ? { currentTool: event.toolName } : {}),
 					toolCount: (child.toolCount ?? 0) + 1,
@@ -1448,19 +1457,19 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				});
 			case SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT:
 				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "running",
+					status: runningStatus,
 					updatedAt: now,
 					recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), typeof event.delta === "string" ? event.delta : ""]),
 				});
 			case SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT:
 				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "running",
+					status: runningStatus,
 					updatedAt: now,
 					...(typeof event.text === "string" ? { recentOutput: finalAnswerRecentOutput(event.text) } : {}),
 				});
 			case SUBAGENT_MODE_CHILD_PROGRESS_EVENT:
 				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "running",
+					status: runningStatus,
 					updatedAt: now,
 					...(typeof event.currentTool === "string" ? { currentTool: event.currentTool } : {}),
 					...(typeof event.toolCount === "number" ? { toolCount: event.toolCount } : {}),
@@ -1528,25 +1537,80 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		refreshRunAggregates(runId);
 	}
 
-	function ingestAsyncEventLines(run: OrchestratorRunRecord): void {
-		if (!run.asyncDir) return;
+	function ingestAsyncEventLines(run: OrchestratorRunRecord, options?: { maxBytes?: number; maxLines?: number }): { advanced: boolean; processedLines: number; hasMore: boolean } {
+		if (!run.asyncDir) return { advanced: false, processedLines: 0, hasMore: false };
 		const eventsPath = path.join(run.asyncDir, "events.jsonl");
-		if (!fs.existsSync(eventsPath)) return;
-		const buffer = fs.readFileSync(eventsPath);
-		let offset = run.asyncEventCursor ?? 0;
-		if (isTerminal(run.status) && offset < buffer.length) {
-			state.updateRun(run.orchestratorRunId, { asyncEventCursor: buffer.length, updatedAt: Date.now() });
-			return;
+		if (!fs.existsSync(eventsPath)) return { advanced: false, processedLines: 0, hasMore: false };
+		const size = fs.statSync(eventsPath).size;
+		let cursor = run.asyncEventCursor ?? 0;
+		if (cursor > size) cursor = 0;
+		if (cursor >= size) return { advanced: false, processedLines: 0, hasMore: false };
+		const unreadBytes = size - cursor;
+		const bytesToRead = Math.min(unreadBytes, options?.maxBytes ?? unreadBytes);
+		const buffer = Buffer.alloc(bytesToRead);
+		const fd = fs.openSync(eventsPath, "r");
+		let bytesRead = 0;
+		try {
+			while (bytesRead < buffer.length) {
+				const read = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, cursor + bytesRead);
+				if (read === 0) break;
+				bytesRead += read;
+			}
+		} finally {
+			fs.closeSync(fd);
 		}
-		if (offset >= buffer.length) return;
-		while (offset < buffer.length) {
-			const newlineIndex = buffer.indexOf(0x0a, offset);
+		let readableBuffer = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
+		if (readableBuffer.length === 0) return { advanced: false, processedLines: 0, hasMore: cursor < size };
+		if (readableBuffer.indexOf(0x0a) < 0 && cursor + readableBuffer.length < size) {
+			const chunks: Buffer[] = [readableBuffer];
+			let storedBytes = readableBuffer.length;
+			let scannedBytes = readableBuffer.length;
+			let oversized = storedBytes > ASYNC_EVENT_TAIL_MAX_LINE_BYTES;
+			let newlineOffset: number | undefined;
+			const scanFd = fs.openSync(eventsPath, "r");
+			try {
+				while (cursor + scannedBytes < size) {
+					const chunkSize = Math.min(ASYNC_EVENT_TAIL_MAX_BYTES, size - cursor - scannedBytes);
+					const chunk = Buffer.alloc(chunkSize);
+					const read = fs.readSync(scanFd, chunk, 0, chunk.length, cursor + scannedBytes);
+					if (read === 0) break;
+					const scannedChunk = read === chunk.length ? chunk : chunk.subarray(0, read);
+					const newlineInChunk = scannedChunk.indexOf(0x0a);
+					if (!oversized && storedBytes + scannedChunk.length <= ASYNC_EVENT_TAIL_MAX_LINE_BYTES) {
+						chunks.push(scannedChunk);
+						storedBytes += scannedChunk.length;
+					} else {
+						oversized = true;
+					}
+					scannedBytes += scannedChunk.length;
+					if (newlineInChunk >= 0) {
+						newlineOffset = scannedBytes - scannedChunk.length + newlineInChunk;
+						break;
+					}
+				}
+			} finally {
+				fs.closeSync(scanFd);
+			}
+			if (oversized) {
+				const advance = newlineOffset !== undefined ? newlineOffset + 1 : scannedBytes;
+				warnDroppedChildEvent(run.orchestratorRunId, { type: "unknown" }, "skipped oversized async event line");
+				state.updateRun(run.orchestratorRunId, { asyncEventCursor: cursor + advance, updatedAt: Date.now() });
+				return { advanced: advance > 0, processedLines: 1, hasMore: cursor + advance < size };
+			}
+			readableBuffer = Buffer.concat(chunks, storedBytes);
+		}
+		let offset = 0;
+		let processedLines = 0;
+		const maxLines = options?.maxLines ?? Number.POSITIVE_INFINITY;
+		while (offset < readableBuffer.length && processedLines < maxLines) {
+			const newlineIndex = readableBuffer.indexOf(0x0a, offset);
 			if (newlineIndex < 0) break;
-			const rawLine = buffer.subarray(offset, newlineIndex).toString("utf8").trim();
+			const rawLine = readableBuffer.subarray(offset, newlineIndex).toString("utf8").trim();
 			if (!rawLine) {
 				offset = newlineIndex + 1;
 				continue;
 			}
+			processedLines += 1;
 			let event: LoggedChildEvent;
 			try {
 				event = JSON.parse(rawLine) as LoggedChildEvent;
@@ -1565,7 +1629,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			}
 			offset = newlineIndex + 1;
 		}
-		state.updateRun(run.orchestratorRunId, { asyncEventCursor: offset, updatedAt: Date.now() });
+		const nextCursor = cursor + offset;
+		if (offset > 0 || cursor !== (run.asyncEventCursor ?? 0)) {
+			state.updateRun(run.orchestratorRunId, { asyncEventCursor: nextCursor, updatedAt: Date.now() });
+		}
+		return { advanced: nextCursor !== (run.asyncEventCursor ?? 0), processedLines, hasMore: nextCursor < size };
 	}
 
 	function resolveTreeRootRun(ownerModeId: string, runId?: string): { rootRun: OrchestratorRunRecord; selectedRunId?: string } | { error: string } {
@@ -1631,10 +1699,46 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { child, rootRun: currentRoot };
 	}
 
-	function refreshAsyncRunState(run: OrchestratorRunRecord): OrchestratorRunRecord | undefined {
-		ingestAsyncEventLines(run);
-		if (isTerminal(run.status)) return state.getRun(run.orchestratorRunId) ?? run;
-		return reconcileRunFromAsyncArtifacts(run.orchestratorRunId);
+	function stopAsyncEventTailer(runId: string): void {
+		const timer = asyncEventTailers.get(runId);
+		if (!timer) return;
+		clearInterval(timer);
+		asyncEventTailers.delete(runId);
+	}
+
+	function stopAllAsyncEventTailers(): void {
+		for (const runId of asyncEventTailers.keys()) stopAsyncEventTailer(runId);
+	}
+
+	function tailAsyncRunEvents(runId: string): void {
+		try {
+			const run = state.getRun(runId);
+			if (!run || !run.async || !run.asyncDir) {
+				stopAsyncEventTailer(runId);
+				return;
+			}
+			const result = ingestAsyncEventLines(run, { maxBytes: ASYNC_EVENT_TAIL_MAX_BYTES, maxLines: ASYNC_EVENT_TAIL_MAX_LINES });
+			const latest = state.getRun(runId) ?? run;
+			if (isTerminal(latest.status) && !result.hasMore) stopAsyncEventTailer(runId);
+		} catch (error) {
+			warnOrchestratorDiagnostic(`async event tailer failed for run ${runId}`, error);
+			stopAsyncEventTailer(runId);
+		}
+	}
+
+	function startAsyncEventTailer(run: OrchestratorRunRecord | undefined): void {
+		if (!run || !run.async || !run.asyncDir || isTerminal(run.status) || asyncEventTailers.has(run.orchestratorRunId)) return;
+		const timer = setInterval(() => tailAsyncRunEvents(run.orchestratorRunId), ASYNC_EVENT_TAIL_INTERVAL_MS);
+		timer.unref?.();
+		asyncEventTailers.set(run.orchestratorRunId, timer);
+		tailAsyncRunEvents(run.orchestratorRunId);
+	}
+
+	function refreshAsyncRunState(run: OrchestratorRunRecord, options?: { ingestEvents?: boolean }): OrchestratorRunRecord | undefined {
+		if (options?.ingestEvents !== false) ingestAsyncEventLines(run);
+		const latest = state.getRun(run.orchestratorRunId) ?? run;
+		if (isTerminal(latest.status)) return latest;
+		return reconcileRunFromAsyncArtifacts(latest.orchestratorRunId);
 	}
 
 	function refreshRunAggregates(runId: string): void {
@@ -1689,32 +1793,34 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { ownerModeId, lineage, runs, queuedHandbacks };
 	}
 
+	function buildVisibleTapRoots(ctx?: ExtensionContext | null, options?: { includeUserRuns?: boolean }): TapRunRoot[] {
+		const visibility = buildFooterLifecycleVisibility(ctx, options);
+		if (!visibility) return [];
+		const rootRunIds = new Set(visibility.runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
+		const children = state.listChildSessionsByRootRunIds(rootRunIds)
+			.filter((child) => child.ownerModeId === visibility.ownerModeId)
+			.filter((child) => childSessionMatchesSessionLineage(child, visibility.lineage));
+		return buildTapRoots(visibility.runs, children);
+	}
+
 	function applyUiStatus(ctx?: ExtensionContext | null): void {
 		const runtimeCtx = ctx ?? latestCtx;
 		if (!runtimeCtx?.hasUI) return;
-		const visibility = buildFooterLifecycleVisibility(runtimeCtx);
-		if (!visibility) {
-			runtimeCtx.ui.setStatus(uiStatusKey, undefined);
+		if (tapController.isActive()) {
+			tapController.refresh();
 			return;
 		}
-		const activeChildren = visibility.runs.reduce((total, run) => total + (run.activeChildCount ?? 0), 0);
-		const failedAgents = Array.from(visibility.runs
-			.filter((run) => run.status === "failed" && (run.failureAcknowledgedAt === undefined || run.terminalStatusNotifiedAt === undefined))
-			.reduce((counts, run) => {
-				const agent = run.agent?.trim().toLowerCase() || "subagent";
-				counts.set(agent, (counts.get(agent) ?? 0) + 1);
-				return counts;
-			}, new Map<string, number>())
-			.entries())
-			.map(([agent, count]) => ({ agent, count }));
-		const statusText = formatFooterStatus({
-			activeRuns: visibility.runs.length,
-			activeChildren,
-			queuedHandbacks: visibility.queuedHandbacks.length,
-			failedAgents,
-		}, (text) => runtimeCtx.ui.theme.fg("error", runtimeCtx.ui.theme.bold(text)));
-		runtimeCtx.ui.setStatus(uiStatusKey, statusText);
-		tapController.refresh();
+		const roots = buildVisibleTapRoots(runtimeCtx, { includeUserRuns: true });
+		const statusText = formatTapFooterTree(
+			roots,
+			{},
+			createTapFooterFormatters(runtimeCtx.ui.theme),
+			{},
+		);
+		if (statusText !== lastUiStatusText) {
+			runtimeCtx.ui.setStatus(uiStatusKey, statusText);
+			lastUiStatusText = statusText;
+		}
 	}
 
 	function updateUiStatus(ctx?: ExtensionContext | null, immediate = false): void {
@@ -1888,17 +1994,36 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return state.getRun(run.orchestratorRunId) ?? run;
 	}
 
-	function reconcileOwnedAsyncRuns(ctx: ExtensionContext): void {
+	function reconcileOwnedAsyncRuns(ctx: ExtensionContext, options?: { ingestEvents?: boolean }): void {
 		const ownerModeId = findCurrentModeId(ctx);
 		if (!ownerModeId) return;
-		const roots = state.listTopLevelRunsByMode(ownerModeId);
-		for (const root of roots) {
-			for (const run of state.listRunsByRootRunId(root.orchestratorRunId)) {
-				if (run.async) refreshAsyncRunState(run);
-			}
+		for (const run of state.listOwnedRuns(ownerModeId)) {
+			if (!run.async) continue;
+			startAsyncEventTailer(run);
+			refreshAsyncRunState(run, { ingestEvents: options?.ingestEvents ?? !asyncEventTailers.has(run.orchestratorRunId) });
 		}
 	}
 
+	function reconcileTapAsyncRuns(ctx: ExtensionContext, selectedChildSessionId?: string): void {
+		const ownerModeId = findCurrentModeId(ctx);
+		if (!ownerModeId) return;
+		if (!selectedChildSessionId) {
+			for (const run of state.listOwnedRuns(ownerModeId)) {
+				if (!run.async) continue;
+				startAsyncEventTailer(run);
+				refreshAsyncRunState(run, { ingestEvents: !asyncEventTailers.has(run.orchestratorRunId) });
+			}
+			return;
+		}
+		const child = state.getChildSession(selectedChildSessionId);
+		if (!child || child.ownerModeId !== ownerModeId) return;
+		const rootRunId = child.rootRunId ?? child.runId;
+		for (const run of state.listRunsByRootRunId(rootRunId)) {
+			if (!run.async) continue;
+			startAsyncEventTailer(run);
+			refreshAsyncRunState(run, { ingestEvents: !asyncEventTailers.has(run.orchestratorRunId) });
+		}
+	}
 
 	function finalizeChildrenFromResults(runId: string, results: ProgrammaticResultEntry[] | undefined, fallbackText: string | undefined, status: RunStatus, now: number): void {
 		const children = state.listChildSessionsByRun(runId);
@@ -2261,6 +2386,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		pendingTextDeltaFlushes.clear();
 		for (const close of devStreamFileClosers.values()) close();
 		devStreamFileClosers.clear();
+		stopAllAsyncEventTailers();
 		clearQueuedHandbackFlushTimer();
 		clearUiStatusTimer();
 		clearRunMessageSnapshots();
@@ -2334,6 +2460,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				...(typeof sessionFiles[index] === "string" ? { sessionFile: sessionFiles[index] } : {}),
 			}))
 			: baseChildSessions;
+		const launchChildSessions = childSessions.map((child) => ({
+			...child,
+			...(request.async && shouldMarkChildRunningAtLaunch(request, child) ? { status: "running" as RunStatus } : {}),
+		}));
+		const initialRunStatus: RunStatus = request.async ? "running" : "queued";
 
 		state.createRun({
 			orchestratorRunId,
@@ -2351,16 +2482,16 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			context: request.context,
 			origin: options.origin,
 			agent: request.agent,
-			status: "queued",
+			status: initialRunStatus,
 			taskSummary: summarizeTasks(request),
 			underlyingRequestId: orchestratorRunId,
-			childSessionCount: childSessions.length,
-			activeChildCount: 0,
+			childSessionCount: launchChildSessions.length,
+			activeChildCount: launchChildSessions.filter((child) => child.status === "running").length,
 			queuedHandbackCount: 0,
 			consumedHandbackCount: 0,
-			selectedChildIndex: childSessions[0]?.childIndex,
+			selectedChildIndex: launchChildSessions[0]?.childIndex,
 		} satisfies OrchestratorRunRecord);
-		for (const child of childSessions) {
+		for (const child of launchChildSessions) {
 			const created = state.createChildSession(child);
 			appendNodeLogForChild(created, {
 				type: EVENT_SUBAGENT_TASK,
@@ -2370,6 +2501,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			});
 			appendChildEntry(created, "created");
 		}
+		updateUiStatus(ctx, true);
 
 		let settled = false;
 		const settleResponse = (response: ProgrammaticSubagentResponse): void => {
@@ -2434,7 +2566,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				currentModeId,
 				request,
 				pi.getThinkingLevel(),
-				childSessions.map((child) => child.childSessionId),
+				launchChildSessions.map((child) => child.childSessionId),
 				sessionFiles,
 			),
 		});
@@ -2447,7 +2579,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			...(asRecord(response.result.details) ?? {}),
 			childSessions: buildChildSessionDetails(state.listChildSessionsByRun(orchestratorRunId).length > 0
 				? state.listChildSessionsByRun(orchestratorRunId)
-				: childSessions),
+				: launchChildSessions),
 		};
 
 		const responseText = firstTextContent(response.result.content);
@@ -2499,6 +2631,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		publishRunMessage(orchestratorRunId, request.showRunCard, ctx);
 		refreshRunAggregates(orchestratorRunId);
+		startAsyncEventTailer(state.getRun(orchestratorRunId));
 
 		return { orchestratorRunId, response };
 	}

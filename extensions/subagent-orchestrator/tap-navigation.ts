@@ -1,4 +1,4 @@
-import type { OrchestratorChildSessionRecord, OrchestratorRunRecord, RunStatus } from "./types.ts";
+import type { OrchestratorChildSessionRecord, OrchestratorRunRecord, RequestShape, RunStatus } from "./types.ts";
 
 export type TapDirection = "left" | "right" | "down" | "up";
 
@@ -8,10 +8,16 @@ export interface TapTreeNode {
 	agent: string;
 	childIndex: number;
 	status: RunStatus;
+	runStatus?: RunStatus;
+	async?: boolean;
+	hasStarted?: boolean;
+	requestShape: RequestShape;
 	taskSummary: string;
 	currentTool?: string;
 	toolCount?: number;
 	failedToolCount?: number;
+	stepIndex?: number;
+	taskIndex?: number;
 	children: TapTreeNode[];
 }
 
@@ -24,13 +30,41 @@ export interface TapRunRoot {
 }
 
 export interface TapSelection {
-	rootIndex: number;
+	rootIndex?: number;
 	childSessionId?: string;
 }
 
 export interface TapMoveResult {
 	selection?: TapSelection;
 	close?: boolean;
+}
+
+export interface TapFooterFormatters {
+	running: (text: string) => string;
+	queued: (text: string) => string;
+	complete: (text: string) => string;
+	failed: (text: string) => string;
+	selected: (text: string) => string;
+	neutral?: (text: string) => string;
+}
+
+export interface TapFooterFormatOptions {
+	selectedMarker?: string;
+}
+
+export interface TapFooterTheme {
+	fg(color: "syntaxType" | "warning" | "dim" | "error", text: string): string;
+	bold(text: string): string;
+}
+
+export function createTapFooterFormatters(theme: TapFooterTheme): TapFooterFormatters {
+	return {
+		running: (text) => theme.fg("syntaxType", text),
+		queued: (text) => theme.fg("warning", text),
+		complete: (text) => theme.fg("dim", text),
+		failed: (text) => theme.fg("error", theme.bold(text)),
+		selected: (text) => text,
+	};
 }
 
 function normalizeRunOrigin(value: unknown): "agent" | "user" {
@@ -64,24 +98,30 @@ function sortChildren<T extends Pick<OrchestratorChildSessionRecord, "childIndex
 	return [...children].sort(compareChildOrder);
 }
 
-function toTapNode(child: OrchestratorChildSessionRecord): TapTreeNode {
+function toTapNode(child: OrchestratorChildSessionRecord, run: OrchestratorRunRecord | undefined): TapTreeNode {
 	return {
 		childSessionId: child.childSessionId,
 		...(child.parentChildSessionId ? { parentChildSessionId: child.parentChildSessionId } : {}),
 		agent: child.agent,
 		childIndex: child.childIndex,
 		status: child.status,
+		...(run?.status ? { runStatus: run.status } : {}),
+		async: child.async,
+		...(child.underlyingRunId || child.asyncDir || child.currentTool || (child.recentOutput?.length ?? 0) > 0 ? { hasStarted: true } : {}),
+		requestShape: child.requestShape,
 		taskSummary: child.taskSummary,
 		...(child.currentTool ? { currentTool: child.currentTool } : {}),
 		...(child.toolCount !== undefined ? { toolCount: child.toolCount } : {}),
 		...(child.failedToolCount !== undefined ? { failedToolCount: child.failedToolCount } : {}),
+		...(child.stepIndex !== undefined ? { stepIndex: child.stepIndex } : {}),
+		...(child.taskIndex !== undefined ? { taskIndex: child.taskIndex } : {}),
 		children: [],
 	};
 }
 
-function buildChildTree(children: OrchestratorChildSessionRecord[]): TapTreeNode[] {
+function buildChildTree(children: OrchestratorChildSessionRecord[], runsById: Map<string, OrchestratorRunRecord>): TapTreeNode[] {
 	const nodes = new Map<string, TapTreeNode>();
-	for (const child of sortChildren(children)) nodes.set(child.childSessionId, toTapNode(child));
+	for (const child of sortChildren(children)) nodes.set(child.childSessionId, toTapNode(child, runsById.get(child.runId)));
 	const roots: TapTreeNode[] = [];
 	for (const child of sortChildren(children)) {
 		const node = nodes.get(child.childSessionId)!;
@@ -100,6 +140,7 @@ export function buildTapRoots(runs: OrchestratorRunRecord[], children: Orchestra
 		if (!existing || run.orchestratorRunId === rootId) runByRootId.set(rootId, run);
 	}
 
+	const runsById = new Map(runs.map((run) => [run.orchestratorRunId, run]));
 	const childrenByRootId = new Map<string, OrchestratorChildSessionRecord[]>();
 	for (const child of children) {
 		const rootId = rootRunIdForChild(child);
@@ -117,7 +158,7 @@ export function buildTapRoots(runs: OrchestratorRunRecord[], children: Orchestra
 		label: `run ${index + 1}`,
 		kind: "run",
 		rootRunId: rootRunIdForRun(run),
-		children: buildChildTree(childrenByRootId.get(rootRunIdForRun(run)) ?? []),
+		children: buildChildTree(childrenByRootId.get(rootRunIdForRun(run)) ?? [], runsById),
 	}));
 
 	const userChildren = [...childrenByRootId.entries()]
@@ -128,7 +169,7 @@ export function buildTapRoots(runs: OrchestratorRunRecord[], children: Orchestra
 			id: "user",
 			label: "user",
 			kind: "user",
-			children: buildChildTree(userChildren),
+			children: buildChildTree(userChildren, runsById),
 		});
 	}
 
@@ -154,6 +195,7 @@ function findNodeWithParentIn(nodes: TapTreeNode[], childSessionId: string, pare
 }
 
 export function selectedTapNode(roots: TapRunRoot[], selection: TapSelection): TapTreeNode | undefined {
+	if (selection.rootIndex === undefined) return undefined;
 	const root = roots[selection.rootIndex];
 	if (!root || !selection.childSessionId) return undefined;
 	return findNodeIn(root.children, selection.childSessionId);
@@ -161,9 +203,10 @@ export function selectedTapNode(roots: TapRunRoot[], selection: TapSelection): T
 
 export function normalizeTapSelection(roots: TapRunRoot[], selection: TapSelection | undefined): TapSelection | undefined {
 	if (roots.length === 0) return undefined;
-	const rootIndex = Math.min(Math.max(selection?.rootIndex ?? 0, 0), roots.length - 1);
+	if (selection?.rootIndex === undefined) return {};
+	const rootIndex = Math.min(Math.max(selection.rootIndex, 0), roots.length - 1);
 	const root = roots[rootIndex]!;
-	if (!selection?.childSessionId || findNodeIn(root.children, selection.childSessionId)) return { rootIndex, ...(selection?.childSessionId ? { childSessionId: selection.childSessionId } : {}) };
+	if (!selection.childSessionId || findNodeIn(root.children, selection.childSessionId)) return { rootIndex, ...(selection.childSessionId ? { childSessionId: selection.childSessionId } : {}) };
 	return { rootIndex };
 }
 
@@ -174,9 +217,15 @@ function wrapIndex(index: number, length: number): number {
 export function moveTapSelection(roots: TapRunRoot[], selection: TapSelection, direction: TapDirection): TapMoveResult {
 	const normalized = normalizeTapSelection(roots, selection);
 	if (!normalized) return {};
+	if (normalized.rootIndex === undefined) {
+		if (direction === "up") return { close: true };
+		if (direction === "down") return { selection: { rootIndex: 0 } };
+		const rootIndex = direction === "left" ? roots.length - 1 : 0;
+		return { selection: { rootIndex } };
+	}
 	const root = roots[normalized.rootIndex]!;
 	if (!normalized.childSessionId) {
-		if (direction === "up") return { close: true };
+		if (direction === "up") return { selection: {} };
 		if (direction === "down") {
 			const first = root.children[0];
 			return { selection: first ? { rootIndex: normalized.rootIndex, childSessionId: first.childSessionId } : normalized };
@@ -217,8 +266,9 @@ function nodePath(nodes: TapTreeNode[], childSessionId: string, path: TapTreeNod
 export function formatTapCrumb(roots: TapRunRoot[], selection: TapSelection | undefined): string | undefined {
 	const normalized = normalizeTapSelection(roots, selection);
 	if (!normalized) return undefined;
+	if (normalized.rootIndex === undefined) return "tap: root";
 	const root = roots[normalized.rootIndex]!;
-	const parts = [root.label];
+	const parts = ["root", root.label];
 	if (normalized.childSessionId) {
 		const path = nodePath(root.children, normalized.childSessionId) ?? [];
 		parts.push(...path.map(agentLabel));
@@ -226,37 +276,64 @@ export function formatTapCrumb(roots: TapRunRoot[], selection: TapSelection | un
 	return `tap: ${parts.join(" > ")}`;
 }
 
+function effectiveFooterStatus(node: TapTreeNode): RunStatus {
+	if (node.status === "queued" && node.async && node.requestShape !== "chain" && (node.runStatus === "running" || node.hasStarted)) return "running";
+	return node.status;
+}
+
+function styleNodeLabel(node: TapTreeNode, selected: boolean, formatters: TapFooterFormatters, options: TapFooterFormatOptions): string {
+	const marker = selected ? options.selectedMarker ?? "● " : "";
+	const label = `${marker}${agentLabel(node)}`;
+	const status = effectiveFooterStatus(node);
+	const statusStyled = status === "failed" || (node.failedToolCount ?? 0) > 0
+		? formatters.failed(label)
+		: status === "complete" || status === "cancelled"
+			? formatters.complete(label)
+			: status === "queued"
+				? formatters.queued(label)
+				: formatters.running(label);
+	return selected ? formatters.selected(statusStyled) : statusStyled;
+}
+
+function footerChildSeparator(nodes: TapTreeNode[]): string {
+	if (nodes.length < 2) return ", ";
+	const chainSteps = nodes
+		.filter((node) => node.requestShape === "chain" && node.stepIndex !== undefined)
+		.map((node) => node.stepIndex!);
+	const uniqueSteps = new Set(chainSteps);
+	return chainSteps.length === nodes.length && uniqueSteps.size === nodes.length ? " → " : ", ";
+}
+
 function formatFooterNode(
 	node: TapTreeNode,
 	selectedChildSessionId: string | undefined,
-	highlight: (text: string) => string,
-	dim: (text: string) => string,
-	failed: (text: string) => string,
+	formatters: TapFooterFormatters,
+	options: TapFooterFormatOptions,
 ): string {
-	const label = agentLabel(node);
-	const displayLabel = node.childSessionId === selectedChildSessionId
-		? highlight(label)
-		: node.status === "failed" || (node.failedToolCount ?? 0) > 0
-			? failed(label)
-			: node.status === "complete"
-				? dim(label)
-				: label;
+	const displayLabel = styleNodeLabel(node, node.childSessionId === selectedChildSessionId, formatters, options);
 	if (node.children.length === 0) return displayLabel;
-	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, highlight, dim, failed)).join(", ")}`;
+	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, formatters, options)).join(footerChildSeparator(node.children))}`;
+}
+
+function formatRootLabel(root: TapRunRoot, selected: boolean, formatters: TapFooterFormatters, options: TapFooterFormatOptions): string {
+	const label = `${selected ? options.selectedMarker ?? "● " : ""}${root.label}`;
+	return selected ? formatters.selected(formatters.neutral?.(label) ?? label) : formatters.neutral?.(label) ?? label;
 }
 
 export function formatTapFooterTree(
 	roots: TapRunRoot[],
 	selection: TapSelection | undefined,
-	highlight: (text: string) => string = (text) => text,
-	dim: (text: string) => string = (text) => text,
-	failed: (text: string) => string = (text) => text,
+	formatters: TapFooterFormatters,
+	options: TapFooterFormatOptions = {},
 ): string | undefined {
 	const normalized = normalizeTapSelection(roots, selection);
 	if (!normalized) return undefined;
-	return roots.map((root, rootIndex) => {
-		const rootLabel = rootIndex === normalized.rootIndex && !normalized.childSessionId ? highlight(root.label) : root.label;
-		if (root.children.length === 0) return rootLabel;
-		return `${rootLabel} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, highlight, dim, failed)).join(", ")}`;
+	const selectedRootIndex = normalized.rootIndex;
+	const rootLabel = normalized.rootIndex === undefined ? `${options.selectedMarker ?? "● "}root` : "root";
+	const tree = roots.map((root, rootIndex) => {
+		const label = formatRootLabel(root, rootIndex === selectedRootIndex && !normalized.childSessionId, formatters, options);
+		if (root.children.length === 0) return label;
+		return `${label} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, formatters, options)).join(footerChildSeparator(root.children))}`;
 	}).join(", ");
+	return `${formatters.neutral?.(rootLabel) ?? rootLabel} > ${tree}`;
 }

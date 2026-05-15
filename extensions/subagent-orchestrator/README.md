@@ -84,21 +84,14 @@ That makes the feature feel less like a low-level spawn primitive and more like 
 
 The orchestrator can show:
 
-- footer/status activity for delegated runs
+- a compact footer tree for delegated runs
 - queued handbacks
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-In the healthy case, the footer stays intentionally quiet and aggregate. Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`, but healthy user-addressed runs do not stay pinned in the footer.
+Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`. While delegated work is visible, the footer tree shows the run structure directly. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chain steps, and `,` for parallel siblings. Node color indicates lifecycle: green running, amber queued, grey complete, red failed.
 
-When a **main-agent-triggered** delegated run fails, the footer keeps a concise failure summary visible. Examples:
-
-- `subagents: failed scout`
-- `subagents: failed worker`
-- `subagents: failed 2 scouts, 1 worker`
-- `subagents: failed worker · 1 active`
-
-That summary is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
+When delegated work fails, the red footer node is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
 
 > Investigate the failed worker.
 

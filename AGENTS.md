@@ -12,6 +12,7 @@ It combines:
 - permission profiles via **pi-gate**
 - prompt interpolation and runtime vars via **z-prompt-vars**
 - mediated subagent orchestration built on **subagent-orchestrator** + **subagent-mode**
+- replayable subagent stream telemetry, TUI tap-in monitoring, and unified subagent footer navigation
 - package-owned agent/subagent card assets via **agent-assets**
 
 If you are new to the repo, the mental model is:
@@ -46,7 +47,7 @@ Then read the specific extension code you are changing.
 | `extensions/agent-mode/` | Top-level mode switching and mode prompt/runtime application. | You are changing Builder/Planner/Designer selection or mode wiring. |
 | `extensions/pi-gate/` | Permission policy engine and profile switching. | You are changing policy behavior or profile rules. |
 | `extensions/subagent-mode/` | Low-level child-runner substrate for delegated subagents. | You are changing process spawning, sync/async child execution, or normalized child events. |
-| `extensions/subagent-orchestrator/` | User-facing and agent-facing delegation layer. | You are changing `~subagent`, `delegate_subagent`, run tracking, handbacks, or run UI/status. |
+| `extensions/subagent-orchestrator/` | User-facing and agent-facing delegation layer, stream API, tap-in UI, and unified footer tree. | You are changing `~subagent`, `delegate_subagent`, run tracking, handbacks, streams/logs, tap navigation/transcripts, or run UI/footer status. |
 | `extensions/z-prompt-vars/` | Prompt interpolation, runtime vars, plan/design derived vars, bootstrap of `.pi` files. | You are changing `${...}` prompt vars or `/vars` behavior. |
 | `skills/` | Reusable agent instructions for planning, delegation, prompt vars, and coding discipline. | You are changing agent guidance rather than runtime code. |
 | `examples/` | Worked examples of custom subagent workflows built on picode. | You want a realistic composition example. |
@@ -134,15 +135,20 @@ Read this first if the change affects:
 
 ### `extensions/subagent-orchestrator/`
 
-Public delegation layer for both the top-level agent and direct user `~subagent` commands.
+Public delegation layer for both the top-level agent and direct user `~subagent` commands. It also owns subagent stream replay/follow, the TUI tap-in transcript, and the unified footer tree used for both normal subagent status and tap navigation.
 
 Important files:
-- `extensions/subagent-orchestrator/index.ts` — main entrypoint
+- `extensions/subagent-orchestrator/index.ts` — main entrypoint, tool registration, run lifecycle, UI status wiring
 - `extensions/subagent-orchestrator/user-dispatch.ts` — `~scout` / `~worker` / `~reviewer`
 - `extensions/subagent-orchestrator/delegate-input.ts` — tool input normalization
-- `extensions/subagent-orchestrator/state.ts` — persistent run state
+- `extensions/subagent-orchestrator/state.ts` — persistent run/child/handback state plus node-log JSONL cursors
+- `extensions/subagent-orchestrator/stream.ts` — replay/live stream API over child node logs
+- `extensions/subagent-orchestrator/stream-handlers.ts` — reusable sanitized stream event sinks such as JSONL file logging
+- `extensions/subagent-orchestrator/tap-controller.ts` — TUI tap-in lifecycle, keyboard navigation, selected-child stream subscription
+- `extensions/subagent-orchestrator/tap-navigation.ts` — tap tree construction, selection movement, footer tree formatting/status colors
+- `extensions/subagent-orchestrator/tap-transcript-tree.ts` — above-editor transcript renderer using persistent cached nodes from sanitized stream events
 - `extensions/subagent-orchestrator/handbacks.ts` — completion/handback behavior
-- `extensions/subagent-orchestrator/footer-status.ts` — footer state
+- `extensions/subagent-orchestrator/footer-status.ts` — notification text helpers, not the unified footer tree renderer
 - `extensions/subagent-orchestrator/run-ui.ts` — surfaced UI/run card behavior
 - `extensions/subagent-orchestrator/sticky-user-sessions.ts` — continue semantics for direct user subagents
 - `extensions/subagent-orchestrator/max-subagent-depth.ts` — nested delegation bounds
@@ -150,9 +156,20 @@ Important files:
 Read this first if the change affects:
 - `delegate_subagent`
 - `delegate_subagent_status`
-- async run tracking
-- handbacks, trees, logs, streams, cancellation
+- async run tracking or cancellation
+- handbacks, trees, logs, node-log cursors, streams, or `dev_subagent_stream_to_file`
+- TUI tap-in navigation/transcripts (`Ctrl+/`, `Esc`, `Ctrl+,`, `Ctrl+.`, `Ctrl+O`)
+- unified subagent footer tree display, lifecycle colors, selected marker, or terminal-run retention
 - `~subagent` shorthand behavior
+
+Current footer/tap model:
+- Normal footer and active tap footer share the status key `subagent-orchestrator` intentionally.
+- The transcript widget key is separate: `subagent-orchestrator-tap`.
+- Root/run levels are footer-only; the above-editor transcript is shown only when a child node is selected.
+- Footer grammar: `>` for nesting, `→` for chain steps, `,` for parallel siblings. Selection uses `●`; lifecycle color carries status.
+- Lifecycle colors are centralized in `createTapFooterFormatters(...)` / `styleNodeLabel(...)` in `tap-navigation.ts`.
+- Terminal runs should remain visible until the next submitted interactive user turn.
+- Stream identity is `childSessionId`; node logs are the replay source of truth.
 
 ### `extensions/z-prompt-vars/`
 
@@ -246,6 +263,9 @@ When changing one extension, validate with that extension's tests first.
 | Change gate policy/profile behavior | `extensions/pi-gate/index.ts`, `extensions/pi-gate/policy.json` |
 | Change `~subagent` behavior | `extensions/subagent-orchestrator/user-dispatch.ts` |
 | Change delegation tool behavior | `extensions/subagent-orchestrator/index.ts`, `delegate-input.ts`, `state.ts` |
+| Change subagent stream/log replay behavior | `extensions/subagent-orchestrator/stream.ts`, `state.ts`, `stream-handlers.ts` |
+| Change tap-in keyboard navigation or transcript rendering | `extensions/subagent-orchestrator/tap-controller.ts`, `tap-navigation.ts`, `tap-transcript-tree.ts` |
+| Change unified subagent footer display/colors/navigation tree | `extensions/subagent-orchestrator/tap-navigation.ts`, `tap-controller.ts`, `index.ts` |
 | Change async child execution | `extensions/subagent-mode/async-executor.ts`, `runner.ts`, `pi-spawn.ts` |
 | Change prompt vars or `/vars` | `extensions/z-prompt-vars/index.ts`, `prompt-vars.ts` |
 | Change planning/delegation guidance | `skills/*.md` |
@@ -258,8 +278,9 @@ This repo often creates local `.pi/` files during use. Common examples:
 - `.pi/plans/active.md`
 - `.pi/designs/active.md`
 - `.pi/state/subagent-orchestrator/...`
+- `.pi/state/subagent-orchestrator/node-logs/*.jsonl`
 
-These are runtime artifacts, not core source files.
+These are runtime artifacts, not core source files. The orchestrator node logs are useful for debugging stream replay/tap behavior, but they are local state and should not be treated as source.
 
 ## Bootstrap rule
 

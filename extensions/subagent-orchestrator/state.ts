@@ -461,8 +461,14 @@ export function createStateStore(rootDir: string) {
 	}
 
 	function listChildSessionsByRootRunId(rootRunId: string): OrchestratorChildSessionRecord[] {
+		return listChildSessionsByRootRunIds([rootRunId]);
+	}
+
+	function listChildSessionsByRootRunIds(rootRunIds: Iterable<string>): OrchestratorChildSessionRecord[] {
+		const rootRunIdSet = new Set(rootRunIds);
+		if (rootRunIdSet.size === 0) return [];
 		return loadChildSessionsIndex().childSessions
-			.filter((summary) => (summary.rootRunId ?? summary.runId) === rootRunId)
+			.filter((summary) => rootRunIdSet.has(summary.rootRunId ?? summary.runId))
 			.map((summary) => getChildSession(summary.childSessionId))
 			.filter((record): record is OrchestratorChildSessionRecord => Boolean(record))
 			.sort((a, b) => a.createdAt - b.createdAt || a.childIndex - b.childIndex || a.updatedAt - b.updatedAt);
@@ -640,6 +646,7 @@ export function createStateStore(rootDir: string) {
 		listChildSessions,
 		listChildSessionsByRun,
 		listChildSessionsByRootRunId,
+		listChildSessionsByRootRunIds,
 		findChildSessionByRunAndKey,
 		findChildSessionByRunAndExecutionChildId,
 		findChildSessionByExecutionChildId,
