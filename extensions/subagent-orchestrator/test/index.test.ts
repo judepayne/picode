@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, test } from "node:test";
+import { afterEach, beforeEach, describe, test } from "node:test";
 
+import agentAssetsExtension from "../../agent-assets/index.ts";
+import { asyncRunManifestPath } from "../../subagent-mode/paths.ts";
 import subagentOrchestratorExtension from "../index.ts";
 
 type ToolRegistration = {
@@ -29,6 +31,9 @@ class FakeEventBus {
 
 	emit(event: string, data: unknown): void {
 		this.emitted.push({ event, data });
+		for (const handler of this.handlers.get(event) ?? []) {
+			(handler as (payload: unknown) => void)(data);
+		}
 	}
 
 	dispatch(event: string, data: unknown): void {
@@ -84,9 +89,15 @@ class FakePi {
 	}
 }
 
+interface FakeContextOptions {
+	hasUI?: boolean;
+	branch?: unknown[];
+}
+
 class FakeContext {
 	readonly hasUI: boolean;
 	readonly cwd: string;
+	readonly branch: unknown[];
 	readonly statuses = new Map<string, string | undefined>();
 	readonly notifications: string[] = [];
 	readonly ui = {
@@ -112,18 +123,19 @@ class FakeContext {
 	}
 
 	readonly sessionManager = {
-		getBranch: (): unknown[] => [{
-			type: "custom",
-			customType: "agent-mode-state",
-			data: { modeId: "builder", subagents: ["scout"] },
-		}],
+		getBranch: (): unknown[] => this.branch,
 		getSessionId: (): string => "parent-session",
 		getSessionFile: (): string => join(this.cwd, "parent.jsonl"),
 	};
 
-	constructor(cwd: string, options: { hasUI?: boolean } = {}) {
+	constructor(cwd: string, options: FakeContextOptions = {}) {
 		this.cwd = cwd;
 		this.hasUI = options.hasUI ?? false;
+		this.branch = options.branch ?? [{
+			type: "custom",
+			customType: "agent-mode-state",
+			data: { modeId: "builder", subagents: ["scout"] },
+		}];
 		mkdirSync(join(cwd, ".pi"), { recursive: true });
 		writeFileSync(join(cwd, ".pi", "agent-mode-vars.json"), `${JSON.stringify({
 			footer: {
@@ -143,6 +155,7 @@ class FakeContext {
 
 const tempDirs: string[] = [];
 let originalCwd: string;
+let savedDevStreamToFile: string | undefined;
 
 function makeTempCwd(): string {
 	const dir = mkdtempSync(join(tmpdir(), "picode-orchestrator-index-"));
@@ -161,8 +174,15 @@ async function withTempProcessCwd<T>(fn: () => T | Promise<T>): Promise<T> {
 	}
 }
 
+beforeEach(() => {
+	savedDevStreamToFile = process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE;
+	delete process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE;
+});
+
 afterEach(() => {
 	if (originalCwd) process.chdir(originalCwd);
+	if (savedDevStreamToFile === undefined) delete process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE;
+	else process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE = savedDevStreamToFile;
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -173,6 +193,7 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			subagentOrchestratorExtension(pi as never);
 			assert.ok(pi.tools.has("delegate_subagent"));
 			assert.ok(pi.tools.has("delegate_subagent_status"));
+			assert.equal(pi.tools.has("dev_subagent_stream_to_file"), false);
 			assert.ok(pi.messageRenderers.has("subagent-orchestrator-run"));
 			assert.ok(pi.messageRenderers.has("subagent-orchestrator-continuation-message"));
 			assert.ok(pi.events.handlers.has("subagent:mode:request.response"));
@@ -183,6 +204,198 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			assert.ok(pi.lifecycle.has("turn_end"));
 			assert.ok(pi.lifecycle.has("session_shutdown"));
 		});
+	});
+
+	test("registers the dev stream file tool only behind its explicit flag", async () => {
+		await withTempProcessCwd(() => {
+			process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE = "1";
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			assert.ok(pi.tools.has("dev_subagent_stream_to_file"));
+		});
+	});
+
+	test("delegate_subagent works in child subagent context without agent-mode state", async () => {
+		await withTempProcessCwd(async () => {
+			const previousEnv = {
+				depth: process.env.PI_SUBAGENT_DEPTH,
+				maxDepth: process.env.PI_SUBAGENT_MAX_DEPTH,
+				topRunId: process.env.PI_SUBAGENT_TOP_RUN_ID,
+				parentChildId: process.env.PI_SUBAGENT_PARENT_CHILD_ID,
+				gateProfile: process.env.GATE_PROFILE,
+			};
+			try {
+				process.env.PI_SUBAGENT_DEPTH = "1";
+				process.env.PI_SUBAGENT_MAX_DEPTH = "2";
+				process.env.PI_SUBAGENT_TOP_RUN_ID = "top-run";
+				process.env.PI_SUBAGENT_PARENT_CHILD_ID = "parent-child";
+				process.env.GATE_PROFILE = "scout";
+
+				const pi = new FakePi();
+				agentAssetsExtension(pi as never);
+				subagentOrchestratorExtension(pi as never);
+				const tool = pi.tools.get("delegate_subagent");
+				assert.ok(tool);
+				const ctx = new FakeContext(process.cwd(), { branch: [] });
+
+				const pending = tool.execute("tool", { agent: "scout", task: "say nested-ok" }, new AbortController().signal, undefined, ctx);
+				const request = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+				assert.ok(request);
+				const requestId = (request.data as { requestId?: string }).requestId;
+				assert.ok(requestId);
+				pi.events.dispatch("subagent:mode:request.response", {
+					requestId,
+					ok: true,
+					result: {
+						mode: "single",
+						status: "complete",
+						results: [{ agent: "scout", status: "complete", finalText: "nested-ok" }],
+					},
+				});
+
+				const result = await pending;
+				assert.equal(result.isError, false);
+				assert.match(result.content?.[0]?.text ?? "", /nested-ok/);
+
+				const runDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs");
+				const runFile = readdirSync(runDir).find((name) => name.endsWith(".json"));
+				assert.ok(runFile);
+				const runRecord = JSON.parse(readFileSync(join(runDir, runFile), "utf8")) as { ownerModeId?: string; depth?: number };
+				assert.equal(runRecord.ownerModeId, "scout");
+				assert.equal(runRecord.depth, 1);
+			} finally {
+				if (previousEnv.depth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+				else process.env.PI_SUBAGENT_DEPTH = previousEnv.depth;
+				if (previousEnv.maxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
+				else process.env.PI_SUBAGENT_MAX_DEPTH = previousEnv.maxDepth;
+				if (previousEnv.topRunId === undefined) delete process.env.PI_SUBAGENT_TOP_RUN_ID;
+				else process.env.PI_SUBAGENT_TOP_RUN_ID = previousEnv.topRunId;
+				if (previousEnv.parentChildId === undefined) delete process.env.PI_SUBAGENT_PARENT_CHILD_ID;
+				else process.env.PI_SUBAGENT_PARENT_CHILD_ID = previousEnv.parentChildId;
+				if (previousEnv.gateProfile === undefined) delete process.env.GATE_PROFILE;
+				else process.env.GATE_PROFILE = previousEnv.gateProfile;
+			}
+		});
+	});
+
+
+	test("nested delegated runs inherit the root owner for footer visibility", async () => {
+		await withTempProcessCwd(async () => {
+			const previousEnv = {
+				depth: process.env.PI_SUBAGENT_DEPTH,
+				maxDepth: process.env.PI_SUBAGENT_MAX_DEPTH,
+				topRunId: process.env.PI_SUBAGENT_TOP_RUN_ID,
+				parentChildId: process.env.PI_SUBAGENT_PARENT_CHILD_ID,
+				gateProfile: process.env.GATE_PROFILE,
+			};
+			try {
+				const pi = new FakePi();
+				agentAssetsExtension(pi as never);
+				subagentOrchestratorExtension(pi as never);
+				const tool = pi.tools.get("delegate_subagent");
+				const statusTool = pi.tools.get("delegate_subagent_status");
+				assert.ok(tool);
+				assert.ok(statusTool);
+				const rootCtx = new FakeContext(process.cwd(), {
+					branch: [{ type: "custom", customType: "agent-mode-state", data: { modeId: "planner" } }],
+				});
+
+				const rootPending = tool.execute("tool", { agent: "scout", task: "parent" }, new AbortController().signal, undefined, rootCtx);
+				const rootRequest = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+				assert.ok(rootRequest);
+				const rootRequestId = (rootRequest.data as { requestId?: string }).requestId;
+				assert.ok(rootRequestId);
+				pi.events.dispatch("subagent:mode:request.response", {
+					requestId: rootRequestId,
+					ok: true,
+					result: {
+						mode: "single",
+						status: "complete",
+						results: [{ agent: "scout", status: "complete", finalText: "parent-done" }],
+					},
+				});
+				assert.equal((await rootPending).isError, false);
+
+				const childDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "child-sessions");
+				const parentChildFile = readdirSync(childDir).find((name) => name.endsWith(".json"));
+				assert.ok(parentChildFile);
+				const parentChild = JSON.parse(readFileSync(join(childDir, parentChildFile), "utf8")) as { childSessionId: string; runId: string; ownerModeId?: string };
+				assert.equal(parentChild.ownerModeId, "planner");
+
+				process.env.PI_SUBAGENT_DEPTH = "1";
+				process.env.PI_SUBAGENT_MAX_DEPTH = "2";
+				process.env.PI_SUBAGENT_TOP_RUN_ID = "subagent-mode-execution-root";
+				process.env.PI_SUBAGENT_PARENT_CHILD_ID = parentChild.childSessionId;
+				process.env.GATE_PROFILE = "scout";
+
+				const nestedCtx = new FakeContext(process.cwd(), { branch: [] });
+				const nestedPending = tool.execute("tool", { agent: "worker", task: "nested" }, new AbortController().signal, undefined, nestedCtx);
+				const nestedRequest = pi.events.emitted.filter((entry) => entry.event === "subagent:mode:request").at(-1);
+				assert.ok(nestedRequest);
+				const nestedRequestId = (nestedRequest.data as { requestId?: string }).requestId;
+				assert.ok(nestedRequestId);
+				pi.events.dispatch("subagent:mode:request.response", {
+					requestId: nestedRequestId,
+					ok: true,
+					result: {
+						mode: "single",
+						status: "complete",
+						results: [{ agent: "worker", status: "complete", finalText: "nested-done" }],
+					},
+				});
+				assert.equal((await nestedPending).isError, false);
+
+				const runDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs");
+				const runs = readdirSync(runDir)
+					.filter((name) => name.endsWith(".json"))
+					.map((name) => JSON.parse(readFileSync(join(runDir, name), "utf8")) as { orchestratorRunId: string; ownerModeId?: string; rootRunId?: string; parentChildSessionId?: string; agent?: string });
+				const nestedRun = runs.find((run) => run.agent === "worker");
+				assert.ok(nestedRun);
+				assert.equal(nestedRun.ownerModeId, "planner");
+				assert.equal(nestedRun.rootRunId, parentChild.runId);
+				assert.equal(nestedRun.parentChildSessionId, parentChild.childSessionId);
+
+				const statusResult = await statusTool.execute("tool", { action: "get", runId: nestedRun.orchestratorRunId }, new AbortController().signal, undefined, nestedCtx);
+				assert.equal(statusResult.isError, undefined);
+
+				const children = readdirSync(childDir)
+					.filter((name) => name.endsWith(".json"))
+					.map((name) => JSON.parse(readFileSync(join(childDir, name), "utf8")) as { agent?: string; ownerModeId?: string; rootRunId?: string; parentChildSessionId?: string });
+				const nestedChild = children.find((child) => child.agent === "worker");
+				assert.ok(nestedChild);
+				assert.equal(nestedChild.ownerModeId, "planner");
+				assert.equal(nestedChild.rootRunId, parentChild.runId);
+				assert.equal(nestedChild.parentChildSessionId, parentChild.childSessionId);
+			} finally {
+				if (previousEnv.depth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+				else process.env.PI_SUBAGENT_DEPTH = previousEnv.depth;
+				if (previousEnv.maxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
+				else process.env.PI_SUBAGENT_MAX_DEPTH = previousEnv.maxDepth;
+				if (previousEnv.topRunId === undefined) delete process.env.PI_SUBAGENT_TOP_RUN_ID;
+				else process.env.PI_SUBAGENT_TOP_RUN_ID = previousEnv.topRunId;
+				if (previousEnv.parentChildId === undefined) delete process.env.PI_SUBAGENT_PARENT_CHILD_ID;
+				else process.env.PI_SUBAGENT_PARENT_CHILD_ID = previousEnv.parentChildId;
+				if (previousEnv.gateProfile === undefined) delete process.env.GATE_PROFILE;
+				else process.env.GATE_PROFILE = previousEnv.gateProfile;
+			}
+		});
+	});
+
+	test("delegate_subagent rejects current mode banned subagents", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+		agentAssetsExtension(pi as never);
+		subagentOrchestratorExtension(pi as never);
+		const tool = pi.tools.get("delegate_subagent");
+		assert.ok(tool);
+		const ctx = new FakeContext(process.cwd(), {
+			branch: [{ type: "custom", customType: "agent-mode-state", data: { modeId: "builder", bannedSubagents: ["scout"] } }],
+		});
+
+		const result = await tool.execute("tool", { agent: "scout", task: "blocked" }, new AbortController().signal, undefined, ctx);
+		assert.equal(result.isError, true);
+		assert.match(result.content?.[0]?.text ?? "", /banned from delegating/);
+	});
 	});
 
 	test("delegate_subagent rejects invalid input before launching work", async () => {
@@ -228,6 +441,54 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			const rejected = await tool.execute("tool", { action: "stream" }, new AbortController().signal, undefined, ctx);
 			assert.equal(rejected.isError, true);
 			assert.match(rejected.content?.[0]?.text ?? "", /log_cursor.*log_next/);
+		});
+	});
+
+
+	test("delegate_subagent_status cancel does not mark already-finished async runs cancelled", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			const delegateTool = pi.tools.get("delegate_subagent");
+			const statusTool = pi.tools.get("delegate_subagent_status");
+			assert.ok(delegateTool);
+			assert.ok(statusTool);
+			const ctx = new FakeContext(process.cwd());
+
+			const pending = delegateTool.execute("tool", { agent: "scout", task: "async", async: true }, new AbortController().signal, undefined, ctx);
+			const request = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+			assert.ok(request);
+			const requestId = (request.data as { requestId?: string }).requestId;
+			assert.ok(requestId);
+			pi.events.dispatch("subagent:mode:request.response", {
+				requestId,
+				ok: true,
+				async: true,
+				asyncId: "async-finished",
+				asyncDir: join(process.cwd(), "async-finished"),
+				result: { mode: "single", status: "running", results: [] },
+			});
+			assert.notEqual((await pending).isError, true);
+
+			mkdirSync(join(asyncRunManifestPath("async-finished"), ".."), { recursive: true });
+			writeFileSync(asyncRunManifestPath("async-finished"), JSON.stringify({
+				schemaVersion: 1,
+				runId: "async-finished",
+				status: "complete",
+				pid: process.pid,
+				startedAt: Date.now(),
+				endedAt: Date.now(),
+			}, null, 2));
+
+			const result = await statusTool.execute("tool", { action: "cancel", runId: requestId }, new AbortController().signal, undefined, ctx);
+			assert.equal(result.isError, undefined);
+			assert.match(result.content?.[0]?.text ?? "", /already complete/);
+
+			const runDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs");
+			const runFile = readdirSync(runDir).find((name) => name === `${requestId}.json`);
+			assert.ok(runFile);
+			const runRecord = JSON.parse(readFileSync(join(runDir, runFile), "utf8")) as { status?: string };
+			assert.notEqual(runRecord.status, "cancelled");
 		});
 	});
 

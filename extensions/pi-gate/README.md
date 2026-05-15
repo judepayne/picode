@@ -37,6 +37,7 @@ Start pi, or if pi is already running, reload:
   - Allow for session
 - can switch profiles at runtime and clears cached approvals when the profile changes
 - accepts inter-extension profile switch requests and, if a turn is active, queues the switch until `agent_end`
+- applies delegated subagent profile lineage ceilings from `PI_GATE_PROFILE_LINEAGE` by evaluating each concrete tool call against every profile in the lineage and choosing the strictest result (`deny > ask > allow`)
 - falls back to **YOLO permission mode** if policy loading or validation fails
 
 ## Commands
@@ -57,7 +58,7 @@ Top-level keys:
 - `permission`
 - `profiles`
 
-`activeProfile` is the profile pi-gate uses on startup and after `/reload`, unless it is overridden by `GATE_PROFILE` or explicitly switched at runtime.
+`activeProfile` is the profile pi-gate uses on startup and after `/reload`, unless it is overridden by `GATE_PROFILE` or explicitly switched at runtime. Delegated subagent children also receive internal `PI_GATE_PROFILE_LINEAGE` metadata so nested children keep the capability ceiling of their parent delegation chain.
 
 Runtime switching means you actively change the profile while pi is running, for example with:
 
@@ -224,6 +225,8 @@ pi-gate maps pi tools onto OpenCode-style permission subjects:
 This means one `edit` rule governs file mutations across the mutation tools pi exposes.
 
 ## Bash behavior
+
+Pi-gate is the authoritative control layer for bash permissions. Agent or subagent card metadata such as `bash: read-only` may express mode intent or add lightweight guardrails, but it is not a security boundary.
 
 `bash` uses two layers:
 

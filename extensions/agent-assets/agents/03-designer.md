@@ -4,7 +4,6 @@ description: Design discussion and code review partner.
 profile: designer
 color: #33AA55
 tools: all
-subagents: scout, reviewer
 bash: full
 thinking: -
 model: -

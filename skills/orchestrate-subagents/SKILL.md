@@ -38,7 +38,7 @@ When `async: true`, do not add an assistant launch acknowledgment if the tool re
 
 - Use only the mediated tools: `delegate_subagent` and `delegate_subagent_status`.
 - Do not use raw `subagent` here.
-- Available child agent types depend on the current mode; use only subagents explicitly allowed by that mode.
+- Available child agent types are known package/user subagents minus the current card's `banned_subagents`; depth and pi-gate lineage ceilings still apply.
 - Child gate profile/env is assigned by the orchestrator, not by you.
 - Child runs are unattended, so `clarify` is not available.
 - Agent-driven continuation is explicit: use `context: "continue"` with a concrete `childSessionId`.
@@ -50,7 +50,7 @@ When `async: true`, do not add an assistant launch acknowledgment if the tool re
 Use the subagent type that matches the actual reason for delegation.
 
 - `scout`: reconnaissance when the work is parallelized, broad enough to benefit from async, or part of a chain that deliberately narrows a large search space.
-- `worker`: bounded implementation or validation when the current mode allows it and the work can run in parallel or in the background.
+- `worker`: bounded implementation or validation when it is not banned and the work can run in parallel or in the background.
 - `reviewer`: independent read-only critique of a design, plan, diff, or working tree. This is the main role-specialist subagent.
 
 Do not use a scout or worker just to avoid doing ordinary parent-agent work. If the parent can inspect, decide, or edit directly with less coordination overhead, keep the work in the parent.
@@ -166,7 +166,7 @@ Behavior summary:
 2. Choose sync or async.
 3. Choose one task, parallel tasks, or a chain.
 4. Choose `fresh`, `fork`, or explicit `continue` context.
-5. Choose the subagent type if the current mode allows more than one.
+5. Choose the subagent type from known, non-banned subagents.
 6. Call `delegate_subagent`.
 7. If async, use `delegate_subagent_status` only when you need to inspect, monitor, or cancel the run.
 8. If delegation fails, inspect the failure reason before deciding what to do next.

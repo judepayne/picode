@@ -129,7 +129,7 @@ interface ModeDefinition {
 	profile: string;
 	color?: string;
 	toolSelection: ToolSelectionSpec;
-	subagents?: string[];
+	bannedSubagents?: string[];
 	bashPolicy: BashPolicy;
 	thinkingLevel?: ThinkingLevel;
 	model?: string;
@@ -149,6 +149,7 @@ interface CustomSessionEntry {
 	data?: {
 		modeId?: string;
 		subagents?: string[];
+		bannedSubagents?: string[];
 	};
 }
 
@@ -250,8 +251,9 @@ function parseCommaList(value: string | undefined): string[] {
 		.filter(Boolean);
 }
 
-function parseSubagents(value: string | undefined): string[] {
-	return parseCommaList(value);
+function parseBannedSubagents(value: string | undefined): string[] {
+	const parsed = parseCommaList(value);
+	return parsed.length === 1 && parsed[0] === "-" ? [] : parsed;
 }
 
 function normalizeBashPolicy(value: string | undefined): BashPolicy {
@@ -301,7 +303,7 @@ function loadSettings(settingsPath: string): { settings: ModeSettings; error?: s
 
 export function modeFromAgentCard(card: AgentAssetCard): ModeDefinition {
 	const name = unquote(card.name);
-	const subagents = parseSubagents(card.subagents);
+	const bannedSubagents = parseBannedSubagents(card.banned_subagents);
 
 	return {
 		id: slugify(name),
@@ -310,7 +312,7 @@ export function modeFromAgentCard(card: AgentAssetCard): ModeDefinition {
 		profile: unquote(card.profile ?? "default"),
 		color: card.color ? unquote(card.color) : undefined,
 		toolSelection: parseToolSelection({ tools: card.tools, banTools: card.ban_tools }),
-		subagents: subagents.length > 0 ? subagents : undefined,
+		...(bannedSubagents.length > 0 ? { bannedSubagents } : {}),
 		bashPolicy: normalizeBashPolicy(card.bash),
 		thinkingLevel: normalizeThinkingLevel(normalizeOptionalFrontmatterString(card.thinking)),
 		model: normalizeOptionalFrontmatterString(card.model),
@@ -444,7 +446,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		lastPersistedModeId = current.id;
 		pi.appendEntry(MODE_STATE_ENTRY_TYPE, {
 			modeId: current.id,
-			...(current.subagents && current.subagents.length > 0 ? { subagents: [...current.subagents] } : {}),
+			...(current.bannedSubagents && current.bannedSubagents.length > 0 ? { bannedSubagents: [...current.bannedSubagents] } : {}),
 		});
 	}
 
@@ -520,6 +522,9 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			pi.setThinkingLevel(current.thinkingLevel);
 		}
 		await applyConfiguredModel(ctx, current);
+		if (process.env.GATE_PROFILE_LOCK !== "1" && process.env.GATE_PROFILE_LOCK?.toLowerCase() !== "true") {
+			process.env.GATE_PROFILE = current.profile;
+		}
 		pi.events.emit(GATE_SWITCH_PROFILE_EVENT, {
 			profile: current.profile,
 			notify: false,
@@ -578,7 +583,9 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			`If asked for your mode, answer exactly: ${mode.name}.`,
 			`Gate profile: ${mode.profile}.`,
 			`Runtime constraints already applied: tools=${effectiveTools.join(",")}; bash=${mode.bashPolicy}.`,
-			mode.subagents && mode.subagents.length > 0 ? `Allowed delegated subagents: ${mode.subagents.join(",")}.` : `Allowed delegated subagents: none.`,
+			mode.bannedSubagents && mode.bannedSubagents.length > 0
+				? `Delegated subagents: open to known subagents subject to depth and pi-gate; banned for this mode: ${mode.bannedSubagents.join(",")}.`
+				: `Delegated subagents: open to known subagents subject to depth and pi-gate.`,
 			mode.description ? `Mode description: ${mode.description}` : undefined,
 			mode.model ? `Preferred model: ${mode.model}.` : undefined,
 			mode.thinkingLevel ? `Thinking level: ${mode.thinkingLevel}.` : undefined,
@@ -690,7 +697,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 					`profile=${current.profile}`,
 					`tools=${effectiveTools.join(",")}`,
 					`bash=${current.bashPolicy}`,
-					current.subagents && current.subagents.length > 0 ? `subagents=${current.subagents.join(",")}` : `subagents=none`,
+					current.bannedSubagents && current.bannedSubagents.length > 0 ? `banned_subagents=${current.bannedSubagents.join(",")}` : `delegation=open`,
 					current.thinkingLevel ? `thinking=${current.thinkingLevel}` : undefined,
 					current.model ? `model=${current.model}` : undefined,
 					`available=${modes.map((mode) => mode.name).join(", ")}`,

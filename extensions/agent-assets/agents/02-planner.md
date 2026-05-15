@@ -4,7 +4,6 @@ description: Analyse, clarify, and plan with source-code read-only discipline.
 profile: planner
 color: #FFB000
 tools: all
-subagents: scout, reviewer
 bash: read-only
 thinking: -
 model: -

@@ -85,8 +85,9 @@ describe("tap navigation", () => {
 	test("child down enters first child and up moves to parent/root", () => {
 		const roots = buildTapRoots([run("run-a")], [
 			child("parent", "run-a", 0),
-			child("nested", "run-a", 0, { parentChildSessionId: "parent" }),
+			child("nested", "run-a", 0, { agent: "worker", parentChildSessionId: "parent" }),
 		]);
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > {scout 1} > {worker 1}");
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "parent" }, "down").selection, { rootIndex: 0, childSessionId: "nested" });
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "nested" }, "up").selection, { rootIndex: 0, childSessionId: "parent" });
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "parent" }, "up").selection, { rootIndex: 0 });

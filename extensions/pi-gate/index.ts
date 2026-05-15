@@ -57,6 +57,14 @@ interface CompiledPolicy {
 	unattended: boolean;
 }
 
+interface EffectiveGatePolicy {
+	active: CompiledPolicy;
+	lineage: CompiledPolicy[];
+	lineageNames: string[];
+	profileName: string;
+	unattended: boolean;
+}
+
 interface ResolvedProfileOptions {
 	unattended: boolean;
 }
@@ -93,6 +101,7 @@ interface Decision {
 const SESSION_STATUS_KEY = "gate";
 const GATE_PROFILE_ENV = "GATE_PROFILE";
 const GATE_PROFILE_LOCK_ENV = "GATE_PROFILE_LOCK";
+const PI_GATE_PROFILE_LINEAGE_ENV = "PI_GATE_PROFILE_LINEAGE";
 const GATE_SWITCH_PROFILE_EVENT = "gate:switch-profile";
 const POLICY_SCHEMA_FILE = "policy.schema.json";
 const BASE_PROFILE_NAME = "$base";
@@ -552,6 +561,21 @@ function evaluateSubject(policy: CompiledPolicy, subject: string, groups: Candid
 	return { action: finalAction, reasons };
 }
 
+function annotateDecisionReasons(policy: CompiledPolicy, decision: Decision): string[] {
+	return decision.reasons.map((reason) => `[${policy.profileName}] ${reason}`);
+}
+
+function evaluateSubjectAcrossLineage(effective: EffectiveGatePolicy, subject: string, groups: CandidateGroup[]): Decision {
+	let finalAction: PermissionAction = "allow";
+	const reasons: string[] = [];
+	for (const policy of effective.lineage) {
+		const decision = evaluateSubject(policy, subject, groups);
+		finalAction = pickMoreRestrictive(finalAction, decision.action);
+		reasons.push(...annotateDecisionReasons(policy, decision));
+	}
+	return { action: finalAction, reasons };
+}
+
 function buildPathCandidateGroup(rawPath: string, cwd: string): CandidateGroup {
 	const absPath = normalizePathArg(rawPath, cwd);
 	const values = new Set<string>([absPath]);
@@ -566,26 +590,46 @@ function buildPathCandidateGroup(rawPath: string, cwd: string): CandidateGroup {
 	};
 }
 
-function evaluateExternalDirectory(policy: CompiledPolicy, absPaths: string[], cwd: string): Decision {
+function buildExternalDirectoryGroups(absPaths: string[], cwd: string): CandidateGroup[] {
 	const normalizedCwd = normalizeAbsPath(cwd);
-	const groups = absPaths
+	return absPaths
 		.map((candidate) => normalizeAbsPath(candidate))
 		.filter((candidate) => !isWithinRoot(normalizedCwd, candidate))
 		.map((candidate) => ({ display: candidate, values: [candidate] }));
+}
+
+function evaluateExternalDirectory(policy: CompiledPolicy, absPaths: string[], cwd: string): Decision {
+	const groups = buildExternalDirectoryGroups(absPaths, cwd);
 	if (groups.length === 0) return { action: "allow", reasons: [] };
 	return evaluateSubject(policy, "external_directory", groups);
 }
 
-function evaluateAbsolutePaths(policy: CompiledPolicy, subject: string, absPaths: string[], cwd: string): Decision {
-	const groups = absPaths.map((candidate) => {
+function evaluateExternalDirectoryAcrossLineage(effective: EffectiveGatePolicy, absPaths: string[], cwd: string): Decision {
+	const groups = buildExternalDirectoryGroups(absPaths, cwd);
+	if (groups.length === 0) return { action: "allow", reasons: [] };
+	return evaluateSubjectAcrossLineage(effective, "external_directory", groups);
+}
+
+function buildAbsolutePathGroups(absPaths: string[], cwd: string): CandidateGroup[] {
+	return absPaths.map((candidate) => {
 		const values = new Set<string>([normalizeAbsPath(candidate)]);
 		if (isWithinRoot(cwd, candidate)) {
 			values.add(normalizeSlashes(path.relative(normalizeAbsPath(cwd), normalizeAbsPath(candidate)) || "."));
 		}
 		return { display: normalizeAbsPath(candidate), values: Array.from(values) };
 	});
+}
+
+function evaluateAbsolutePaths(policy: CompiledPolicy, subject: string, absPaths: string[], cwd: string): Decision {
+	const groups = buildAbsolutePathGroups(absPaths, cwd);
 	if (groups.length === 0) return { action: "allow", reasons: [] };
 	return evaluateSubject(policy, subject, groups);
+}
+
+function evaluateAbsolutePathsAcrossLineage(effective: EffectiveGatePolicy, subject: string, absPaths: string[], cwd: string): Decision {
+	const groups = buildAbsolutePathGroups(absPaths, cwd);
+	if (groups.length === 0) return { action: "allow", reasons: [] };
+	return evaluateSubjectAcrossLineage(effective, subject, groups);
 }
 
 function extractPathStrings(input: Record<string, unknown>, fields: string[]): string[] {
@@ -1047,15 +1091,42 @@ export default function piGate(pi: ExtensionAPI) {
 		);
 	}
 
-	function getCompiledPolicy(cwd: string): { compiled?: CompiledPolicy; error?: string } {
+	function resolveLineageProfileNames(activeProfile: string): string[] {
+		const raw = process.env[PI_GATE_PROFILE_LINEAGE_ENV];
+		const names = raw
+			? raw.split(",").map(normalizeProfileName).filter((entry): entry is string => Boolean(entry))
+			: [];
+		if (names.length === 0) names.push(activeProfile);
+		if (!names.includes(activeProfile)) names.push(activeProfile);
+		return names;
+	}
+
+	function getEffectivePolicy(cwd: string): { compiled?: EffectiveGatePolicy; error?: string } {
 		if (loaded.error) return { error: loaded.error };
 		if (!loaded.policy) return { error: "Gate policy unavailable. Tool calls are blocked until the gate policy is fixed." };
 		try {
-			return { compiled: compilePolicy(loaded.policy, cwd, resolveRequestedProfile()) };
+			const activeProfile = resolveRequestedProfile();
+			const lineageNames = resolveLineageProfileNames(activeProfile);
+			const lineage = lineageNames.map((profileName) => compilePolicy(loaded.policy!, cwd, profileName));
+			const active = lineage.find((policy) => policy.requestedProfileName === activeProfile)
+				?? compilePolicy(loaded.policy, cwd, activeProfile);
+			return {
+				compiled: {
+					active,
+					lineage,
+					lineageNames,
+					profileName: active.profileName,
+					unattended: active.unattended,
+				},
+			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			return { error: `policy resolution failed! ${message}. Tool calls are blocked until the gate policy is fixed.` };
 		}
+	}
+
+	function scopeSessionKey(effective: EffectiveGatePolicy, sessionKey: string): string {
+		return `profiles:${effective.lineageNames.join(">")}:${sessionKey}`;
 	}
 
 	function switchProfile(
@@ -1130,7 +1201,7 @@ export default function piGate(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
-		const result = getCompiledPolicy(ctx.cwd);
+		const result = getEffectivePolicy(ctx.cwd);
 		if (result.compiled) updateStatus(ctx, result.compiled.profileName, sessionAllows, false, profileLocked);
 		else updateStatus(ctx, undefined, sessionAllows, true, profileLocked);
 		if (result.error && ctx.hasUI && !policyErrorShown) {
@@ -1195,14 +1266,18 @@ export default function piGate(pi: ExtensionAPI) {
 				ctx.ui.notify("Gate: profile switching requires a UI", "warning");
 				return;
 			}
-			const current = getCompiledPolicy(ctx.cwd).compiled?.profileName ?? "error";
+			const current = getEffectivePolicy(ctx.cwd).compiled?.profileName ?? "error";
 			const choice = await ctx.ui.select(`Select gate profile (current: ${current})`, profileNames);
 			if (!choice) return;
 			if (choice === current) {
 				// Selecting the current profile clears the override, falling back
-				// to GATE_PROFILE env var, policy.activeProfile, or $base.
+				// to GATE_PROFILE env var, policy.activeProfile, or $base. Session
+				// approvals are scoped to the effective profile and must not survive
+				// a reset to a different fallback profile.
+				const previousProfile = current;
 				selectedProfileOverride = undefined;
-				const fresh = getCompiledPolicy(ctx.cwd);
+				const fresh = getEffectivePolicy(ctx.cwd);
+				if (fresh.compiled?.profileName !== previousProfile) sessionAllows.clear();
 				updateStatus(ctx, fresh.compiled?.profileName, sessionAllows, !fresh.compiled, profileLocked);
 				ctx.ui.notify(`Gate profile reset to ${fresh.compiled?.profileName ?? "error"}`, "info");
 				return;
@@ -1214,7 +1289,7 @@ export default function piGate(pi: ExtensionAPI) {
 			return;
 		}
 
-		const resolved = getCompiledPolicy(ctx.cwd);
+		const resolved = getEffectivePolicy(ctx.cwd);
 		if (trimmed === "clear") {
 			sessionAllows.clear();
 			updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked);
@@ -1232,6 +1307,7 @@ export default function piGate(pi: ExtensionAPI) {
 
 		const summary = [
 			resolved.compiled ? `Gate profile=${resolved.compiled.profileName}` : "Gate profile=error",
+			resolved.compiled && resolved.compiled.lineageNames.length > 1 ? `lineage=${resolved.compiled.lineageNames.join(">")}` : undefined,
 			resolved.compiled?.unattended ? "unattended=true" : undefined,
 			profileLocked ? `profile locked by=${GATE_PROFILE_LOCK_ENV}` : undefined,
 			selectedProfileOverride ? `profile override=${selectedProfileOverride === BASE_PROFILE_NAME ? "base" : selectedProfileOverride}` : undefined,
@@ -1251,7 +1327,7 @@ export default function piGate(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
-		const resolved = getCompiledPolicy(ctx.cwd);
+		const resolved = getEffectivePolicy(ctx.cwd);
 		if (!resolved.compiled) {
 			return {
 				block: true,
@@ -1262,11 +1338,11 @@ export default function piGate(pi: ExtensionAPI) {
 
 		if (event.toolName === "bash") {
 			const command = String((event.input as Record<string, unknown>).command ?? "");
-			const sessionKey = buildBashSessionKey(command);
+			const sessionKey = scopeSessionKey(compiled, buildBashSessionKey(command));
 			if (sessionAllows.has(sessionKey)) return undefined;
 
 			const normalizedCommand = normalizeCommand(command);
-			const commandDecision = evaluateSubject(compiled, "bash", [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }]);
+			const commandDecision = evaluateSubjectAcrossLineage(compiled, "bash", [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }]);
 			const analysis = extractMutationTargets(command, ctx.cwd);
 			const reasons = [...commandDecision.reasons];
 
@@ -1285,8 +1361,8 @@ export default function piGate(pi: ExtensionAPI) {
 				if (candidatePaths.length === 0) {
 					pathDecision = { action: "ask", reasons: [`bash ask: ${analysis.reason}`] };
 				} else {
-					externalDecision = evaluateExternalDirectory(compiled, candidatePaths, ctx.cwd);
-					pathDecision = evaluateAbsolutePaths(compiled, "edit", candidatePaths, ctx.cwd);
+					externalDecision = evaluateExternalDirectoryAcrossLineage(compiled, candidatePaths, ctx.cwd);
+					pathDecision = evaluateAbsolutePathsAcrossLineage(compiled, "edit", candidatePaths, ctx.cwd);
 				}
 			}
 
@@ -1335,14 +1411,16 @@ export default function piGate(pi: ExtensionAPI) {
 		const subject = getToolPermissionSubject(event.toolName);
 		const subjectGroups = getToolSubjectGroups(event.toolName, input, ctx);
 		const pathCandidates = getToolPathCandidates(event.toolName, input, ctx);
-		const sessionKey =
+		const sessionKey = scopeSessionKey(
+			compiled,
 			subjectGroups.length > 0
 				? buildPathSessionKey(subject, subjectGroups.map((group) => group.display))
-				: `${subject}:unknown`;
+				: `${subject}:unknown`,
+		);
 		if (sessionAllows.has(sessionKey)) return undefined;
 
-		let subjectDecision = evaluateSubject(compiled, subject, subjectGroups.length > 0 ? subjectGroups : [{ display: "unknown input", values: [""] }]);
-		let externalDecision = evaluateExternalDirectory(compiled, pathCandidates, ctx.cwd);
+		let subjectDecision = evaluateSubjectAcrossLineage(compiled, subject, subjectGroups.length > 0 ? subjectGroups : [{ display: "unknown input", values: [""] }]);
+		let externalDecision = evaluateExternalDirectoryAcrossLineage(compiled, pathCandidates, ctx.cwd);
 		let finalAction = pickMoreRestrictive(subjectDecision.action, externalDecision.action);
 		const reasons = [...externalDecision.reasons, ...subjectDecision.reasons];
 

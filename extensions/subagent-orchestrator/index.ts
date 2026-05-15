@@ -17,6 +17,7 @@ import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
+import { cancelAsyncRun } from "../subagent-mode/async-executor.ts";
 import {
 	EVENT_CHILD_CANCELLED as SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
 	EVENT_CHILD_COMPLETE as SUBAGENT_MODE_CHILD_COMPLETE_EVENT,
@@ -37,6 +38,7 @@ import {
 } from "../subagent-mode/types.ts";
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
+import { findNamedAgentCard, slugifyCardName } from "./agent-card-lookup.ts";
 import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
 import { rememberRunMessageDetails, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatUserLaunchNotification } from "./footer-status.ts";
@@ -86,8 +88,14 @@ const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
 
 const STATUS_LIST_TEXT_LIMIT = 300;
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
+const DEV_STREAM_TO_FILE_ENV = "PICODE_ENABLE_DEV_STREAM_TO_FILE";
 
 export { openSubagentStream, subagentStreamTopic, createJsonlFileSubagentStreamHandler, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler };
+
+function isEnvEnabled(value: string | undefined): boolean {
+	return value === "1" || value?.toLowerCase() === "true";
+}
+
 
 function formatUnknownError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -230,32 +238,66 @@ function shouldMarkChildRunningAtLaunch(request: NormalizedDelegationRequest, ch
 	return (child.stepIndex ?? child.childIndex) === 0;
 }
 
-function normalizeAllowedSubagents(value: unknown): string[] | undefined {
-	if (!Array.isArray(value)) return undefined;
+function normalizeSubagentList(value: unknown): string[] {
+	if (!Array.isArray(value)) return [];
 	const subagents = value
 		.map((entry) => typeof entry === "string" ? entry.trim().toLowerCase() : "")
 		.filter(Boolean);
-	return subagents.length > 0 ? subagents : undefined;
+	return subagents.length === 1 && subagents[0] === "-" ? [] : [...new Set(subagents)];
 }
 
-function findCurrentModeState(ctx: ExtensionContext): { modeId?: string; subagents?: string[] } {
+function parseSubagentListFrontmatter(value: string | undefined): string[] {
+	if (!value) return [];
+	const trimmed = value.trim();
+	const list = trimmed.startsWith("[") && trimmed.endsWith("]") ? trimmed.slice(1, -1) : trimmed;
+	const entries = list
+		.split(",")
+		.map((entry) => entry.trim().replace(/^['\"]|['\"]$/g, "").toLowerCase())
+		.filter(Boolean);
+	return entries.length === 1 && entries[0] === "-" ? [] : [...new Set(entries)];
+}
+
+function knownSubagentIds(): string[] {
+	return currentSubagentCards()
+		.map((card) => typeof card.name === "string" ? slugifyCardName(card.name) : "")
+		.filter(Boolean);
+}
+
+function findCurrentDelegationContext(ctx: ExtensionContext): { modeId?: string; knownSubagents: string[]; bannedSubagents: string[]; availableSubagents: string[] } {
+	const knownSubagents = knownSubagentIds();
 	const branch = ctx.sessionManager.getBranch();
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index] as ModeStateSessionEntry;
 		if (entry?.type !== "custom" || entry.customType !== MODE_STATE_ENTRY_TYPE) continue;
 		const modeId = entry.data?.modeId?.trim().toLowerCase();
 		if (!modeId) continue;
-		const subagents = normalizeAllowedSubagents(entry.data?.subagents);
+		const bannedSubagents = normalizeSubagentList(entry.data?.bannedSubagents);
+		const effectiveKnownSubagents = knownSubagents.length > 0 ? knownSubagents : normalizeSubagentList(entry.data?.subagents);
 		return {
 			modeId,
-			...(subagents ? { subagents } : {}),
+			knownSubagents: effectiveKnownSubagents,
+			bannedSubagents,
+			availableSubagents: effectiveKnownSubagents.filter((subagent) => !bannedSubagents.includes(subagent)),
 		};
 	}
-	return {};
+
+	const currentSubagent = process.env.GATE_PROFILE?.trim().toLowerCase();
+	if (currentSubagent && currentSubagentDepth() > 0 && knownSubagents.includes(currentSubagent)) {
+		const card = findNamedAgentCard(currentSubagentCards(), currentSubagent);
+		const bannedSubagents = parseSubagentListFrontmatter(card?.banned_subagents);
+		return {
+			modeId: currentSubagent,
+			knownSubagents,
+			bannedSubagents,
+			availableSubagents: knownSubagents.filter((subagent) => !bannedSubagents.includes(subagent)),
+		};
+	}
+
+	return { knownSubagents, bannedSubagents: [], availableSubagents: [] };
 }
 
 function findCurrentModeId(ctx: ExtensionContext): string | undefined {
-	return findCurrentModeState(ctx).modeId;
+	return findCurrentDelegationContext(ctx).modeId;
 }
 
 function normalizeRunOrigin(value: unknown): RunOrigin {
@@ -340,8 +382,8 @@ function bindStickyUserSubagentSessionToRun(
 	stickyUserSubagentSessions = updateStickyUserSubagentSessionByRun(stickyUserSubagentSessions, runId, patch);
 }
 
-function currentAllowedSubagents(ctx: ExtensionContext): string[] {
-	return findCurrentModeState(ctx).subagents ?? [];
+function currentAvailableSubagents(ctx: ExtensionContext): string[] {
+	return findCurrentDelegationContext(ctx).availableSubagents;
 }
 
 interface SessionDirCapableSessionManager {
@@ -1090,8 +1132,16 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return state.getRun(run.orchestratorRunId) ?? run;
 	}
 
+	function findCurrentOwnerModeId(ctx: ExtensionContext): string | undefined {
+		const parentExecutionChildId = currentParentChildId();
+		const directParentChild = parentExecutionChildId
+			? state.getChildSession(parentExecutionChildId) ?? state.findChildSessionByExecutionChildId(parentExecutionChildId)
+			: undefined;
+		return directParentChild?.ownerModeId ?? findCurrentModeId(ctx);
+	}
+
 	function reconcileOwnedAsyncRuns(ctx: ExtensionContext, options?: { ingestEvents?: boolean }): void {
-		const ownerModeId = findCurrentModeId(ctx);
+		const ownerModeId = findCurrentOwnerModeId(ctx);
 		if (!ownerModeId) return;
 		for (const run of state.listOwnedRuns(ownerModeId)) {
 			if (!run.async) continue;
@@ -1101,7 +1151,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	}
 
 	function reconcileTapAsyncRuns(ctx: ExtensionContext, selectedChildSessionId?: string): void {
-		const ownerModeId = findCurrentModeId(ctx);
+		const ownerModeId = findCurrentOwnerModeId(ctx);
 		if (!ownerModeId) return;
 		if (!selectedChildSessionId) {
 			for (const run of state.listOwnedRuns(ownerModeId)) {
@@ -1174,9 +1224,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		footerLifecycle.acknowledgeVisibleTerminalRuns(ctx);
 		footerLifecycle.updateUiStatus(ctx, true);
 		if ((event.images?.length ?? 0) > 0) return { action: "continue" };
-		const currentMode = findCurrentModeState(ctx);
-		if (!currentMode.modeId || !currentMode.subagents?.length) return { action: "continue" };
-		const parsed = parseUserDispatch(event.text, currentMode.subagents, ctx.cwd);
+		const currentMode = findCurrentDelegationContext(ctx);
+		if (!currentMode.modeId || currentMode.availableSubagents.length === 0) return { action: "continue" };
+		const parsed = parseUserDispatch(event.text, currentMode.availableSubagents, ctx.cwd);
 		if (!parsed) return { action: "continue" };
 		const request = hydrateDelegationRequest(pi, ctx, {
 			shape: "single",
@@ -1210,7 +1260,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				tui,
 				theme,
 				keybindings,
-				() => currentAllowedSubagents(latestCtx ?? ctx),
+				() => currentAvailableSubagents(latestCtx ?? ctx),
 			));
 		}
 		restoreRunMessageSnapshots(ctx.sessionManager.getBranch());
@@ -1275,14 +1325,15 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			? state.getChildSession(parentExecutionChildId) ?? state.findChildSessionByExecutionChildId(parentExecutionChildId)
 			: undefined;
 		const directParentChildSessionId = directParentChild?.childSessionId;
-		const rootRunId = currentTopLevelRunId() ?? directParentChild?.rootRunId ?? directParentChild?.runId ?? orchestratorRunId;
+		const rootRunId = directParentChild?.rootRunId ?? directParentChild?.runId ?? currentTopLevelRunId() ?? orchestratorRunId;
 		const parentRunId = directParentChild?.runId;
+		const effectiveOwnerModeId = directParentChild?.ownerModeId ?? currentModeId;
 		const depth = currentSubagentDepth();
 		const baseChildSessions = buildChildSessionRecords({
 			runId: orchestratorRunId,
 			rootRunId,
 			parentChildSessionId: directParentChildSessionId,
-			ownerModeId: currentModeId,
+			ownerModeId: effectiveOwnerModeId,
 			parentSessionId,
 			parentSessionFile,
 			agent: request.agent,
@@ -1322,7 +1373,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 
 		state.createRun({
 			orchestratorRunId,
-			ownerModeId: currentModeId,
+			ownerModeId: effectiveOwnerModeId,
 			parentSessionId,
 			parentSessionFile,
 			rootRunId,
@@ -1470,6 +1521,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			updatedAt: Date.now(),
 			...(typeof details.asyncId === "string" ? { underlyingRunId: details.asyncId } : {}),
 			...(typeof details.asyncDir === "string" ? { asyncDir: details.asyncDir } : {}),
+			...(typeof details.pid === "number" ? { pid: details.pid } : {}),
 			...(responseText ? { resultSummary: responseText } : {}),
 		});
 		if (typeof details.asyncId === "string") {
@@ -1549,7 +1601,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			latestCtx = ctx;
-			const currentMode = findCurrentModeState(ctx);
+			const currentMode = findCurrentDelegationContext(ctx);
 			const currentModeId = currentMode.modeId;
 			if (!currentModeId) {
 				return errorResult("Subagent orchestrator could not determine the current agent mode from session state.");
@@ -1561,8 +1613,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			}
 
 			const request = hydrateDelegationRequest(pi, ctx, normalized.request, pi.getThinkingLevel());
-			if (!currentMode.subagents?.includes(request.agent)) {
-				return errorResult(`Mode ${currentModeId} is not allowed to delegate to subagent type ${request.agent}.`);
+			if (!currentMode.knownSubagents.includes(request.agent)) {
+				return errorResult(`Unknown subagent type ${request.agent}. Known subagents: ${currentMode.knownSubagents.join(", ") || "none"}.`);
+			}
+			if (currentMode.bannedSubagents.includes(request.agent)) {
+				return errorResult(`Mode ${currentModeId} is banned from delegating to subagent type ${request.agent}.`);
 			}
 			const launched = await launchDelegatedRun(ctx, currentModeId, request, {
 				origin: "agent",
@@ -1587,35 +1642,38 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 					...(responseText ? { resultSummary: responseText } : {}),
 					...(typeof details.asyncId === "string" ? { underlyingRunId: details.asyncId } : {}),
 					...(typeof details.asyncDir === "string" ? { asyncDir: details.asyncDir } : {}),
+					...(typeof details.pid === "number" ? { pid: details.pid } : {}),
 				},
 			);
 		},
 	});
 
-	pi.registerTool({
-		name: "dev_subagent_stream_to_file",
-		label: "Dev Subagent Stream To File",
-		description: "Development helper: open a sanitized subagent stream and append events to a JSONL file.",
-		parameters: DevSubagentStreamToFileParams,
-		async execute(_toolCallId, params) {
-			if (typeof params.childSessionId !== "string" || !params.childSessionId.trim()) return errorResult("childSessionId is required.");
-			if (typeof params.filePath !== "string" || !params.filePath.trim()) return errorResult("filePath is required.");
-			const childSessionId = params.childSessionId.trim();
-			const filePath = path.resolve(process.cwd(), params.filePath.trim());
-			devStreamFileClosers.get(childSessionId)?.();
-			const close = openSubagentStream(
-				childSessionId,
-				createJsonlFileSubagentStreamHandler(filePath),
-				{ includeThinking: params.includeThinking === true },
-			);
-			devStreamFileClosers.set(childSessionId, close);
-			return successText(`Opened subagent stream ${childSessionId} to ${filePath}.`, {
-				childSessionId,
-				filePath,
-				topic: subagentStreamTopic(childSessionId),
-			});
-		},
-	});
+	if (isEnvEnabled(process.env[DEV_STREAM_TO_FILE_ENV])) {
+		pi.registerTool({
+			name: "dev_subagent_stream_to_file",
+			label: "Dev Subagent Stream To File",
+			description: `Development helper enabled by ${DEV_STREAM_TO_FILE_ENV}: open a sanitized subagent stream and append events to a JSONL file.`,
+			parameters: DevSubagentStreamToFileParams,
+			async execute(_toolCallId, params) {
+				if (typeof params.childSessionId !== "string" || !params.childSessionId.trim()) return errorResult("childSessionId is required.");
+				if (typeof params.filePath !== "string" || !params.filePath.trim()) return errorResult("filePath is required.");
+				const childSessionId = params.childSessionId.trim();
+				const filePath = path.resolve(process.cwd(), params.filePath.trim());
+				devStreamFileClosers.get(childSessionId)?.();
+				const close = openSubagentStream(
+					childSessionId,
+					createJsonlFileSubagentStreamHandler(filePath),
+					{ includeThinking: params.includeThinking === true },
+				);
+				devStreamFileClosers.set(childSessionId, close);
+				return successText(`Opened subagent stream ${childSessionId} to ${filePath}.`, {
+					childSessionId,
+					filePath,
+					topic: subagentStreamTopic(childSessionId),
+				});
+			},
+		});
+	}
 
 	pi.registerTool({
 		name: "delegate_subagent_status",
@@ -1632,7 +1690,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			latestCtx = ctx;
-			const currentModeId = findCurrentModeId(ctx);
+			const currentModeId = findCurrentOwnerModeId(ctx);
 			if (!currentModeId) {
 				return errorResult("Subagent orchestrator status could not determine the current agent mode from session state.");
 			}
@@ -1779,15 +1837,28 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				return successText(`Run ${runId} is already ${run.status}.`, { run });
 			}
 
-			// underlyingRequestId is the orchestrator-run-id that the bridge's
-			// `active` map is keyed by. It exists for every dispatched run.
-			// handleCancel in the bridge aborts the controller (sync) and
-			// SIGTERMs the persisted PID (async); both cases are fire-and-forget.
-			if (!run.underlyingRequestId) {
-				return errorResult(`Run ${runId} cannot be cancelled because no live cancellation handle is available.`, getRequestedModeLabel({ shape: run.requestShape, async: run.async, context: run.context } as NormalizedDelegationRequest));
+			let cancelMessage = `Cancellation requested for run ${runId}.`;
+			if (run.async) {
+				const asyncRunId = run.underlyingRunId;
+				if (!asyncRunId) {
+					return errorResult(`Run ${runId} cannot be cancelled because no async run id is available.`, getRequestedModeLabel({ shape: run.requestShape, async: run.async, context: run.context } as NormalizedDelegationRequest));
+				}
+				if (run.underlyingRequestId) pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: run.underlyingRequestId });
+				const cancelled = cancelAsyncRun(asyncRunId, { pid: run.pid, allowUnverifiedPid: true });
+				if (!cancelled.ok) return errorResult(`Run ${runId} cancellation failed: ${cancelled.message ?? "unknown error"}`);
+				if (cancelled.alreadyFinished) {
+					const refreshed = refreshAsyncRunState(run, { ingestEvents: true });
+					return successText(`Run ${runId} ${cancelled.message ?? "already finished"}.`, { run: refreshed });
+				}
+				cancelMessage = `Cancellation requested for run ${runId}. ${cancelled.message ?? ""}`.trim();
+			} else {
+				// underlyingRequestId is the orchestrator-run-id that the bridge's
+				// `active` map is keyed by. It exists for live sync runs.
+				if (!run.underlyingRequestId) {
+					return errorResult(`Run ${runId} cannot be cancelled because no live cancellation handle is available.`, getRequestedModeLabel({ shape: run.requestShape, async: run.async, context: run.context } as NormalizedDelegationRequest));
+				}
+				pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: run.underlyingRequestId });
 			}
-			pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: run.underlyingRequestId });
-			const cancelMessage = `Cancellation requested for run ${runId}.`;
 
 			const updated = state.updateRun(runId, {
 				status: "cancelled",

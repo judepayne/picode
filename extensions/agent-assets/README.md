@@ -77,7 +77,7 @@ Rules:
 - blank user frontmatter values are ignored, so the built-in value is inherited
 - a non-empty user prompt body replaces the built-in prompt body entirely
 - an empty or whitespace-only user prompt body is ignored, so the built-in prompt is inherited
-- list-like fields such as `tools`, `subagents`, `ban_tools`, and `extensions` replace wholesale as strings; they are not appended or diffed
+- list-like fields such as `tools`, `banned_subagents`, `ban_tools`, and `extensions` replace wholesale as strings; they are not appended or diffed
 - `name` is required on every final card; same-filename overrides may inherit the built-in `name`, but new user-only cards without `name` are skipped with a diagnostic
 - final names must be unique after slug normalization, so `Research Assistant` and `research-assistant` conflict
 
@@ -85,11 +85,11 @@ For example, a user overlay file at `~/.pi/picode-agents/01-builder.md` can cont
 
 ```md
 ---
-subagents: scout, worker, reviewer, researcher
+banned_subagents: expensive-specialist
 ---
 ```
 
-That keeps the built-in Builder prompt and all other settings, but replaces the Builder `subagents` field.
+That keeps the built-in Builder prompt and all other settings, but adds a non-inherited direct delegation ban.
 
 ## Diagnostics
 

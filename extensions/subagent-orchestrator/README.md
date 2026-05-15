@@ -26,6 +26,8 @@ If `agent-mode` answers "what should the main agent be right now?", then `subage
 - `delegate_subagent`
 - `delegate_subagent_status`
 
+It also has an arbitrary-path development helper, `dev_subagent_stream_to_file`, for dumping sanitized stream events to JSONL. That helper is not registered by default; enable it explicitly with `PICODE_ENABLE_DEV_STREAM_TO_FILE=1` when debugging stream replay.
+
 `delegate_subagent` supports an optional `timeoutSeconds` argument for synchronous runs. It is an inactivity timeout: if omitted, sync runs are cancelled after 40 seconds without child activity. Child activity includes streamed text, thinking boundaries, tool events, and progress events. Async runs do not use this timeout, but if the field is present it still must be within the supported positive-integer range.
 
 It also provides a user-facing shorthand for async delegation:
@@ -89,7 +91,7 @@ The orchestrator can show:
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`. While delegated work is visible, the footer tree shows the run structure directly. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chain steps, and `,` for parallel siblings. Node color indicates lifecycle: running (`#71e37d`), queued (`#f0c986`), complete (`#bababa`), cancelled (`#874a4a`), and failed (`#FF4D4D`). Users can override these defaults with z-prompt-vars keys under `footer.colors.subagentStatus.*`.
+Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`. While delegated work is visible, the footer tree shows the run structure directly. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for recursive nesting such as `root > run 1 > scout 1 > worker 1`, `→` for chain steps, and `,` for parallel siblings. Node color indicates lifecycle: running (`#71e37d`), queued (`#f0c986`), complete (`#bababa`), cancelled (`#874a4a`), and failed (`#FF4D4D`). Users can override these defaults with z-prompt-vars keys under `footer.colors.subagentStatus.*`.
 
 When delegated work fails, the red footer node is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
 

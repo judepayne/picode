@@ -118,7 +118,7 @@ describe("watchCompletion", () => {
 });
 
 describe("cancelAsyncRun", () => {
-	test("returns ok and signals the persisted pid", (t, done) => {
+	test("returns ok and signals an explicitly allowed startup fallback pid", (t, done) => {
 		const runId = `test-cancel-${Date.now()}`;
 		// Install a SIGUSR1 handler as a proxy — we will manually send SIGTERM
 		// and verify it was received. Note: we must not leave the handler
@@ -126,9 +126,8 @@ describe("cancelAsyncRun", () => {
 		let received = false;
 		const handler = (): void => { received = true; };
 		process.once("SIGTERM", handler);
-		seedManifest(runId, { pid: process.pid });
 
-		const result = cancelAsyncRun(runId);
+		const result = cancelAsyncRun(runId, { pid: process.pid, allowUnverifiedPid: true });
 		assert.strictEqual(result.ok, true);
 		assert.strictEqual(result.alreadyFinished, undefined);
 
@@ -136,7 +135,6 @@ describe("cancelAsyncRun", () => {
 		setTimeout(() => {
 			try {
 				assert.strictEqual(received, true, "expected SIGTERM to be delivered");
-				fs.rmSync(asyncRunDir(runId), { recursive: true, force: true });
 				done();
 			} catch (error) {
 				done(error as Error);
@@ -151,6 +149,48 @@ describe("cancelAsyncRun", () => {
 		assert.strictEqual(result.ok, true);
 		assert.strictEqual(result.alreadyFinished, true);
 		fs.rmSync(asyncRunDir(runId), { recursive: true, force: true });
+	});
+
+	test("uses fallback pid when manifest is missing", () => {
+		const originalKill = process.kill;
+		const calls: Array<{ pid: number; signal?: string | number }> = [];
+		(process as unknown as { kill: (pid: number, signal?: string | number) => boolean }).kill = (pid, signal) => {
+			calls.push({ pid, signal });
+			return true;
+		};
+		try {
+			const result = cancelAsyncRun(`nonexistent-${Date.now()}`, { pid: 12345, allowUnverifiedPid: true });
+			assert.strictEqual(result.ok, true);
+			assert.deepStrictEqual(calls, [{ pid: 12345, signal: "SIGTERM" }]);
+		} finally {
+			(process as unknown as { kill: typeof process.kill }).kill = originalKill;
+		}
+	});
+
+	test("refuses a stale manifest pid that is not the async runner", () => {
+		const runId = `test-cancel-stale-${Date.now()}`;
+		seedManifest(runId, { pid: process.pid });
+		const result = cancelAsyncRun(runId);
+		assert.strictEqual(result.ok, false);
+		assert.match(result.message ?? "", /could not be verified/);
+		fs.rmSync(asyncRunDir(runId), { recursive: true, force: true });
+	});
+
+	test("does not use fallback pid unless explicitly allowed", () => {
+		const originalKill = process.kill;
+		let called = false;
+		(process as unknown as { kill: (pid: number, signal?: string | number) => boolean }).kill = () => {
+			called = true;
+			return true;
+		};
+		try {
+			const result = cancelAsyncRun(`nonexistent-${Date.now()}`, { pid: 12345 });
+			assert.strictEqual(result.ok, false);
+			assert.strictEqual(called, false);
+			assert.match(result.message ?? "", /not found/);
+		} finally {
+			(process as unknown as { kill: typeof process.kill }).kill = originalKill;
+		}
 	});
 
 	test("returns failure when the run dir is missing", () => {

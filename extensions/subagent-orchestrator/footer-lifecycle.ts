@@ -11,6 +11,7 @@ export interface FooterLifecycleTapController {
 export interface FooterLifecycleState {
 	listHandbacks(): OrchestratorHandbackRecord[];
 	listOwnedRuns(ownerModeId: string): OrchestratorRunRecord[];
+	listRunsByRootRunId(rootRunId: string): OrchestratorRunRecord[];
 	listChildSessionsByRootRunIds(rootRunIds: Set<string>): OrchestratorChildSessionRecord[];
 	updateRun(runId: string, patch: Partial<OrchestratorRunRecord>): OrchestratorRunRecord | undefined;
 }
@@ -70,8 +71,20 @@ export function createFooterLifecycleController<Lineage>(input: FooterLifecycleI
 			&& input.normalizeHandbackConsumer(record.consumer) !== "user"
 		);
 		const queuedHandbackRunIds = new Set(queuedHandbacks.map((record) => record.runId));
+		const rootLineageMatches = new Map<string, boolean>();
+		const runOrRootMatchesSessionLineage = (run: OrchestratorRunRecord): boolean => {
+			if (input.runMatchesSessionLineage(run, lineage)) return true;
+			const rootRunId = run.rootRunId ?? run.orchestratorRunId;
+			if (rootRunId === run.orchestratorRunId) return false;
+			const cached = rootLineageMatches.get(rootRunId);
+			if (cached !== undefined) return cached;
+			const rootRun = input.state.listRunsByRootRunId(rootRunId).find((candidate) => candidate.orchestratorRunId === rootRunId);
+			const matches = rootRun ? input.runMatchesSessionLineage(rootRun, lineage) : false;
+			rootLineageMatches.set(rootRunId, matches);
+			return matches;
+		};
 		const runs = input.state.listOwnedRuns(ownerModeId)
-			.filter((run) => input.runMatchesSessionLineage(run, lineage))
+			.filter(runOrRootMatchesSessionLineage)
 			.filter((run) => options?.includeUserRuns === true || input.normalizeRunOrigin(run.origin) !== "user")
 			.filter((run) =>
 				!input.isTerminal(run.status)
@@ -86,10 +99,17 @@ export function createFooterLifecycleController<Lineage>(input: FooterLifecycleI
 		const visibility = buildFooterLifecycleVisibility(ctx, options);
 		if (!visibility) return [];
 		const rootRunIds = new Set(visibility.runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
+		const runsById = new Map<string, OrchestratorRunRecord>();
+		for (const run of visibility.runs) runsById.set(run.orchestratorRunId, run);
+		for (const rootRunId of rootRunIds) {
+			for (const run of input.state.listRunsByRootRunId(rootRunId)) {
+				runsById.set(run.orchestratorRunId, run);
+			}
+		}
 		const children = input.state.listChildSessionsByRootRunIds(rootRunIds)
 			.filter((child) => child.ownerModeId === visibility.ownerModeId)
-			.filter((child) => input.childSessionMatchesSessionLineage(child, visibility.lineage));
-		return buildTapRoots(visibility.runs, children);
+			.filter((child) => input.childSessionMatchesSessionLineage(child, visibility.lineage) || rootRunIds.has(child.rootRunId ?? child.runId));
+		return buildTapRoots([...runsById.values()], children);
 	}
 
 	function applyUiStatus(ctx?: ExtensionContext | null): void {

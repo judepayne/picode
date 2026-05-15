@@ -99,12 +99,15 @@ class FakePi {
 
 let savedGateProfile: string | undefined;
 let savedGateProfileLock: string | undefined;
+let savedGateProfileLineage: string | undefined;
 
 beforeEach(() => {
 	savedGateProfile = process.env.GATE_PROFILE;
 	savedGateProfileLock = process.env.GATE_PROFILE_LOCK;
+	savedGateProfileLineage = process.env.PI_GATE_PROFILE_LINEAGE;
 	delete process.env.GATE_PROFILE;
 	delete process.env.GATE_PROFILE_LOCK;
+	delete process.env.PI_GATE_PROFILE_LINEAGE;
 });
 
 afterEach(() => {
@@ -112,6 +115,8 @@ afterEach(() => {
 	else process.env.GATE_PROFILE = savedGateProfile;
 	if (savedGateProfileLock === undefined) delete process.env.GATE_PROFILE_LOCK;
 	else process.env.GATE_PROFILE_LOCK = savedGateProfileLock;
+	if (savedGateProfileLineage === undefined) delete process.env.PI_GATE_PROFILE_LINEAGE;
+	else process.env.PI_GATE_PROFILE_LINEAGE = savedGateProfileLineage;
 });
 
 function createHarness(options: FakeContextOptions = {}): { pi: FakePi; ctx: FakeContext } {
@@ -250,4 +255,69 @@ describe("pi-gate policy enforcement", () => {
 		assert.equal(decision?.block, true);
 		assert.match(decision?.reason ?? "", /bash ask/);
 	});
+
+	it("clears session approvals when reset changes the effective profile", async () => {
+		process.env.GATE_PROFILE = "planner";
+		const { pi, ctx } = createHarness({ selectChoice: "base" });
+		await pi.start(ctx);
+
+		const gateCommand = pi.commands.get("gate");
+		assert.ok(gateCommand);
+		await gateCommand("switch", ctx);
+		assert.equal(ctx.statuses.gate, "gate:base");
+
+		ctx.selectChoice = "Allow for session";
+		assert.equal(await pi.tool("bash", { command: "sudo true" }, ctx), undefined);
+		assert.equal(ctx.statuses.gate, "gate:base +1");
+
+		ctx.selectChoice = "base";
+		await gateCommand("switch", ctx);
+		assert.equal(ctx.statuses.gate, "gate:planner");
+
+		ctx.selectChoice = "Deny";
+		const decision = await pi.tool("bash", { command: "sudo true" }, ctx);
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /bash ask|denied/i);
+	});
+	it("applies lineage ceilings with strictest concrete decision", async () => {
+		process.env.GATE_PROFILE = "worker";
+		process.env.PI_GATE_PROFILE_LINEAGE = "planner,scout,worker";
+		const { pi, ctx } = createHarness({ hasUI: false });
+		await pi.start(ctx);
+
+		const editDecision = await pi.tool("edit", { path: "src/generated.txt" }, ctx);
+		assert.equal(editDecision?.block, true);
+		assert.match(editDecision?.reason ?? "", /\[planner\].*edit deny/);
+
+		const bashDecision = await pi.tool("bash", { command: "true" }, ctx);
+		assert.equal(bashDecision?.block, true);
+		assert.match(bashDecision?.reason ?? "", /\[scout\].*bash deny|unattended|\[planner\].*bash ask/);
+	});
+
+	it("fails closed for unknown profiles in gate lineage", async () => {
+		process.env.GATE_PROFILE = "worker";
+		process.env.PI_GATE_PROFILE_LINEAGE = "planner,missing-profile,worker";
+		const { pi, ctx } = createHarness({ hasUI: false });
+		await pi.start(ctx);
+
+		const decision = await pi.tool("read", { path: "README.md" }, ctx);
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /unknown profile/);
+	});
+
+	it("scopes session approvals by effective lineage", async () => {
+		process.env.GATE_PROFILE = "base";
+		const { pi, ctx } = createHarness({ selectChoice: "Allow for session" });
+		await pi.start(ctx);
+
+		assert.equal(await pi.tool("bash", { command: "sudo true" }, ctx), undefined);
+		assert.equal(ctx.statuses.gate, "gate:base +1");
+
+		process.env.PI_GATE_PROFILE_LINEAGE = "planner,base";
+		ctx.selectChoice = "Deny";
+		const decision = await pi.tool("bash", { command: "sudo true" }, ctx);
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /bash ask|denied/i);
+	});
+
 });

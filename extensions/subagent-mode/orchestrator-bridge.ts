@@ -165,7 +165,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 		// Async runs do not respond to the in-process abort signal; the
 		// detached child is signaled via its persisted pid.
 		if (entry.asyncHandle) {
-			cancelAsyncRun(entry.asyncHandle.runId);
+			cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
 		}
 	};
 
@@ -179,7 +179,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 			for (const entry of active.values()) {
 				entry.controller.abort();
 				entry.completionWatcher?.stop();
-				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId);
+				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
 			}
 			active.clear();
 		},
@@ -187,7 +187,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 			for (const entry of active.values()) {
 				entry.controller.abort();
 				entry.completionWatcher?.stop();
-				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId);
+				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
 			}
 			active.clear();
 		},
@@ -262,7 +262,7 @@ function handleAsyncRequest(
 			onSettled();
 		},
 		onTimeout: (runId) => {
-			cancelAsyncRun(runId);
+			cancelAsyncRun(runId, { pid: handle.pid, allowUnverifiedPid: true });
 			deps.events.emit(EVENT_RUN_COMPLETE, {
 				requestId,
 				runId,

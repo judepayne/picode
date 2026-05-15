@@ -70,16 +70,16 @@ describe("resolveAgentAssetManifest", () => {
 		const nativeAgentsDir = path.join(root, "native-agents");
 		const nativeSubagentsDir = path.join(root, "native-subagents");
 		const overlayAgentsDir = path.join(root, "custom-agents");
-		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nprofile: builder\nsubagents: scout, worker, reviewer\nmodel: openai/foo\n---\nNative prompt\n");
+		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nprofile: builder\nbanned_subagents: expensive-specialist\nmodel: openai/foo\n---\nNative prompt\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
-		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nsubagents: scout, worker, reviewer, researcher\nmodel:\n---\n   \n");
+		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nbanned_subagents: researcher\nmodel:\n---\n   \n");
 		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.deepEqual(manifest.agents, [{
 			name: "Builder",
 			profile: "builder",
-			subagents: "scout, worker, reviewer, researcher",
+			banned_subagents: "researcher",
 			model: "openai/foo",
 			prompt: "Native prompt",
 		}]);

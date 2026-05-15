@@ -21,7 +21,7 @@ A mode can change:
 - the preferred model
 - the preferred thinking level
 - the gate profile to use
-- which delegated subagents are allowed
+- optional direct `banned_subagents`
 - the footer color/status
 
 The built-in package ships modes for:
@@ -87,8 +87,8 @@ That prompt includes things like:
 
 - the canonical mode name
 - the gate profile
-- the active tools and bash policy
-- the allowed delegated subagents
+- the active tools and bash mode intent
+- open delegation status and any direct `banned_subagents`
 - the preferred model and thinking level
 - the mode-specific instructions from the markdown body
 
@@ -109,7 +109,7 @@ description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
 tools: all
-subagents: scout, worker, reviewer
+banned_subagents: expensive-specialist
 bash: full
 thinking: -
 model: -
@@ -128,8 +128,8 @@ Implement the requested change directly and finish unless blocked.
 | `color` | Footer/status color |
 | `tools` | Active tools for the main agent. Use an explicit list or `all`. If omitted, agent-mode resolves it as `all`. |
 | `ban_tools` | Subtractive tool list applied after `tools` resolves |
-| `subagents` | Subagents this mode may delegate to |
-| `bash` | `full` or `read-only` |
+| `banned_subagents` | Optional comma/list of subagents this mode may not directly delegate to. Delegation is otherwise open to known subagents subject to depth and pi-gate. Bans do not inherit. |
+| `bash` | `full` or `read-only`. This is mode-level intent plus a lightweight guardrail for obvious mutating shell commands; it is not the authoritative permission boundary. Use pi-gate policy for enforcement. |
 | `thinking` | Preferred thinking level; use `-` to leave unset |
 | `model` | Preferred model; use `-` to leave unset |
 | `maxSubagentDepth` | Optional delegation depth cap. If omitted, the inherited/default cap applies; `0` allows the agent to run but prevents further delegation. |
@@ -156,6 +156,8 @@ This is a small but architecturally important dependency: without it, delegated 
 
 `agent-mode` emits a profile-switch event that `pi-gate` can follow. That is how mode changes and permission changes stay in sync.
 
+Agent-card fields such as `tools` and `bash` shape the runtime mode and prompt contract. They should not be treated as a sandbox. In particular, `bash: read-only` is best understood as read-mostly intent and a simple pre-tool guard. The authoritative allow/ask/deny decision for bash and file access belongs to pi-gate.
+
 If you use `agent-mode` without `pi-gate`, mode switching still works, but the permission side of the workflow is gone.
 
 ### Strong relationship with prompt-vars
@@ -166,9 +168,9 @@ If you use `agent-mode` without `z-prompt-vars`, you lose that interpolation lay
 
 ### Relationship with subagent orchestration
 
-Mode files also declare which delegated subagents are allowed. `subagent-orchestrator` reads that mode state and enforces it.
+Mode files can declare direct `banned_subagents`. `subagent-orchestrator` reads that mode state and blocks only those direct launches; all other known subagents are available subject to depth and pi-gate.
 
-So `agent-mode` does not execute subagents itself, but it does decide which ones the main agent is allowed to call.
+So `agent-mode` does not execute subagents itself, but it can provide non-inherited direct delegation bans for the main agent.
 
 ---
 

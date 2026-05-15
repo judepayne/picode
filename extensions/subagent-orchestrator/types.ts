@@ -14,6 +14,7 @@ export interface ModeStateSessionEntry {
 	data?: {
 		modeId?: string;
 		subagents?: string[];
+		bannedSubagents?: string[];
 	};
 }
 
@@ -440,6 +441,7 @@ export interface ProgrammaticResultDetails {
 	mode?: string;
 	asyncId?: string;
 	asyncDir?: string;
+	pid?: number;
 	results?: ProgrammaticResultEntry[];
 	progress?: ProgrammaticProgressEntry[];
 }

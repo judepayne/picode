@@ -23,6 +23,9 @@ import * as path from "node:path";
 import { buildChildDepthEnv, type ChildDepthEnvInput } from "./depth.ts";
 
 const require = createRequire(import.meta.url);
+const GATE_PROFILE_ENV = "GATE_PROFILE";
+const GATE_PROFILE_LOCK_ENV = "GATE_PROFILE_LOCK";
+const PI_GATE_PROFILE_LINEAGE_ENV = "PI_GATE_PROFILE_LINEAGE";
 
 // ============================================================================
 // Binary resolution
@@ -271,16 +274,41 @@ export function cleanupChildTempDir(tempDir: string | null | undefined): void {
 
 export interface BuildChildEnvInput extends ChildDepthEnvInput {
 	agent: string;
-	/** Additional env to layer on top (request-specific). */
+	/** Additional env to layer on top (request-specific). Reserved runtime env vars are ignored. */
 	extra?: Record<string, string | undefined>;
+}
+
+function normalizeProfileName(value: string | undefined): string | undefined {
+	const normalized = value?.trim().toLowerCase();
+	return normalized || undefined;
+}
+
+function buildGateProfileLineage(agent: string): string {
+	const lineage = (process.env[PI_GATE_PROFILE_LINEAGE_ENV] ?? "")
+		.split(",")
+		.map(normalizeProfileName)
+		.filter((entry): entry is string => Boolean(entry));
+	const parentProfile = normalizeProfileName(process.env[GATE_PROFILE_ENV]);
+	if (parentProfile && !lineage.includes(parentProfile)) lineage.push(parentProfile);
+	const childProfile = normalizeProfileName(agent);
+	if (childProfile) lineage.push(childProfile);
+	return lineage.join(",");
+}
+
+function isReservedChildEnvKey(key: string): boolean {
+	return key === GATE_PROFILE_ENV
+		|| key === GATE_PROFILE_LOCK_ENV
+		|| key === PI_GATE_PROFILE_LINEAGE_ENV
+		|| key.startsWith("PI_SUBAGENT_");
 }
 
 /**
  * Build the child env contract required by pi-gate and the depth guard.
  *
- *   GATE_PROFILE          — agent type (pi-gate selects the matching profile)
- *   GATE_PROFILE_LOCK=1   — prevents the child from switching its own profile
- *   PI_SUBAGENT_DEPTH     — depth ceiling enforcement
+ *   GATE_PROFILE              — agent type (pi-gate selects the matching profile)
+ *   GATE_PROFILE_LOCK=1       — prevents the child from switching its own profile
+ *   PI_GATE_PROFILE_LINEAGE   — comma-separated runtime gate profile lineage
+ *   PI_SUBAGENT_DEPTH         — depth ceiling enforcement
  *   PI_SUBAGENT_MAX_DEPTH
  *   PI_SUBAGENT_TOP_RUN_ID
  *   PI_SUBAGENT_PARENT_CHILD_ID
@@ -288,15 +316,17 @@ export interface BuildChildEnvInput extends ChildDepthEnvInput {
  * MCP_DIRECT_TOOLS is passed through unchanged if the caller supplies it.
  */
 export function buildChildEnv(input: BuildChildEnvInput): Record<string, string> {
-	const merged: Record<string, string> = {
-		GATE_PROFILE: input.agent,
-		GATE_PROFILE_LOCK: "1",
-		...buildChildDepthEnv(input),
-	};
+	const merged: Record<string, string> = {};
 	if (input.extra) {
 		for (const [k, v] of Object.entries(input.extra)) {
-			if (v !== undefined) merged[k] = v;
+			if (v !== undefined && !isReservedChildEnvKey(k)) merged[k] = v;
 		}
 	}
-	return merged;
+	return {
+		...merged,
+		[GATE_PROFILE_ENV]: input.agent,
+		[GATE_PROFILE_LOCK_ENV]: "1",
+		[PI_GATE_PROFILE_LINEAGE_ENV]: buildGateProfileLineage(input.agent),
+		...buildChildDepthEnv(input),
+	};
 }

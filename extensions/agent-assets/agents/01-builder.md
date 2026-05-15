@@ -4,7 +4,6 @@ description: Implement requested changes directly with full mutation tools.
 profile: builder
 color: #FF4D4D
 tools: all
-subagents: scout, worker, reviewer
 bash: full
 thinking: -
 model: -

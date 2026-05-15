@@ -118,9 +118,9 @@ Once that is done, a good quick smoke test is:
 
 Picode turns one Pi session into a small, structured system.
 
-First, the main agent runs in one of several named **agents** such as Builder, Planner, or Designer. Each agent has its own prompt, tools, preferred model settings, allowed subagents, and permission profile.
+First, the main agent runs in one of several named **agents** such as Builder, Planner, or Designer. Each agent has its own prompt, tools, preferred model settings, optional direct subagent bans, and permission profile.
 
-Second, permissions are enforced separately from persona through **pi-gate**. That matters. The prompt tells the agent how to behave; the gate tells it what it is allowed to do. In practice, switching agent also switches gate profile, so Builder can be broadly mutating, Planner can be read-mostly, and Designer can be constrained to design artefacts and scratch files.
+Second, permissions are enforced separately from persona through **pi-gate**. That matters. The prompt and agent-card metadata tell the agent how it should behave; pi-gate is the control layer that decides what it is actually allowed to do. In practice, switching agent also switches gate profile, so Builder can be broadly mutating, Planner can be read-mostly, and Designer can be constrained to design artefacts and scratch files.
 
 Pi-gate rules resolve to `allow`, `ask`, or `deny`. For the top-level agents, that gives you a useful balance: permissive where it should be, interactive where it would be risky, and blocked where it should never happen.
 
@@ -192,7 +192,7 @@ Builder is for:
 
 A key point: agents are markdown files. If you want a different style, different rules, or a completely different set of roles, you can change them.
 
-The built-in agent definition files live in `extensions/agent-assets/agents/`. Each file is a markdown card with frontmatter for things like the name, tools, gate profile, allowed subagents, model, and thinking level, followed by the body prompt that actually defines the agent's behaviour.
+The built-in agent definition files live in `extensions/agent-assets/agents/`. Each file is a markdown card with frontmatter for things like the name, tools, gate profile, optional `banned_subagents`, model, and thinking level, followed by the body prompt that actually defines the agent's behaviour.
 
 When you build a new one, keep the role sharp and pair the prompt with the right tools and gate profile; vague overlap between agents tends to blur their behaviour. Also note that the number at the start of the filename sets the order the agents appear in Pi, so files like `01-builder.md`, `02-planner.md`, and `03-designer.md` are shown in that order.
 
@@ -251,7 +251,7 @@ Run a sync chain: first scout the parser code path, then have a worker implement
 Important details:
 
 - `~subagent` must be at the start of the first line
-- only subagents allowed by the current agent can be used
+- known subagents are available unless the current agent lists them in `banned_subagents`
 - `--fresh`, `--fork`, and `--continue` control delegation context
 - the default direct-dispatch context is configured through prompt vars and defaults to `fresh`
 
@@ -264,7 +264,7 @@ Like agents, subagents are just markdown cards. You can add your own specialists
 Picode surfaces delegated work through three layers:
 
 - **Launch notification** — a brief confirmation that the subagent started (e.g. "Scout running in background"). Healthy user-started runs do not stay pinned.
-- **Footer tree** — compact tree status for background activity. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chains, and `,` for parallel siblings. Node color indicates lifecycle: running (`#71e37d`), queued (`#f0c986`), complete (`#bababa`), cancelled (`#874a4a`), and failed (`#FF4D4D`). These defaults can be overridden with z-prompt-vars under `footer.colors.subagentStatus.*`.
+- **Footer tree** — compact tree status for background activity. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for recursive nesting such as `root > run 1 > scout 1 > worker 1`, `→` for chains, and `,` for parallel siblings. Node color indicates lifecycle: running (`#71e37d`), queued (`#f0c986`), complete (`#bababa`), cancelled (`#874a4a`), and failed (`#FF4D4D`). These defaults can be overridden with z-prompt-vars under `footer.colors.subagentStatus.*`.
 - **Run cards** — detailed per-run view when explicitly requested or when `showRunCard: true` is set. Shows the current task, active/finished children, live tool usage, session file locations, recent output, and final summary.
 
 When something fails, ask the main agent to inspect it:
@@ -352,11 +352,11 @@ For example, `custom-agents/01-builder.md` can contain only:
 
 ```md
 ---
-subagents: scout, worker, reviewer, researcher
+banned_subagents: expensive-specialist
 ---
 ```
 
-That keeps the built-in Builder prompt and all other Builder settings, but replaces the allowed subagent list.
+That keeps the built-in Builder prompt and all other Builder settings, but blocks direct delegation from Builder to that subagent. Bans are not inherited by delegated children.
 
 ### Minimal agent card example
 
@@ -369,7 +369,7 @@ profile: builder
 color: "#3366CC"
 tools: all
 ban_tools: [edit, write]
-subagents: scout
+banned_subagents: expensive-specialist
 bash: full
 thinking: -
 model: -
@@ -385,8 +385,8 @@ What each key does:
 - `color` — the accent colour for the agent’s UI elements. Hex or named colours.
 - `tools` — the base tool selection for this card. Use an explicit list or `all`. For top-level agents, omitting `tools` means `all`.
 - `ban_tools` — a subtractive list applied after `tools` is resolved.
-- `subagents` — which subagents this agent is allowed to delegate to (e.g. `scout`, `worker`, `reviewer`).
-- `bash` — `full` allows any bash command; `read-only` restricts to safe inspection commands.
+- `banned_subagents` — optional non-inherited direct delegation bans for known subagents. Use `-` or omit the field for no bans.
+- `bash` — `full` or `read-only` mode intent for agent-mode. `read-only` is a lightweight guardrail for obvious mutating shell commands, not a security boundary. Authoritative bash/file permissions are enforced by pi-gate policy.
 - `thinking` — the default thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`). Use `-` to leave it unset.
 - `model` — the preferred model. Use `-` to leave it unset.
 - `extensions` — subagent cards only: additional child extension paths to load on top of picode's default child extension set.

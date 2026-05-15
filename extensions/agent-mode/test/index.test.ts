@@ -120,15 +120,25 @@ class FakeContext {
 }
 
 let savedTopRunId: string | undefined;
+let savedGateProfile: string | undefined;
+let savedGateProfileLock: string | undefined;
 
 beforeEach(() => {
 	savedTopRunId = process.env[ENV_TOP_RUN_ID];
+	savedGateProfile = process.env.GATE_PROFILE;
+	savedGateProfileLock = process.env.GATE_PROFILE_LOCK;
 	delete process.env[ENV_TOP_RUN_ID];
+	delete process.env.GATE_PROFILE;
+	delete process.env.GATE_PROFILE_LOCK;
 });
 
 afterEach(() => {
 	if (savedTopRunId === undefined) delete process.env[ENV_TOP_RUN_ID];
 	else process.env[ENV_TOP_RUN_ID] = savedTopRunId;
+	if (savedGateProfile === undefined) delete process.env.GATE_PROFILE;
+	else process.env.GATE_PROFILE = savedGateProfile;
+	if (savedGateProfileLock === undefined) delete process.env.GATE_PROFILE_LOCK;
+	else process.env.GATE_PROFILE_LOCK = savedGateProfileLock;
 });
 
 describe("agent-mode extension entrypoint", () => {
@@ -148,6 +158,7 @@ describe("agent-mode extension entrypoint", () => {
 			notify: false,
 			source: "agent-mode",
 		});
+		assert.equal(process.env.GATE_PROFILE, "builder");
 	});
 
 	test("before_agent_start prepends the active mode prompt", async () => {
@@ -162,6 +173,18 @@ describe("agent-mode extension entrypoint", () => {
 		assert.match(result.systemPrompt ?? "", /base prompt/);
 	});
 
+	test("does not overwrite a locked gate profile env", async () => {
+		process.env.GATE_PROFILE = "planner";
+		process.env.GATE_PROFILE_LOCK = "1";
+		const pi = new FakePi();
+		agentModeExtension(pi as never);
+		const ctx = new FakeContext();
+
+		await pi.emitLifecycle("session_start", {}, ctx);
+
+		assert.equal(process.env.GATE_PROFILE, "planner");
+	});
+
 	test("/agents can switch modes and read-only bash policy blocks mutating bash", async () => {
 		const pi = new FakePi();
 		agentModeExtension(pi as never);
@@ -173,6 +196,7 @@ describe("agent-mode extension entrypoint", () => {
 		await agentsCommand.handler("Planner", ctx);
 
 		assert.deepEqual(pi.activeTools, ["read"]);
+		assert.equal(process.env.GATE_PROFILE, "planner");
 		const allowed = await pi.tool("bash", { command: "ls -la" }, ctx);
 		assert.equal(allowed, undefined);
 		const blocked = await pi.tool("bash", { command: "rm -rf dist" }, ctx);

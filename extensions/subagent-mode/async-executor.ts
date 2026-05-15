@@ -21,7 +21,7 @@
  *   result.json       — DelegatedRunResult (atomic write)
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
@@ -242,30 +242,66 @@ export interface CancelAsyncRunResult {
 	message?: string;
 }
 
-export function cancelAsyncRun(runId: string): CancelAsyncRunResult {
+export interface CancelAsyncRunOptions {
+	/** Fallback PID persisted by the orchestrator for post-reload cancellation. */
+	pid?: number;
+	/** Permit PID-only cancellation when the manifest is not yet available. */
+	allowUnverifiedPid?: boolean;
+}
+
+function readProcessCommand(pid: number): string | undefined {
+	try {
+		if (process.platform === "linux") {
+			const raw = fs.readFileSync(`/proc/${pid}/cmdline`);
+			return raw.toString("utf8").replace(/\0/g, " ").trim();
+		}
+		if (process.platform === "darwin" || process.platform === "freebsd" || process.platform === "openbsd") {
+			return execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" }).trim();
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
+function isExpectedAsyncRunnerProcess(pid: number, runId: string): boolean {
+	const command = readProcessCommand(pid);
+	return Boolean(command && command.includes("async-runner-main.ts") && command.includes(runId));
+}
+
+function signalAsyncPid(pid: number, runId: string, options: { allowUnverifiedPid?: boolean } = {}): CancelAsyncRunResult {
+	if (!pid || pid <= 0) {
+		return { ok: false, message: "async run has no pid to signal" };
+	}
+	if (options.allowUnverifiedPid !== true && !isExpectedAsyncRunnerProcess(pid, runId)) {
+		return { ok: false, message: "async run pid could not be verified" };
+	}
+	try {
+		process.kill(pid, "SIGTERM");
+	} catch (error) {
+		const msg = error instanceof Error ? error.message : String(error);
+		return { ok: false, message: `SIGTERM failed: ${msg}` };
+	}
+	return { ok: true, message: `SIGTERM sent to pid ${pid}` };
+}
+
+export function cancelAsyncRun(runId: string, options: CancelAsyncRunOptions = {}): CancelAsyncRunResult {
 	const manifestPath = asyncRunManifestPath(runId);
 	if (!fs.existsSync(manifestPath)) {
+		if (options.pid !== undefined && options.allowUnverifiedPid === true) return signalAsyncPid(options.pid, runId, options);
 		return { ok: false, message: `async run ${runId} not found` };
 	}
 	let manifest: AsyncRunManifest;
 	try {
 		manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as AsyncRunManifest;
 	} catch {
+		if (options.pid !== undefined && options.allowUnverifiedPid === true) return signalAsyncPid(options.pid, runId, options);
 		return { ok: false, message: `async run ${runId} manifest unreadable` };
 	}
 	if (manifest.status === "complete" || manifest.status === "failed" || manifest.status === "cancelled") {
 		return { ok: true, alreadyFinished: true, message: `run already ${manifest.status}` };
 	}
-	if (!manifest.pid || manifest.pid <= 0) {
-		return { ok: false, message: "async run has no pid to signal" };
-	}
-	try {
-		process.kill(manifest.pid, "SIGTERM");
-	} catch (error) {
-		const msg = error instanceof Error ? error.message : String(error);
-		return { ok: false, message: `SIGTERM failed: ${msg}` };
-	}
-	return { ok: true, message: `SIGTERM sent to pid ${manifest.pid}` };
+	return signalAsyncPid(manifest.pid ?? -1, runId);
 }
 
 // ============================================================================
