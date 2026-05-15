@@ -53,8 +53,8 @@ describe("resolveAgentAssetManifest", () => {
 			path.join(root, ".pi", "settings.json"),
 			JSON.stringify({
 				picode: {
-					agentsDir: "../custom-agents",
-					subagentsDir: "../custom-subagents",
+					agentsDir: "./custom-agents",
+					subagentsDir: "./custom-subagents",
 				},
 			}, null, 2),
 		);
@@ -73,7 +73,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nprofile: builder\nbanned_subagents: expensive-specialist\nmodel: openai/foo\n---\nNative prompt\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nbanned_subagents: researcher\nmodel:\n---\n   \n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "./custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.deepEqual(manifest.agents, [{
@@ -93,7 +93,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeAgentsDir, "03-designer.md"), "---\nname: Designer\ncolor: green\n---\nNative prompt\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 		writeMarkdown(path.join(overlayAgentsDir, "03-designer.md"), "---\ncolor: blue\n---\nUser prompt\n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "./custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.deepEqual(manifest.agents, [{ name: "Designer", color: "blue", prompt: "User prompt" }]);
@@ -107,7 +107,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\nmodel: openai/foo\n---\nNative\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 		writeMarkdown(path.join(overlayAgentsDir, "01-builder.md"), "---\nmodel: -\n---\n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "./custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.equal(manifest.agents[0]?.model, undefined);
@@ -121,7 +121,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nBuilder\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 		writeMarkdown(path.join(overlayAgentsDir, "05-writer.md"), "---\nprofile: builder\n---\nWriter\n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../custom-agents" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "./custom-agents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.deepEqual(manifest.agents.map((card) => card.name), ["Builder"]);
@@ -136,7 +136,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeAgentsDir, "01-builder.md"), "---\nname: Builder\n---\nBuilder\n");
 		writeMarkdown(path.join(nativeSubagentsDir, "researcher.md"), "---\nname: Researcher\nextensions: ./native-ext.ts\n---\nNative\n");
 		writeMarkdown(path.join(overlaySubagentsDir, "researcher.md"), "---\nextensions: [./overlay-ext.ts]\n---\n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { subagentsDir: "../custom-subagents" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { subagentsDir: "./custom-subagents" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({ cwd: root, nativeAgentsDir, nativeSubagentsDir, env: { HOME: path.join(root, "home") } });
 		assert.equal(manifest.subagents[0]?.extensions, path.join(overlaySubagentsDir, "overlay-ext.ts"));
@@ -183,7 +183,7 @@ describe("resolveAgentAssetManifest", () => {
 		writeMarkdown(path.join(nativeSubagentsDir, "scout.md"), "---\nname: Scout\n---\nScout\n");
 		writeMarkdown(path.join(fileOverlayDir, "04-file.md"), "---\nname: File Overlay\n---\nFile overlay\n");
 		writeMarkdown(path.join(envOverlayDir, "05-env.md"), "---\nname: Env Overlay\n---\nEnv overlay\n");
-		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "../file-overlay" } }, null, 2));
+		writeMarkdown(path.join(root, ".pi", "settings.json"), JSON.stringify({ picode: { agentsDir: "./file-overlay" } }, null, 2));
 
 		const manifest = resolveAgentAssetManifest({
 			cwd: root,

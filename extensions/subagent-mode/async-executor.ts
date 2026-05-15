@@ -23,6 +23,7 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import * as crypto from "node:crypto";
+import { once } from "node:events";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
@@ -371,6 +372,14 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 		recordedEventsStreamError = true;
 		recordDiagnostic("async event stream write failed", error);
 	});
+	const writeEvent = async (event: unknown): Promise<void> => {
+		try {
+			const ready = eventsStream.write(`${JSON.stringify(event)}\n`);
+			if (!ready) await Promise.race([once(eventsStream, "drain"), once(eventsStream, "error")]);
+		} catch (error) {
+			recordDiagnostic("async event write threw", error);
+		}
+	};
 
 	// Lazy-import to avoid circular type resolution at module load time.
 	const { executeRun } = await import("./sync-executor.ts");
@@ -381,13 +390,8 @@ export async function runAsyncMain(configPath: string): Promise<void> {
 			{ ...spec, parentSessionFile },
 			{
 				signal: controller.signal,
-				onEvent: (event) => {
-
-					try {
-						eventsStream.write(`${JSON.stringify(event)}\n`);
-					} catch (error) {
-						recordDiagnostic("async event write threw", error);
-					}
+				onEvent: async (event) => {
+					await writeEvent(event);
 					// Reflect child lifecycle in manifest
 					if ("childId" in event && event.type === "subagent:mode:child.started") {
 						manifest.children.push({

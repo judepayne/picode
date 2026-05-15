@@ -2,43 +2,14 @@
 
 ## Medium
 
-### Agent overlay paths likely resolve contrary to docs
+All medium findings from the release review have been addressed or explicitly resolved:
 
-`extensions/agent-assets/config.ts`
-
-Overlay directory paths from `.pi/settings.json` are resolved relative to the settings file directory (`<cwd>/.pi`), while docs imply paths such as `./custom-agents` are relative to the project root. Tests currently encode the workaround with `../custom-agents`, so the documented path is not validated.
-
-### Prompt-vars auto-bootstrap can shadow global defaults
-
-`extensions/z-prompt-vars/index.ts`
-`extensions/z-prompt-vars/prompt-vars.ts`
-
-Automatic session bootstrap creates project-local default `paths.plan` and `paths.design`. Since project vars override global vars, a user with global plan/design paths but no project vars can have those global defaults shadowed unexpectedly.
-
-### Async cancellation startup race
-
-`extensions/subagent-mode/async-executor.ts`
-`extensions/subagent-mode/orchestrator-bridge.ts`
-
-Immediate cancellation before the async child writes `run.json` can miss the persisted PID path. This was addressed in the recent PID-based cancellation work, but remains listed here as an original medium finding for tracking/history.
-
-### Unbounded stdout line buffering
-
-`extensions/subagent-mode/runner.ts`
-
-A large JSONL event or output stream without newlines can accumulate unbounded data in the stdout line buffer until newline or close. This can cause memory pressure from malformed or unusually chatty child output.
-
-### Async event persistence ignores stream backpressure
-
-`extensions/subagent-mode/async-executor.ts`
-
-Async event writes ignore the return value of `eventsStream.write(...)`, so a very chatty detached child can queue unbounded writes. The existing JSONL writer abstraction suggests this may have been intended to handle backpressure.
-
-### `curl*` in read-only bash guard is too broad
-
-`extensions/agent-mode/index.ts`
-
-The mode-level `bash: read-only` guard allows broad command prefixes such as `curl*`, including forms that can write files. This has since been reframed as a lightweight guardrail rather than a security boundary, with pi-gate as the authoritative control layer.
+- **Agent overlay paths likely resolve contrary to docs** — fixed. Project `.pi/settings.json` overlay paths now resolve relative to the project root; global settings keep their existing settings-file-relative behavior. Tests updated.
+- **Prompt-vars auto-bootstrap can shadow global defaults** — fixed. Project bootstrap no longer seeds `paths.plan` / `paths.design` when corresponding global values already exist. Regression test added.
+- **Async cancellation startup race** — fixed in the PID-based cancellation work. Startup-race fallback is explicit and verified paths remain guarded.
+- **Unbounded stdout line buffering** — fixed. Child stdout JSONL line buffering is capped and oversized lines are discarded with a nonfatal child error; normal parsing resumes after the next newline.
+- **Async event persistence ignores stream backpressure** — fixed. Sync execution callbacks can now be async, runner event forwarding awaits them, and async event persistence waits for `drain` when the events stream backpressures.
+- **`curl*` in read-only bash guard is too broad** — fixed. The lightweight read-only bash allow-list no longer treats arbitrary `curl` commands as read-only; regression coverage added for `curl ... -o`.
 
 ## Low
 

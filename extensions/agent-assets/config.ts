@@ -92,8 +92,8 @@ function applyConfigShape(
 	shape: PicodeSettingsShape,
 	configPath: string,
 	diagnostics: AgentAssetDiagnostic[],
+	baseDir = path.dirname(configPath),
 ): void {
-	const baseDir = path.dirname(configPath);
 	const agentsDir = resolveConfigPathValue(shape.agentsDir, baseDir);
 	if (shape.agentsDir !== undefined && agentsDir === undefined) {
 		pushDiagnostic(diagnostics, `${configPath} contains an invalid ${CONFIG_SECTION_KEY}.agentsDir value.`, configPath, "error");
@@ -145,7 +145,7 @@ export function loadAgentAssetsConfig(cwd: string, env: NodeJS.ProcessEnv = proc
 	applyConfigShape(resolved, globalConfig.config, globalConfig.configPath, diagnostics);
 
 	const projectConfig = readConfigFile(projectConfigPath, diagnostics);
-	applyConfigShape(resolved, projectConfig.config, projectConfig.configPath, diagnostics);
+	applyConfigShape(resolved, projectConfig.config, projectConfig.configPath, diagnostics, cwd);
 
 	applyEnvOverrides(resolved, cwd, env, diagnostics);
 	return resolved;

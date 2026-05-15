@@ -109,7 +109,6 @@ const READ_ONLY_BASH_ALLOWLIST = [
 	/^\s*yarn\s+(list|info|why|audit)\b/i,
 	/^\s*node\s+--version\b/i,
 	/^\s*python\s+--version\b/i,
-	/^\s*curl\b/i,
 	/^\s*wget\s+-O\s*-/i,
 	/^\s*jq\b/i,
 	/^\s*sed\s+-n\b/i,

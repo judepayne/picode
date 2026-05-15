@@ -48,7 +48,7 @@ const MAX_CONCURRENCY = 4;
 // ============================================================================
 
 export interface SyncRunCallbacks {
-	onEvent: (event: ChildEvent | RunStartedEvent | RunCompleteEvent) => void;
+	onEvent: (event: ChildEvent | RunStartedEvent | RunCompleteEvent) => void | Promise<void>;
 	signal?: AbortSignal;
 }
 
@@ -122,7 +122,7 @@ async function runSingle(
 	if (!spec.agent || !spec.task) {
 		throw new Error("single mode requires both `agent` and `task`");
 	}
-	emitRunStarted(runId, topLevelRunId, "single", spec.agent, callbacks);
+	await emitRunStarted(runId, topLevelRunId, "single", spec.agent, callbacks);
 
 	const sessionFile = resolveSessionFile(spec, options, 0);
 	const childId = spec.childIds?.[0] ?? crypto.randomUUID();
@@ -149,7 +149,7 @@ async function runSingle(
 
 	const runStatus = aggregateRunStatus([result]);
 	const runResult: DelegatedRunResult = { runId, mode: "single", status: runStatus, results: [result] };
-	emitRunComplete(runId, topLevelRunId, runResult, callbacks);
+	await emitRunComplete(runId, topLevelRunId, runResult, callbacks);
 	return runResult;
 }
 
@@ -175,7 +175,7 @@ async function runParallel(
 	}
 
 	const aggregatedAgent = uniqueAgentLabel(expanded.map((t) => t.agent));
-	emitRunStarted(runId, topLevelRunId, "parallel", aggregatedAgent, callbacks);
+	await emitRunStarted(runId, topLevelRunId, "parallel", aggregatedAgent, callbacks);
 
 	const parentChildId = currentParentChildId();
 	const results = await mapConcurrent(expanded, MAX_CONCURRENCY, async (task, index) => {
@@ -206,7 +206,7 @@ async function runParallel(
 
 	const runStatus = aggregateRunStatus(results);
 	const runResult: DelegatedRunResult = { runId, mode: "parallel", status: runStatus, results };
-	emitRunComplete(runId, topLevelRunId, runResult, callbacks);
+	await emitRunComplete(runId, topLevelRunId, runResult, callbacks);
 	return runResult;
 }
 
@@ -266,7 +266,7 @@ async function runChain(
 	}
 
 	const leadAgent = chain[0]?.agent ?? "chain";
-	emitRunStarted(runId, topLevelRunId, "chain", leadAgent, callbacks);
+	await emitRunStarted(runId, topLevelRunId, "chain", leadAgent, callbacks);
 
 	const chainDir = chainRunDir(runId);
 	fs.mkdirSync(chainDir, { recursive: true });
@@ -326,7 +326,7 @@ async function runChain(
 
 	const runStatus = aggregateRunStatus(results);
 	const runResult: DelegatedRunResult = { runId, mode: "chain", status: runStatus, results };
-	emitRunComplete(runId, topLevelRunId, runResult, callbacks);
+	await emitRunComplete(runId, topLevelRunId, runResult, callbacks);
 	return runResult;
 }
 
@@ -457,14 +457,14 @@ function toChildCallbacks(callbacks: SyncRunCallbacks): RunChildCallbacks {
 	};
 }
 
-function emitRunStarted(
+async function emitRunStarted(
 	runId: string,
 	topLevelRunId: string,
 	mode: RunSpec["mode"],
 	agent: string,
 	callbacks: SyncRunCallbacks,
-): void {
-	callbacks.onEvent({
+): Promise<void> {
+	await callbacks.onEvent({
 		type: EVENT_RUN_STARTED,
 		runId,
 		topLevelRunId,
@@ -474,13 +474,13 @@ function emitRunStarted(
 	});
 }
 
-function emitRunComplete(
+async function emitRunComplete(
 	runId: string,
 	topLevelRunId: string,
 	result: DelegatedRunResult,
 	callbacks: SyncRunCallbacks,
-): void {
-	callbacks.onEvent({
+): Promise<void> {
+	await callbacks.onEvent({
 		type: EVENT_RUN_COMPLETE,
 		runId,
 		topLevelRunId,
@@ -489,15 +489,15 @@ function emitRunComplete(
 	});
 }
 
-function emitDepthBlockedRun(
+async function emitDepthBlockedRun(
 	runId: string,
 	topLevelRunId: string,
 	spec: RunSpec,
 	depthCheck: { depth: number; maxDepth: number },
 	callbacks: SyncRunCallbacks,
-): DelegatedRunResult {
+): Promise<DelegatedRunResult> {
 	const agent = spec.agent ?? spec.chain?.[0]?.agent ?? spec.tasks?.[0]?.agent ?? "unknown";
-	emitRunStarted(runId, topLevelRunId, spec.mode, agent, callbacks);
+	await emitRunStarted(runId, topLevelRunId, spec.mode, agent, callbacks);
 	const message = `subagent delegation blocked: depth ${depthCheck.depth} >= max ${depthCheck.maxDepth}`;
 	const childResult: DelegatedChildResult = {
 		childId: crypto.randomUUID(),
@@ -511,6 +511,6 @@ function emitDepthBlockedRun(
 		status: "failed",
 		results: [childResult],
 	};
-	emitRunComplete(runId, topLevelRunId, runResult, callbacks);
+	await emitRunComplete(runId, topLevelRunId, runResult, callbacks);
 	return runResult;
 }

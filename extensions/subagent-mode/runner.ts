@@ -44,7 +44,9 @@ import {
 // Public surface
 // ============================================================================
 
-export type ChildEventHandler = (event: ChildEvent) => void;
+export type ChildEventHandler = (event: ChildEvent) => void | Promise<void>;
+
+export const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
 
 export interface RunChildCallbacks {
 	onEvent: ChildEventHandler;
@@ -138,7 +140,7 @@ export async function runChild(
 
 	// Fire child.started before spawn so subscribers see the lifecycle boundary
 	// even if spawn fails immediately.
-	callbacks.onEvent({
+	await callbacks.onEvent({
 		type: EVENT_CHILD_STARTED,
 		runId: identity.runId,
 		topLevelRunId: identity.topLevelRunId,
@@ -162,7 +164,7 @@ export async function runChild(
 	} catch (error) {
 		cleanupChildTempDir(tempDir);
 		const message = error instanceof Error ? error.message : String(error);
-		callbacks.onEvent({
+		await callbacks.onEvent({
 			type: EVENT_CHILD_ERROR,
 			runId: identity.runId,
 			topLevelRunId: identity.topLevelRunId,
@@ -183,7 +185,7 @@ export async function runChild(
 			cancelled: false,
 			spawnError: message,
 		});
-		callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
+		await callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
 		return result;
 	}
 
@@ -199,9 +201,9 @@ export async function runChild(
 	});
 
 	if (outcome.cancelled) {
-		callbacks.onEvent(finalEvent(EVENT_CHILD_CANCELLED, identity, { reason: outcome.cancelReason }));
+		await callbacks.onEvent(finalEvent(EVENT_CHILD_CANCELLED, identity, { reason: outcome.cancelReason }));
 	}
-	callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
+	await callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
 	return result;
 }
 
@@ -229,16 +231,42 @@ function streamAndCollect(
 
 		let stdoutBuf = "";
 		let stderrBuf = "";
+		let discardingOversizedStdoutLine = false;
+		let reportedOversizedStdoutLine = false;
+		let stdoutWork = Promise.resolve();
 
-		const flushLine = (line: string): void => {
+		const emitOversizedStdoutLine = async (): Promise<void> => {
+			if (reportedOversizedStdoutLine) return;
+			reportedOversizedStdoutLine = true;
+			await callbacks.onEvent({
+				type: EVENT_CHILD_ERROR,
+				runId: identity.runId,
+				topLevelRunId: identity.topLevelRunId,
+				childId: identity.childId,
+				parentChildId: identity.parentChildId,
+				agent: identity.agent,
+				timestamp: Date.now(),
+				stepIndex: identity.stepIndex,
+				taskIndex: identity.taskIndex,
+				depth: identity.depth,
+				message: `child stdout line exceeded ${MAX_STDOUT_LINE_BYTES} bytes and was discarded`,
+				fatal: false,
+			});
+		};
+
+		const flushLine = async (line: string): Promise<void> => {
 			if (!line.trim()) return;
+			if (Buffer.byteLength(line, "utf8") > MAX_STDOUT_LINE_BYTES) {
+				await emitOversizedStdoutLine();
+				return;
+			}
 			callbacks.onRawLine?.(line);
 			let raw: ReturnType<typeof parseRawLine>;
 			try {
 				raw = parseRawLine(line);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				callbacks.onEvent({
+				await callbacks.onEvent({
 					type: EVENT_CHILD_ERROR,
 					runId: identity.runId,
 					topLevelRunId: identity.topLevelRunId,
@@ -256,14 +284,34 @@ function streamAndCollect(
 			}
 			if (!raw) return;
 			const events = normalizeRawEvent(raw, identity, state);
-			for (const event of events) callbacks.onEvent(event);
+			for (const event of events) await callbacks.onEvent(event);
+		};
+
+		const processStdoutText = async (text: string): Promise<void> => {
+			let chunkText = text;
+			if (discardingOversizedStdoutLine) {
+				const newlineIndex = chunkText.indexOf("\n");
+				if (newlineIndex === -1) return;
+				discardingOversizedStdoutLine = false;
+				chunkText = chunkText.slice(newlineIndex + 1);
+			}
+			stdoutBuf += chunkText;
+			const lines = stdoutBuf.split("\n");
+			stdoutBuf = lines.pop() ?? "";
+			for (const line of lines) await flushLine(line);
+			if (Buffer.byteLength(stdoutBuf, "utf8") > MAX_STDOUT_LINE_BYTES) {
+				await emitOversizedStdoutLine();
+				stdoutBuf = "";
+				discardingOversizedStdoutLine = true;
+			}
 		};
 
 		proc.stdout?.on("data", (chunk: Buffer) => {
-			stdoutBuf += chunk.toString("utf-8");
-			const lines = stdoutBuf.split("\n");
-			stdoutBuf = lines.pop() ?? "";
-			for (const line of lines) flushLine(line);
+			proc.stdout?.pause();
+			stdoutWork = stdoutWork
+				.then(() => processStdoutText(chunk.toString("utf-8")))
+				.catch(() => undefined)
+				.finally(() => proc.stdout?.resume());
 		});
 
 		proc.stderr?.on("data", (chunk: Buffer) => {
@@ -283,8 +331,10 @@ function streamAndCollect(
 		});
 
 		proc.once("close", (code, signal) => {
+			void (async () => {
 			if (killTimer) clearTimeout(killTimer);
-			if (stdoutBuf.trim()) flushLine(stdoutBuf);
+			await stdoutWork;
+			if (!discardingOversizedStdoutLine && stdoutBuf.trim()) await flushLine(stdoutBuf);
 
 			// Capture stderr into state.errorMessage only when the process failed
 			// and the normalizer did not already surface a structured error.
@@ -294,6 +344,7 @@ function streamAndCollect(
 			}
 
 			resolve({ exitCode, cancelled, cancelReason });
+			})();
 		});
 
 		const abort = (reason?: string): void => {

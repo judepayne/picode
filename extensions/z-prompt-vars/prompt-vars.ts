@@ -326,6 +326,17 @@ function defaultBootstrapVarsConfig(): VarsConfig {
 	};
 }
 
+function defaultProjectBootstrapVarsConfig(globalConfig: VarsConfig): VarsConfig {
+	let initialConfig = defaultBootstrapVarsConfig();
+	if (getNestedValue(globalConfig, "paths.plan") !== undefined) {
+		initialConfig = unsetNestedValue(initialConfig, "paths.plan");
+	}
+	if (getNestedValue(globalConfig, "paths.design") !== undefined) {
+		initialConfig = unsetNestedValue(initialConfig, "paths.design");
+	}
+	return initialConfig;
+}
+
 function getConfiguredPathValue(config: VarsConfig, key: "paths.plan" | "paths.design", fallback: string): string {
 	const rawValue = getNestedValue(config, key);
 	if (typeof rawValue !== "string") return fallback;
@@ -484,9 +495,10 @@ export function bootstrapVarsFiles(cwd: string, modeId?: string): VarsBootstrapR
 		existing.push(writeConfigPath);
 	}
 
+	const globalBeforeBootstrap = readScopeConfig(cwd, "global", writeLocation.varsFileName);
 	const projectVarsPath = getProjectVarsConfigPath(cwd, writeLocation.varsFileName);
 	if (!fs.existsSync(projectVarsPath)) {
-		const initialConfig = defaultBootstrapVarsConfig();
+		const initialConfig = defaultProjectBootstrapVarsConfig(globalBeforeBootstrap.config);
 		fs.mkdirSync(path.dirname(projectVarsPath), { recursive: true });
 		fs.writeFileSync(projectVarsPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
 		created.push(projectVarsPath);

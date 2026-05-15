@@ -17,6 +17,7 @@ describe("agent-mode runtime", () => {
 		assert.equal(isReadOnlyBashCommand("dd if=input.bin of=output.bin bs=1 count=10"), false);
 		assert.equal(isReadOnlyBashCommand("dd if=input.bin o'f'=output.bin bs=1 count=10"), false);
 		assert.equal(isReadOnlyBashCommand("awk '{ print $1 }' file.txt"), false);
+		assert.equal(isReadOnlyBashCommand("curl https://example.com -o output.txt"), false);
 	});
 
 	it("maps agent asset cards to mode definitions", () => {

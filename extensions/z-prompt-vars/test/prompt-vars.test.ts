@@ -82,6 +82,22 @@ describe("prompt-vars", () => {
 		assert.match(formatBootstrapResult(first), /created=/);
 	});
 
+	test("bootstrapVarsFiles does not shadow existing global plan and design paths", () => {
+		const cwd = makeWorkspace();
+		fs.mkdirSync(path.dirname(getGlobalVarsConfigPath()), { recursive: true });
+		fs.writeFileSync(
+			getGlobalVarsConfigPath(),
+			JSON.stringify({ paths: { plan: "global-plan.md", design: "global-design.md" } }, null, 2),
+		);
+
+		const result = bootstrapVarsFiles(cwd);
+		const projectConfig = JSON.parse(fs.readFileSync(getVarsConfigPath(cwd), "utf8")) as { paths?: unknown };
+
+		assert.strictEqual(projectConfig.paths, undefined);
+		assert.strictEqual(result.state.promptVars["plan.path"], path.join(cwd, "global-plan.md"));
+		assert.strictEqual(result.state.promptVars["design.path"], path.join(cwd, "global-design.md"));
+	});
+
 	test("setVar persists arbitrary JSON values to the project config and creates the write-location config", () => {
 		const cwd = makeWorkspace();
 
