@@ -1,20 +1,21 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Type } from "@sinclair/typebox";
-import { keyHint, SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv } from "./policy.ts";
 import { collectAgentCards, collectSubagentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
-import { buildHandbackDeduplicationKey, buildQueuedHandback, extractChildResultPayloads, partitionHandbackDuplicates, summarizeHandbackText } from "./handbacks.ts";
+import { createAsyncEventManager } from "./async-events.ts";
+import { createChildEventController } from "./child-events.ts";
+import { createFooterLifecycleController } from "./footer-lifecycle.ts";
+import { extractChildResultPayloads, summarizeHandbackText } from "./handbacks.ts";
+import { createHandbackDeliveryController } from "./handback-delivery.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
 import { formatModelReference, readNamedAgentExtensionPathsFromCards, readNamedAgentModelFromCards, readNamedAgentPromptFromCards, readNamedAgentThinkingFromCards, readNamedAgentToolSelectionFromCards } from "./subagent-model.ts";
 import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
-import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
 import {
 	EVENT_CHILD_CANCELLED as SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
@@ -37,17 +38,19 @@ import {
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
 import { readNamedAgentMaxSubagentDepthFromCards, resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
-import { rememberRunMessageDetails, getRenderableRunSnapshot, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
-import { formatRunCardLines, shortenDisplayPath } from "./run-ui.ts";
+import { rememberRunMessageDetails, ORCHESTRATOR_RUN_MESSAGE_TYPE, resolveRunMessageDetails, restoreRunMessageSnapshots, clearRunMessageSnapshots } from "./run-live-state.ts";
 import { formatUserLaunchNotification } from "./footer-status.ts";
-import { buildChildSessionEntry, buildContinuationEntry, buildHandbackEntry, formatContinuationTitle, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
+import { buildChildSessionEntry, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, ORCHESTRATOR_COMPLETE_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE } from "./session-entries.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
 import { createStateStore } from "./state.ts";
 import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TIMEOUT_SECONDS, nextSyncIdleTimeoutDelayMs } from "./timeout.ts";
+import { DelegateSubagentParams, DelegateSubagentStatusParams, DevSubagentStreamToFileParams } from "./tool-schemas.ts";
+import { buildTreeNodes, filterNodeLogRecords, formatNodeLogLines, formatRunDetails, formatRunList, formatTree, selectRunChild, STATUS_LIST_LIMIT, summarizeRunForListDetails } from "./status-tools.ts";
+import { createContinuationMessageComponent, createRunMessageComponent } from "./message-renderers.ts";
+import { renderDelegateToolResult, renderStatusToolResult } from "./tool-renderers.ts";
 import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
 import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
 import { createTapController } from "./tap-controller.ts";
-import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, resolveSubagentStatusColors, type TapRunRoot } from "./tap-navigation.ts";
 import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
@@ -60,8 +63,6 @@ import type {
 	ModeStateSessionEntry,
 	NormalizedDelegationRequest,
 	OrchestratorChildSessionRecord,
-	OrchestratorContinuationMessageDetails,
-	OrchestratorContinuationRecord,
 	OrchestratorHandbackRecord,
 	OrchestratorLogCursorDetails,
 	OrchestratorLogDetails,
@@ -83,12 +84,6 @@ const SUBAGENT_STARTED_EVENT = "subagent:started";
 const SUBAGENT_COMPLETE_EVENT = "subagent:complete";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
 
-const TEXT_DELTA_STATE_FLUSH_INTERVAL_MS = 500;
-const ASYNC_EVENT_TAIL_INTERVAL_MS = 250;
-const ASYNC_EVENT_TAIL_MAX_LINES = 100;
-const ASYNC_EVENT_TAIL_MAX_BYTES = 64 * 1024;
-const ASYNC_EVENT_TAIL_MAX_LINE_BYTES = 2 * 1024 * 1024;
-const STATUS_LIST_LIMIT = 10;
 const STATUS_LIST_TEXT_LIMIT = 300;
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
 
@@ -102,41 +97,6 @@ function warnOrchestratorDiagnostic(message: string, error?: unknown): void {
 	const suffix = error === undefined ? "" : `: ${formatUnknownError(error)}`;
 	console.warn(`[subagent-orchestrator] ${message}${suffix}`);
 }
-
-const DelegateTaskSchema = Type.Object({
-	task: Type.String({ description: "The subagent task to run." }),
-}, { additionalProperties: false });
-
-const DelegateSubagentParams = Type.Object({
-	agent: Type.Optional(Type.String({ description: "The subagent type to run (defaults to scout)." })),
-	task: Type.Optional(Type.String({ description: "Run one subagent task." })),
-	tasks: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run multiple subagents in parallel." })),
-	chain: Type.Optional(Type.Array(DelegateTaskSchema, { description: "Run a sequential chain of subagent tasks." })),
-	async: Type.Optional(Type.Boolean({ description: "Run in the background and return immediately with a run id." })),
-	timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SYNC_TIMEOUT_SECONDS, description: `Inactivity timeout for synchronous delegated runs in seconds. Defaults to ${DEFAULT_SYNC_TIMEOUT_SECONDS}. Async runs do not use it, but if provided it must still be within range.` })),
-	context: Type.Optional(Type.Union([
-		Type.Literal("fresh"),
-		Type.Literal("fork"),
-		Type.Literal("continue"),
-	], { description: "Execution context for child subagents." })),
-	childSessionId: Type.Optional(Type.String({ description: 'Explicit child session id to continue when context is "continue".' })),
-	showRunCard: Type.Optional(Type.Boolean({ description: "Show a visible subagent orchestrator run card in the UI. Defaults to false." })),
-}, { additionalProperties: false });
-
-const DevSubagentStreamToFileParams = Type.Object({
-	childSessionId: Type.String({ description: "The child session id to stream." }),
-	filePath: Type.String({ description: "JSONL file path to append sanitized stream events to." }),
-	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking boundary/summary events. Defaults to false." })),
-}, { additionalProperties: false });
-
-const DelegateSubagentStatusParams = Type.Object({
-	action: Type.String({ description: 'One of "list", "get", "cancel", "next", "prev", "select", "tree", "log", "log_cursor", or "log_next".' }),
-	runId: Type.Optional(Type.String({ description: "The orchestrator run id for get/cancel/next/prev/select/tree." })),
-	childIndex: Type.Optional(Type.Number({ description: "The child index for action: \"select\"." })),
-	childSessionId: Type.Optional(Type.String({ description: 'The child session id for action: "log", "log_cursor", or "log_next".' })),
-	cursor: Type.Optional(Type.String({ description: 'The cursor for action: "log_next".' })),
-	includeThinking: Type.Optional(Type.Boolean({ description: "Include thinking events in log responses." })),
-}, { additionalProperties: false });
 
 function errorResult(message: string, mode: "single" | "parallel" | "chain" = "single") {
 	return {
@@ -190,172 +150,6 @@ function summarizeAsyncFailure(result: SubagentModeRunResult, fallback: string):
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function requestedDelegatedAgent(value: unknown): string {
-	return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : DEFAULT_ORCHESTRATOR_CHILD_AGENT;
-}
-
-function delegatedSubject(args: Record<string, unknown>): string {
-	const agent = requestedDelegatedAgent(args.agent);
-	if (Array.isArray(args.chain)) return `${agent} chain (${args.chain.length} step${args.chain.length === 1 ? "" : "s"})`;
-	if (Array.isArray(args.tasks)) return `${args.tasks.length} ${agent}${args.tasks.length === 1 ? "" : "s"}`;
-	return agent;
-}
-
-function delegatedShapeLabel(args: Record<string, unknown>): string {
-	if (Array.isArray(args.chain)) return `chain(${args.chain.length} step${args.chain.length === 1 ? "" : "s"})`;
-	if (Array.isArray(args.tasks)) return `parallel(${args.tasks.length} task${args.tasks.length === 1 ? "" : "s"})`;
-	return "single";
-}
-
-function shortRunId(runId: string | undefined): string | undefined {
-	if (typeof runId !== "string" || !runId.trim()) return undefined;
-	return runId.slice(0, 8);
-}
-
-function renderToolText(text: string | undefined): Text {
-	return new Text(text ? `\n${text}` : "", 0, 0);
-}
-
-function collapsePreview(text: string | undefined, maxLines = 8, maxChars = 280): string | undefined {
-	if (typeof text !== "string") return undefined;
-	const trimmed = text.trim();
-	if (!trimmed) return undefined;
-	const lines = trimmed.split(/\r?\n/);
-	const sliced = lines.slice(0, maxLines).join("\n");
-	if (trimmed.length <= maxChars && lines.length <= maxLines) return trimmed;
-	const shortened = sliced.length > maxChars ? `${sliced.slice(0, maxChars - 1).trimEnd()}…` : sliced;
-	return `${shortened}\n…`;
-}
-
-function delegateMetaLine(args: Record<string, unknown>, result: { details?: unknown; isError?: boolean }): string {
-	const details = asRecord(result.details);
-	const runId = typeof details?.orchestratorRunId === "string" ? details.orchestratorRunId : undefined;
-	const isAsync = args.async === true || typeof runId === "string";
-	const status = typeof details?.status === "string"
-		? details.status
-		: result.isError
-			? "failed"
-			: isAsync
-				? "running"
-				: undefined;
-	const context = args.context === "fork"
-		? "fork"
-		: args.context === "continue"
-			? "continue"
-			: "fresh";
-	const parts = [isAsync ? "async" : "sync"];
-	if (isAsync && status) parts.push(status);
-	else if (!isAsync && result.isError && status) parts.push(status);
-	parts.push(requestedDelegatedAgent(args.agent));
-	parts.push(delegatedShapeLabel(args));
-	parts.push(`context=${context}`);
-	const shortId = shortRunId(runId);
-	if (isAsync && shortId) parts.push(`run=${shortId}`);
-	return parts.join(" · ");
-}
-
-function delegateResultBody(args: Record<string, unknown>, result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean }, expanded: boolean): string | undefined {
-	const subject = delegatedSubject(args);
-	const details = asRecord(result.details);
-	const runId = typeof details?.orchestratorRunId === "string" ? details.orchestratorRunId : undefined;
-	const text = firstTextContent(result.content);
-	// Collapsed delegate results: 2 lines / ~140 chars — child outputs are
-	// often long unwrapped paragraphs, so the default 8-line preview shows
-	// nearly the whole result. The agent echoes it afterward anyway.
-	if (result.isError) return expanded ? text : collapsePreview(text, 2, 140) ?? `Delegated ${subject} failed.`;
-	if (args.async === true || typeof runId === "string") return undefined;
-	return expanded ? text : collapsePreview(text, 2, 140) ?? `Completed delegated ${subject}.`;
-}
-
-function renderDelegateToolResult(
-	args: Record<string, unknown>,
-	result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean },
-	expanded: boolean,
-	theme: ExtensionContext["ui"]["theme"],
-): Text {
-	const details = asRecord(result.details);
-	const runId = typeof details?.orchestratorRunId === "string" ? details.orchestratorRunId : undefined;
-	const shortId = shortRunId(runId);
-	const plainMeta = delegateMetaLine(args, result);
-	const meta = shortId && plainMeta.endsWith(`run=${shortId}`)
-		? `${theme.fg("muted", plainMeta.slice(0, -(`run=${shortId}`.length)))}${theme.fg("muted", "run=")}${theme.bold(shortId)}`
-		: theme.fg("muted", plainMeta);
-	const collapsedBody = delegateResultBody(args, result, false);
-	const expandedBody = delegateResultBody(args, result, true);
-	const body = expanded ? expandedBody : collapsedBody;
-	const showExpandHint = !expanded
-		&& typeof collapsedBody === "string"
-		&& typeof expandedBody === "string"
-		&& collapsedBody !== expandedBody;
-	const hint = showExpandHint ? theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`) : undefined;
-	const rendered = [
-		meta,
-		body ? theme.fg("toolOutput", body) : undefined,
-	].filter(Boolean).join("\n");
-	return new Text(hint ? `${rendered}\n\n${hint}` : rendered, 0, 0);
-}
-
-function renderStatusToolResult(
-	args: Record<string, unknown>,
-	result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean } | null,
-	expanded: boolean,
-	theme: ExtensionContext["ui"]["theme"],
-): Text {
-	if (result === null) return new Text(theme.fg("toolOutput", "null"), 0, 0);
-	const details = asRecord(result.details);
-	if (details?.terminal === true && details.cursor === null) {
-		return new Text(theme.fg("toolOutput", "null"), 0, 0);
-	}
-	const summary = theme.fg("muted", summarizeStatusToolResult(args, result));
-	const text = firstTextContent(result.content);
-	if (!text) return new Text(summary, 0, 0);
-	const collapsedBody = collapsePreview(text, 8, 280) ?? text;
-	const expandedBody = text;
-	const body = expanded ? expandedBody : collapsedBody;
-	const showExpandHint = !expanded && collapsedBody !== expandedBody;
-	const hint = showExpandHint ? theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`) : undefined;
-	const rendered = [summary, theme.fg("toolOutput", body)].filter(Boolean).join("\n");
-	return new Text(hint ? `${rendered}\n\n${hint}` : rendered, 0, 0);
-}
-
-function summarizeStatusToolResult(args: Record<string, unknown>, result: { content?: Array<{ type?: string; text?: string }>; details?: unknown; isError?: boolean } | null): string {
-	if (result === null) return "Loaded delegated child log terminal state.";
-	if (result.isError) return "Delegated subagent status failed.";
-	const details = asRecord(result.details);
-	if (details?.terminal === true && details.cursor === null) return "Loaded delegated child log terminal state.";
-	const action = typeof args.action === "string" ? args.action : "get";
-	const runId = typeof args.runId === "string" ? args.runId : undefined;
-	if (action === "list") return "Listed delegated runs.";
-	if (action === "cancel") return runId ? `Cancelled delegated run ${runId}.` : "Cancelled delegated run.";
-	if (action === "next" || action === "prev" || action === "select") return "Updated delegated child focus.";
-	if (action === "get") return runId ? `Loaded delegated run ${runId}.` : "Loaded delegated run details.";
-	if (action === "tree") return runId ? `Loaded delegated tree for ${runId}.` : "Loaded delegated tree.";
-	if (action === "log") return "Loaded delegated child log.";
-	if (action === "log_cursor") return "Loaded delegated child log cursor.";
-	if (action === "log_next") return "Loaded delegated child log updates.";
-	const fallback = firstTextContent(result.content);
-	return fallback ? (lastNonEmptyLine(fallback) ?? fallback) : "Delegated subagent status updated.";
-}
-
-function quoteShellArg(value: string): string {
-	return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-function childOutputLogPath(child: Pick<OrchestratorChildSessionRecord, "asyncDir" | "childIndex">): string | undefined {
-	if (!child.asyncDir) return undefined;
-	const outputPath = path.join(child.asyncDir, `output-${child.childIndex}.log`);
-	return fs.existsSync(outputPath) ? outputPath : undefined;
-}
-
-function childOpenCommand(child: Pick<OrchestratorChildSessionRecord, "sessionFile">): string | undefined {
-	return child.sessionFile ? `pi --session ${quoteShellArg(child.sessionFile)}` : undefined;
-}
-
-function childViewCommand(child: Pick<OrchestratorChildSessionRecord, "asyncDir" | "childIndex">): string | undefined {
-	const outputPath = childOutputLogPath(child);
-	return outputPath ? `tail -f ${quoteShellArg(outputPath)}` : undefined;
 }
 
 function boundedRecentOutput(lines: string[] | undefined, limit = 6): string[] | undefined {
@@ -413,61 +207,6 @@ function buildRunMessageDetails(run: OrchestratorRunRecord, children: Orchestrat
 			...(child.error ? { error: child.error } : {}),
 		})),
 	};
-}
-
-function selectRunChild(stateStore: ReturnType<typeof createStateStore>, runId: string, direction: "next" | "prev" | "select", childIndex?: number): { run?: OrchestratorRunRecord; child?: OrchestratorChildSessionRecord; error?: string } {
-	const run = stateStore.getRun(runId);
-	if (!run) return { error: `Run ${runId} was not found.` };
-	const children = stateStore.listChildSessionsByRun(runId);
-	if (children.length === 0) return { error: `Run ${runId} has no child sessions.` };
-	const ordered = [...children].sort((a, b) => a.childIndex - b.childIndex);
-	const current = resolveSelectedChildIndex(run, ordered) ?? ordered[0]!.childIndex;
-	let nextIndex = current;
-	if (direction === "select") {
-		if (typeof childIndex !== "number" || !Number.isInteger(childIndex)) return { error: "childIndex must be an integer for action: \"select\"." };
-		if (!ordered.some((child) => child.childIndex === childIndex)) return { error: `Run ${runId} has no child with index ${childIndex}.` };
-		nextIndex = childIndex;
-	} else {
-		const currentPos = Math.max(0, ordered.findIndex((child) => child.childIndex === current));
-		const delta = direction === "next" ? 1 : -1;
-		const nextPos = (currentPos + delta + ordered.length) % ordered.length;
-		nextIndex = ordered[nextPos]!.childIndex;
-	}
-	const updated = stateStore.updateRun(runId, { selectedChildIndex: nextIndex, updatedAt: Date.now() }) ?? run;
-	const selectedChild = ordered.find((child) => child.childIndex === nextIndex);
-	return { run: updated, child: selectedChild };
-}
-
-function createRunMessageComponent(
-	details: OrchestratorRunMessageDetails,
-	theme: ExtensionContext["ui"]["theme"],
-): Container {
-	const container = new Container();
-	let lastVersion = -1;
-	container.render = (width: number): string[] => {
-		const snapshot = getRenderableRunSnapshot(details);
-		if (snapshot.version !== lastVersion) {
-			lastVersion = snapshot.version;
-			container.clear();
-			container.addChild(new Spacer(1));
-			const boxTheme = snapshot.details.status === "failed"
-				? "toolErrorBg"
-				: snapshot.details.status === "complete"
-					? "toolSuccessBg"
-					: "toolPendingBg";
-			const box = new Box(1, 1, (text: string) => theme.bg(boxTheme, text));
-			const inner = new Container();
-			inner.addChild(new Text(theme.fg("toolTitle", theme.bold("subagent orchestrator run card")), 0, 0));
-			inner.addChild(new Text("", 0, 0));
-			for (const line of formatRunCardLines(snapshot.details)) {
-				inner.addChild(new Text(line, 0, 0));
-			}
-			box.addChild(inner);
-			container.addChild(box);
-		}
-		return Container.prototype.render.call(container, width);
-	};
-	return container;
 }
 
 function summarizeTasks(request: NormalizedDelegationRequest): string {
@@ -1019,113 +758,6 @@ function adaptSubagentModeResponse(
 	} as ProgrammaticSubagentResponse;
 }
 
-function formatRunList(
-	runs: OrchestratorRunRecord[],
-	ownerModeId: string,
-	childLookup?: (runId: string) => OrchestratorChildSessionRecord[],
-): string {
-	if (runs.length === 0) return `No subagent orchestrator runs found for mode ${ownerModeId}.`;
-	const visibleRuns = runs.slice(0, STATUS_LIST_LIMIT);
-	const lines = [`Subagent orchestrator runs for mode ${ownerModeId}:`, ""];
-	if (runs.length > visibleRuns.length) {
-		lines.push(`Showing ${visibleRuns.length} of ${runs.length} runs. Use action: "get" with a runId for full details.`);
-		lines.push("");
-	}
-	for (const run of visibleRuns) {
-		lines.push(`- ${run.orchestratorRunId} | ${run.status} | ${run.requestShape} | async=${run.async} | context=${run.context} | origin=${normalizeRunOrigin(run.origin)}${run.agent ? ` | agent=${run.agent}` : ""}`);
-		lines.push(`  task: ${truncateDisplayText(run.taskSummary) ?? run.taskSummary}`);
-		lines.push(`  children: ${run.activeChildCount ?? 0}/${run.childSessionCount ?? 0} running | queued handbacks: ${run.queuedHandbackCount ?? 0}`);
-		if (run.selectedChildIndex !== undefined) lines.push(`  focused child: [${run.selectedChildIndex}]`);
-		const children = childLookup?.(run.orchestratorRunId) ?? [];
-		const activeChildren = children.filter((child) => isRunning(child.status));
-		if (activeChildren.length > 0) {
-			lines.push("  running child sessions:");
-			for (const child of activeChildren) {
-				const childBits = [`[${child.childIndex}]`, child.status, child.taskSummary];
-				if (child.currentTool) childBits.push(`tool=${child.currentTool}${child.toolCount !== undefined ? `(${child.toolCount})` : ""}`);
-				lines.push(`    - ${childBits.join(" | ")}`);
-				if (child.sessionFile) lines.push(`      session: ${shortenDisplayPath(child.sessionFile)}`);
-				const open = childOpenCommand(child);
-				if (open) lines.push(`      open: ${open}`);
-				const view = childViewCommand(child);
-				if (view) lines.push(`      view: ${view}`);
-			}
-		}
-		const resultSummary = truncateDisplayText(run.resultSummary);
-		const error = truncateDisplayText(run.error);
-		if (resultSummary) lines.push(`  result: ${resultSummary}`);
-		if (error) lines.push(`  error: ${error}`);
-	}
-	return lines.join("\n");
-}
-
-function summarizeRunForListDetails(run: OrchestratorRunRecord): Record<string, unknown> {
-	return {
-		orchestratorRunId: run.orchestratorRunId,
-		status: run.status,
-		requestShape: run.requestShape,
-		async: run.async,
-		context: run.context,
-		origin: normalizeRunOrigin(run.origin),
-		...(run.agent ? { agent: run.agent } : {}),
-		taskSummary: truncateDisplayText(run.taskSummary) ?? run.taskSummary,
-		childSessionCount: run.childSessionCount ?? 0,
-		activeChildCount: run.activeChildCount ?? 0,
-		queuedHandbackCount: run.queuedHandbackCount ?? 0,
-		...(run.selectedChildIndex !== undefined ? { selectedChildIndex: run.selectedChildIndex } : {}),
-		...(truncateDisplayText(run.resultSummary) ? { resultSummary: truncateDisplayText(run.resultSummary) } : {}),
-		...(truncateDisplayText(run.error) ? { error: truncateDisplayText(run.error) } : {}),
-	};
-}
-
-function formatRunDetails(run: OrchestratorRunRecord, children: OrchestratorChildSessionRecord[], handbacks: OrchestratorHandbackRecord[]): string {
-	const lines = [
-		`runId: ${run.orchestratorRunId}`,
-		`ownerModeId: ${run.ownerModeId}`,
-		`status: ${run.status}`,
-		`shape: ${run.requestShape}`,
-		`async: ${run.async}`,
-		`context: ${run.context}`,
-		`origin: ${normalizeRunOrigin(run.origin)}`,
-		run.agent ? `agent: ${run.agent}` : undefined,
-		`taskSummary: ${run.taskSummary}`,
-		run.underlyingRequestId ? `underlyingRequestId: ${run.underlyingRequestId}` : undefined,
-		run.underlyingRunId ? `underlyingRunId: ${run.underlyingRunId}` : undefined,
-		run.pid !== undefined ? `pid: ${run.pid}` : undefined,
-		run.asyncDir ? `asyncDir: ${run.asyncDir}` : undefined,
-		run.resultSummary ? `resultSummary: ${run.resultSummary}` : undefined,
-		run.error ? `error: ${run.error}` : undefined,
-		`childSessions: ${children.length}`,
-		`queuedHandbacks: ${handbacks.filter((entry) => entry.status === "queued").length}`,
-		run.selectedChildIndex !== undefined ? `selectedChildIndex: ${run.selectedChildIndex}` : undefined,
-	].filter(Boolean);
-	if (children.length > 0) {
-		lines.push("", "Child sessions:");
-		for (const child of children) {
-			lines.push(`- [${child.childIndex}] ${child.status} | ${child.taskSummary}`);
-			if (child.currentTool) lines.push(`  tool: ${child.currentTool}${child.toolCount !== undefined ? ` (${child.toolCount})` : ""}`);
-			if (child.sessionFile) lines.push(`  session: ${shortenDisplayPath(child.sessionFile)}`);
-			const open = childOpenCommand(child);
-			if (open) lines.push(`  open: ${open}`);
-			const view = childViewCommand(child);
-			if (view) lines.push(`  view: ${view}`);
-			if (child.recentOutput && child.recentOutput.length > 0) {
-				lines.push("  recentOutput:");
-				for (const line of child.recentOutput.slice(-4)) lines.push(`    ${line}`);
-			}
-			if (child.resultSummary) lines.push(`  result: ${child.resultSummary}`);
-			if (child.error) lines.push(`  error: ${child.error}`);
-		}
-	}
-	if (handbacks.length > 0) {
-		lines.push("", "Handbacks:");
-		for (const handback of handbacks) {
-			lines.push(`- ${handback.handbackId} | ${handback.status} | ${handback.summary}`);
-		}
-	}
-	return lines.join("\n");
-}
-
 function toRunStatus(status: string | undefined, success: boolean | undefined, cancelled: boolean | undefined): RunStatus {
 	if (cancelled || status === "cancelled") return "cancelled";
 	if (status === "failed" || success === false) return "failed";
@@ -1140,123 +772,6 @@ function isTerminal(status: RunStatus): boolean {
 
 function isRunning(status: RunStatus): boolean {
 	return status === "running";
-}
-
-function isThinkingEventType(type: string | undefined): boolean {
-	return type === SUBAGENT_MODE_CHILD_THINKING_START_EVENT || type === SUBAGENT_MODE_CHILD_THINKING_END_EVENT;
-}
-
-function filterNodeLogRecords(records: OrchestratorNodeLogRecord[], includeThinking: boolean): OrchestratorNodeLogRecord[] {
-	return includeThinking ? records : records.filter((record) => !isThinkingEventType(record.eventType));
-}
-
-function formatNodeLogLines(records: OrchestratorNodeLogRecord[]): string {
-	if (records.length === 0) return "No log records found.";
-	const lines: string[] = [];
-	let textBuffer = "";
-
-	const flushTextBuffer = (): void => {
-		if (!textBuffer) return;
-		lines.push(`assistant: ${textBuffer}`);
-		textBuffer = "";
-	};
-
-	for (const record of records) {
-		const event = record.event as LoggedChildEvent;
-		switch (record.eventType) {
-			case SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT:
-				textBuffer += typeof event.delta === "string" ? event.delta : "";
-				continue;
-			case SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT:
-				if (typeof event.text === "string") textBuffer = event.text;
-				flushTextBuffer();
-				continue;
-			default:
-				flushTextBuffer();
-		}
-
-		switch (record.eventType) {
-			case SUBAGENT_MODE_CHILD_STARTED_EVENT:
-				lines.push(`started ${event.agent ?? "child"}`);
-				break;
-			case SUBAGENT_MODE_CHILD_THINKING_START_EVENT:
-				lines.push("thinking started");
-				break;
-			case SUBAGENT_MODE_CHILD_THINKING_END_EVENT:
-				lines.push(typeof event.summary === "string" && event.summary.trim() ? `thinking ended: ${event.summary}` : "thinking ended");
-				break;
-			case SUBAGENT_MODE_CHILD_TOOL_START_EVENT:
-				lines.push(`tool start: ${typeof event.toolName === "string" ? event.toolName : "unknown"}`);
-				break;
-			case SUBAGENT_MODE_CHILD_TOOL_END_EVENT:
-				lines.push(`tool end: ${typeof event.toolName === "string" ? event.toolName : "unknown"}${event.ok === false ? " (error)" : ""}${typeof event.resultSummary === "string" && event.resultSummary.trim() ? ` — ${event.resultSummary}` : ""}`);
-				break;
-			case SUBAGENT_MODE_CHILD_PROGRESS_EVENT:
-				lines.push(`progress: ${typeof event.currentTool === "string" ? event.currentTool : "running"}${typeof event.recentOutput === "string" && event.recentOutput.trim() ? ` — ${event.recentOutput}` : ""}`);
-				break;
-			case SUBAGENT_MODE_CHILD_ERROR_EVENT:
-				lines.push(`error: ${typeof event.message === "string" ? event.message : "child error"}`);
-				break;
-			case SUBAGENT_MODE_CHILD_CANCELLED_EVENT:
-				lines.push(typeof event.reason === "string" && event.reason.trim() ? `cancelled: ${event.reason}` : "cancelled");
-				break;
-			case SUBAGENT_MODE_CHILD_COMPLETE_EVENT: {
-				const result = event.result;
-				const status = typeof result?.status === "string" ? result.status : "complete";
-				const finalText = typeof result?.finalText === "string" ? result.finalText.trim() : "";
-				lines.push(finalText ? `complete: ${status} — ${finalText}` : `complete: ${status}`);
-				break;
-			}
-		}
-	}
-
-	flushTextBuffer();
-	return lines.join("\n");
-}
-
-function buildTreeNodes(children: OrchestratorTreeNodeDetails[]): OrchestratorTreeNodeDetails[] {
-	const byParent = new Map<string | undefined, OrchestratorTreeNodeDetails[]>();
-	for (const child of children) {
-		const key = child.parentChildSessionId;
-		const bucket = byParent.get(key) ?? [];
-		bucket.push(child);
-		byParent.set(key, bucket);
-	}
-	const sortChildren = (items: OrchestratorTreeNodeDetails[]): OrchestratorTreeNodeDetails[] => items.sort((a, b) => a.childIndex - b.childIndex || (a.taskIndex ?? a.stepIndex ?? 0) - (b.taskIndex ?? b.stepIndex ?? 0));
-	const attach = (parentId?: string): OrchestratorTreeNodeDetails[] => sortChildren([...(byParent.get(parentId) ?? [])]).map((child) => ({ ...child, children: attach(child.childSessionId) }));
-	return attach(undefined);
-}
-
-function formatTree(details: OrchestratorTreeDetails): string {
-	const lines = [
-		`rootRunId: ${details.rootRunId}`,
-		`ownerModeId: ${details.ownerModeId}`,
-		`status: ${details.status}`,
-		`shape: ${details.async ? "async" : "sync"} ${details.context}`,
-		`taskSummary: ${details.taskSummary}`,
-		"",
-		"Tree:",
-	];
-	if (details.nodes.length === 0) {
-		lines.push("(no child nodes)");
-		return lines.join("\n");
-	}
-	const visit = (nodes: OrchestratorTreeNodeDetails[], prefix: string): void => {
-		for (let index = 0; index < nodes.length; index++) {
-			const node = nodes[index]!;
-			const branch = index === nodes.length - 1 ? "└─" : "├─";
-			const nextPrefix = `${prefix}${index === nodes.length - 1 ? "  " : "│ "}`;
-			const parts = [`[${node.childIndex}]`, node.agent, node.status, node.taskSummary];
-			if (node.currentTool) parts.push(`tool=${node.currentTool}${node.toolCount !== undefined ? `(${node.toolCount})` : ""}`);
-			lines.push(`${prefix}${branch} ${parts.join(" | ")}`);
-			lines.push(`${nextPrefix}childSessionId: ${node.childSessionId}`);
-			if (node.resultSummary) lines.push(`${nextPrefix}result: ${node.resultSummary}`);
-			if (node.error) lines.push(`${nextPrefix}error: ${node.error}`);
-			visit(node.children, nextPrefix);
-		}
-	};
-	visit(details.nodes, "");
-	return lines.join("\n");
 }
 
 export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
@@ -1280,362 +795,73 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerMessageRenderer(ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, (message, options, theme) => {
-		const details = (message.details ?? {}) as Partial<OrchestratorContinuationMessageDetails>;
-		const childCount = typeof details.childCount === "number"
-			? details.childCount
-			: Array.isArray(details.handbackIds) ? details.handbackIds.length : 1;
-		const consumer = details.consumer === "user" ? "user" : "agent";
-		const title = formatContinuationTitle(childCount, consumer, details.agent);
-		const runIds = Array.isArray(details.runIds)
-			? details.runIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-			: [];
-		const titleRunId = consumer === "agent" && runIds.length === 1 ? shortRunId(runIds[0]) : undefined;
-		const content = typeof message.content === "string" ? message.content.trim() : "";
-		const boxBg = consumer === "user" ? "toolPendingBg" : "customMessageBg";
-		const box = new Box(1, 1, (text: string) => theme.bg(boxBg, text));
-		const titleColor = consumer === "user" ? "accent" : "success";
-		const titleText = `${theme.fg(titleColor, title)}${titleRunId ? ` ${theme.bold(titleRunId)}` : ""}`;
-		if (!content) {
-			box.addChild(new Text(titleText, 0, 0));
-			return box;
-		}
-		if (options.expanded) {
-			box.addChild(new Text(`${titleText}\n\n${content}`, 0, 0));
-			return box;
-		}
-		if (consumer === "user") {
-			const preview = collapsePreview(content, 8, 700) ?? content;
-			const hint = preview !== content
-				? theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)
-				: undefined;
-			const body = hint ? `${titleText}\n\n${preview}\n\n${hint}` : `${titleText}\n\n${preview}`;
-			box.addChild(new Text(body, 0, 0));
-			return box;
-		}
-		const hint = theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`);
-		box.addChild(new Text(`${titleText} ${hint}`, 0, 0));
-		return box;
+		return createContinuationMessageComponent(message, options, theme);
 	});
 
 	const pending = new Map<string, PendingRequest>();
 	const asyncFallbackWarnings = new Set<string>();
 	const uiStatusKey = "subagent-orchestrator";
 	let latestCtx: ExtensionContext | null = null;
-	let queuedHandbackFlushTimer: ReturnType<typeof setTimeout> | null = null;
-	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
-	let lastUiStatusText: string | undefined;
-	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 	const devStreamFileClosers = new Map<string, () => void>();
-	const asyncEventTailers = new Map<string, ReturnType<typeof setInterval>>();
+	let asyncEvents!: ReturnType<typeof createAsyncEventManager>;
+	let childEvents!: ReturnType<typeof createChildEventController>;
+	let footerLifecycle!: ReturnType<typeof createFooterLifecycleController<ReturnType<typeof currentSessionLineage>>>;
+	let handbackDelivery!: ReturnType<typeof createHandbackDeliveryController<ReturnType<typeof currentSessionLineage>>>;
 	const tapController = createTapController({
-		getRoots: (ctx) => buildVisibleTapRoots(ctx, { includeUserRuns: true }),
+		getRoots: (ctx) => footerLifecycle.buildVisibleTapRoots(ctx, { includeUserRuns: true }),
 		openStream: (childSessionId, handler) => openSubagentStream(childSessionId, handler),
 		onPoll: (ctx, selectedChildSessionId) => {
 			reconcileTapAsyncRuns(ctx, selectedChildSessionId);
-			flushQueuedHandbacks(ctx, { forceAgentDelivery: false });
+			handbackDelivery.flushQueuedHandbacks(ctx, { forceAgentDelivery: false });
 		},
 		pollIntervalMs: 2_000,
 		warn: warnOrchestratorDiagnostic,
 		onClose: () => {
-			lastUiStatusText = undefined;
-			updateUiStatus(latestCtx, true);
+			footerLifecycle.resetLastUiStatusText();
+			footerLifecycle.updateUiStatus(latestCtx, true);
 		},
 	});
 
-	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
-		const children = state.listChildSessionsByRun(runId);
-		if (children.length === 0) return undefined;
-		if (typeof event.stepIndex === "number" && typeof event.taskIndex === "number") {
-			const matches = children.filter((child) => child.stepIndex === event.stepIndex && child.taskIndex === event.taskIndex);
-			if (matches.length === 1) return matches[0];
-		}
-		if (typeof event.stepIndex === "number") {
-			const stepMatches = children.filter((child) => child.stepIndex === event.stepIndex && child.taskIndex === undefined);
-			if (stepMatches.length === 1) return stepMatches[0];
-		}
-		if (typeof event.taskIndex === "number") {
-			const taskMatches = children.filter((child) => child.stepIndex === undefined && child.taskIndex === event.taskIndex);
-			if (taskMatches.length === 1) return taskMatches[0];
-		}
-		return children.length === 1 ? children[0] : undefined;
-	}
-
-	function resolveChildSessionForEvent(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
-		if (typeof event.childId === "string") {
-			const existing = state.findChildSessionByRunAndExecutionChildId(runId, event.childId);
-			if (existing) return existing;
-		}
-		return findEventChildByIndex(runId, event);
-	}
-
-	function warnDroppedChildEvent(runId: string, event: LoggedChildEvent, reason: string): void {
-		if (process.env.PI_DEBUG_SUBAGENT_ORCHESTRATOR !== "1") return;
-		const eventType = typeof event.type === "string" ? event.type : "unknown";
-		console.warn(`[subagent-orchestrator] dropped child event for run ${runId}: ${eventType} (${reason})`);
-	}
-
-	function appendNodeLogForChild(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorNodeLogRecord {
-		const record = state.appendNodeLogRecord(child.childSessionId, {
-			runId: child.runId,
-			...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),
-			timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
-			eventType: typeof event.type === "string" ? event.type : "unknown",
-			event,
-		});
-		emitSubagentStreamRecord(pi, record, child);
-		return record;
-	}
-
-	function clearPendingTextDeltaState(childSessionId: string): void {
-		const pendingFlush = pendingTextDeltaFlushes.get(childSessionId);
-		if (!pendingFlush) return;
-		if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
-		pendingTextDeltaFlushes.delete(childSessionId);
-	}
-
-	function flushPendingTextDeltaState(childSessionId: string): void {
-		const pendingFlush = pendingTextDeltaFlushes.get(childSessionId);
-		if (!pendingFlush) return;
-		if (pendingFlush.timer) {
-			clearTimeout(pendingFlush.timer);
-			pendingFlush.timer = null;
-		}
-		const text = pendingFlush.chunks.join("");
-		pendingFlush.chunks = [];
-		if (!text) {
-			pendingTextDeltaFlushes.delete(childSessionId);
-			return;
-		}
-		const child = state.getChildSession(childSessionId);
-		if (!child || isTerminal(child.status)) {
-			pendingTextDeltaFlushes.delete(childSessionId);
-			return;
-		}
-		state.updateChildSession(childSessionId, {
-			status: child.status === "cancelled" ? child.status : "running",
-			updatedAt: Date.now(),
-			recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), text]),
-		});
-		refreshRunMessageSnapshot(pendingFlush.runId);
-	}
-
-	function scheduleTextDeltaStateFlush(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): void {
-		const delta = typeof event.delta === "string" ? event.delta : "";
-		if (!delta) return;
-		const pendingFlush = pendingTextDeltaFlushes.get(child.childSessionId) ?? { runId: child.runId, chunks: [], timer: null };
-		pendingFlush.chunks.push(delta);
-		pendingFlush.runId = child.runId;
-		if (!pendingFlush.timer) {
-			pendingFlush.timer = setTimeout(() => flushPendingTextDeltaState(child.childSessionId), TEXT_DELTA_STATE_FLUSH_INTERVAL_MS);
-			pendingFlush.timer.unref?.();
-		}
-		pendingTextDeltaFlushes.set(child.childSessionId, pendingFlush);
-	}
-
-	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
-		const now = typeof event.timestamp === "number" ? event.timestamp : Date.now();
-		const runningStatus = isTerminal(child.status) ? child.status : "running";
-		switch (event.type) {
-			case SUBAGENT_MODE_CHILD_STARTED_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: runningStatus,
-					updatedAt: now,
-					...(typeof event.childId === "string" ? { executionChildId: event.childId } : {}),
-					...(typeof event.sessionFile === "string" ? { sessionFile: event.sessionFile } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_TOOL_START_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: runningStatus,
-					updatedAt: now,
-					...(typeof event.toolName === "string" ? { currentTool: event.toolName } : {}),
-					toolCount: (child.toolCount ?? 0) + 1,
-				});
-			case SUBAGENT_MODE_CHILD_TOOL_END_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					updatedAt: now,
-					...(typeof event.toolName === "string" ? { currentTool: event.toolName } : {}),
-					...(event.ok === false ? { failedToolCount: (child.failedToolCount ?? 0) + 1 } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: runningStatus,
-					updatedAt: now,
-					recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), typeof event.delta === "string" ? event.delta : ""]),
-				});
-			case SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: runningStatus,
-					updatedAt: now,
-					...(typeof event.text === "string" ? { recentOutput: finalAnswerRecentOutput(event.text) } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_PROGRESS_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: runningStatus,
-					updatedAt: now,
-					...(typeof event.currentTool === "string" ? { currentTool: event.currentTool } : {}),
-					...(typeof event.toolCount === "number" ? { toolCount: event.toolCount } : {}),
-					...(typeof event.recentOutput === "string" ? { recentOutput: boundedRecentOutput([...(child.recentOutput ?? []), event.recentOutput]) } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_ERROR_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "failed",
-					updatedAt: now,
-					...(typeof event.message === "string" ? { error: event.message } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_CANCELLED_EVENT:
-				return state.updateChildSession(child.childSessionId, {
-					status: "cancelled",
-					updatedAt: now,
-					completedAt: now,
-					...(typeof event.reason === "string" ? { resultSummary: event.reason } : {}),
-				});
-			case SUBAGENT_MODE_CHILD_COMPLETE_EVENT: {
-				const result = event.result as Record<string, unknown> | undefined;
-				const status = typeof result?.status === "string" ? result.status : "complete";
-				const finalText = typeof result?.finalText === "string" ? result.finalText : undefined;
-				const error = typeof result?.error === "string" ? result.error : undefined;
-				const sessionFile = typeof result?.sessionFile === "string" ? result.sessionFile : undefined;
-				return state.updateChildSession(child.childSessionId, {
-					status: status === "cancelled" ? "cancelled" : status === "failed" ? "failed" : "complete",
-					updatedAt: now,
-					completedAt: now,
-					...(sessionFile ? { sessionFile } : {}),
-					...(finalText ? { finalAnswer: finalText, resultSummary: summarizeHandbackText(finalText, 120), recentOutput: finalAnswerRecentOutput(finalText) } : {}),
-					...(error ? { error } : {}),
-				});
-			}
-			default:
-				return undefined;
-		}
-	}
-
-	function handleChildEvent(runId: string, event: LoggedChildEvent, appendEntryOnUpdate = true): void {
-		const child = resolveChildSessionForEvent(runId, event);
-		if (!child) {
-			warnDroppedChildEvent(runId, event, "could not correlate to a child session");
-			return;
-		}
-		appendNodeLogForChild(child, event);
-		if (event.type === SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
-			scheduleTextDeltaStateFlush(child, event);
-			return;
-		}
-		if (event.type === SUBAGENT_MODE_CHILD_TEXT_FINAL_EVENT || event.type === SUBAGENT_MODE_CHILD_COMPLETE_EVENT || event.type === SUBAGENT_MODE_CHILD_CANCELLED_EVENT || event.type === SUBAGENT_MODE_CHILD_ERROR_EVENT) {
-			flushPendingTextDeltaState(child.childSessionId);
-			clearPendingTextDeltaState(child.childSessionId);
-		}
-		const updated = updateChildSessionFromEvent(child, event);
-		if (updated?.sessionFile) {
-			bindStickyUserSubagentSessionToRun(runId, {
-				sessionFile: updated.sessionFile,
-				childSessionId: updated.childSessionId,
-				lastUsedAt: updated.updatedAt,
-			});
-		}
-		if (updated && appendEntryOnUpdate && event.type && event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
-			appendChildEntry(updated, isTerminal(updated.status) ? (updated.status === "cancelled" ? "cancelled" : "completed") : "updated");
-		}
-		refreshRunAggregates(runId);
-	}
-
-	function ingestAsyncEventLines(run: OrchestratorRunRecord, options?: { maxBytes?: number; maxLines?: number }): { advanced: boolean; processedLines: number; hasMore: boolean } {
-		if (!run.asyncDir) return { advanced: false, processedLines: 0, hasMore: false };
-		const eventsPath = path.join(run.asyncDir, "events.jsonl");
-		if (!fs.existsSync(eventsPath)) return { advanced: false, processedLines: 0, hasMore: false };
-		const size = fs.statSync(eventsPath).size;
-		let cursor = run.asyncEventCursor ?? 0;
-		if (cursor > size) cursor = 0;
-		if (cursor >= size) return { advanced: false, processedLines: 0, hasMore: false };
-		const unreadBytes = size - cursor;
-		const bytesToRead = Math.min(unreadBytes, options?.maxBytes ?? unreadBytes);
-		const buffer = Buffer.alloc(bytesToRead);
-		const fd = fs.openSync(eventsPath, "r");
-		let bytesRead = 0;
-		try {
-			while (bytesRead < buffer.length) {
-				const read = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, cursor + bytesRead);
-				if (read === 0) break;
-				bytesRead += read;
-			}
-		} finally {
-			fs.closeSync(fd);
-		}
-		let readableBuffer = bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead);
-		if (readableBuffer.length === 0) return { advanced: false, processedLines: 0, hasMore: cursor < size };
-		if (readableBuffer.indexOf(0x0a) < 0 && cursor + readableBuffer.length < size) {
-			const chunks: Buffer[] = [readableBuffer];
-			let storedBytes = readableBuffer.length;
-			let scannedBytes = readableBuffer.length;
-			let oversized = storedBytes > ASYNC_EVENT_TAIL_MAX_LINE_BYTES;
-			let newlineOffset: number | undefined;
-			const scanFd = fs.openSync(eventsPath, "r");
-			try {
-				while (cursor + scannedBytes < size) {
-					const chunkSize = Math.min(ASYNC_EVENT_TAIL_MAX_BYTES, size - cursor - scannedBytes);
-					const chunk = Buffer.alloc(chunkSize);
-					const read = fs.readSync(scanFd, chunk, 0, chunk.length, cursor + scannedBytes);
-					if (read === 0) break;
-					const scannedChunk = read === chunk.length ? chunk : chunk.subarray(0, read);
-					const newlineInChunk = scannedChunk.indexOf(0x0a);
-					if (!oversized && storedBytes + scannedChunk.length <= ASYNC_EVENT_TAIL_MAX_LINE_BYTES) {
-						chunks.push(scannedChunk);
-						storedBytes += scannedChunk.length;
-					} else {
-						oversized = true;
-					}
-					scannedBytes += scannedChunk.length;
-					if (newlineInChunk >= 0) {
-						newlineOffset = scannedBytes - scannedChunk.length + newlineInChunk;
-						break;
-					}
-				}
-			} finally {
-				fs.closeSync(scanFd);
-			}
-			if (oversized) {
-				const advance = newlineOffset !== undefined ? newlineOffset + 1 : scannedBytes;
-				warnDroppedChildEvent(run.orchestratorRunId, { type: "unknown" }, "skipped oversized async event line");
-				state.updateRun(run.orchestratorRunId, { asyncEventCursor: cursor + advance, updatedAt: Date.now() });
-				return { advanced: advance > 0, processedLines: 1, hasMore: cursor + advance < size };
-			}
-			readableBuffer = Buffer.concat(chunks, storedBytes);
-		}
-		let offset = 0;
-		let processedLines = 0;
-		const maxLines = options?.maxLines ?? Number.POSITIVE_INFINITY;
-		while (offset < readableBuffer.length && processedLines < maxLines) {
-			const newlineIndex = readableBuffer.indexOf(0x0a, offset);
-			if (newlineIndex < 0) break;
-			const rawLine = readableBuffer.subarray(offset, newlineIndex).toString("utf8").trim();
-			if (!rawLine) {
-				offset = newlineIndex + 1;
-				continue;
-			}
-			processedLines += 1;
-			let event: LoggedChildEvent;
-			try {
-				event = JSON.parse(rawLine) as LoggedChildEvent;
-			} catch {
-				warnDroppedChildEvent(run.orchestratorRunId, { type: "unknown" }, "encountered malformed async event line");
-				offset = newlineIndex + 1;
-				continue;
-			}
-			if (typeof event.type !== "string") {
-				warnDroppedChildEvent(run.orchestratorRunId, event, "missing event type");
-				offset = newlineIndex + 1;
-				continue;
-			}
-			if (event.type.startsWith("subagent:mode:child.")) {
-				handleChildEvent(run.orchestratorRunId, event, false);
-			}
-			offset = newlineIndex + 1;
-		}
-		const nextCursor = cursor + offset;
-		if (offset > 0 || cursor !== (run.asyncEventCursor ?? 0)) {
-			state.updateRun(run.orchestratorRunId, { asyncEventCursor: nextCursor, updatedAt: Date.now() });
-		}
-		return { advanced: nextCursor !== (run.asyncEventCursor ?? 0), processedLines, hasMore: nextCursor < size };
-	}
+	childEvents = createChildEventController({
+		pi,
+		state,
+		isTerminal,
+		appendChildEntry,
+		refreshRunAggregates,
+		refreshRunMessageSnapshot,
+		bindStickyUserSubagentSessionToRun,
+	});
+	asyncEvents = createAsyncEventManager({
+		state,
+		handleChildEvent: childEvents.handleChildEvent,
+		warnDroppedChildEvent: childEvents.warnDroppedChildEvent,
+		warnDiagnostic: warnOrchestratorDiagnostic,
+		isTerminal,
+	});
+	footerLifecycle = createFooterLifecycleController({
+		state,
+		getLatestCtx: () => latestCtx,
+		findCurrentModeId,
+		currentSessionLineage,
+		runMatchesSessionLineage,
+		childSessionMatchesSessionLineage,
+		handbackMatchesSessionLineage,
+		normalizeRunOrigin,
+		normalizeHandbackConsumer,
+		isTerminal,
+		tapController,
+		uiStatusKey,
+	});
+	handbackDelivery = createHandbackDeliveryController({
+		pi,
+		state,
+		getLatestCtx: () => latestCtx,
+		findCurrentModeId,
+		currentSessionLineage,
+		handbackMatchesSessionLineage,
+		normalizeHandbackConsumer,
+		refreshRunAggregates,
+	});
 
 	function resolveTreeRootRun(ownerModeId: string, runId?: string): { rootRun: OrchestratorRunRecord; selectedRunId?: string } | { error: string } {
 		if (typeof runId === "string" && runId.trim()) {
@@ -1700,43 +926,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { child, rootRun: currentRoot };
 	}
 
-	function stopAsyncEventTailer(runId: string): void {
-		const timer = asyncEventTailers.get(runId);
-		if (!timer) return;
-		clearInterval(timer);
-		asyncEventTailers.delete(runId);
-	}
-
-	function stopAllAsyncEventTailers(): void {
-		for (const runId of asyncEventTailers.keys()) stopAsyncEventTailer(runId);
-	}
-
-	function tailAsyncRunEvents(runId: string): void {
-		try {
-			const run = state.getRun(runId);
-			if (!run || !run.async || !run.asyncDir) {
-				stopAsyncEventTailer(runId);
-				return;
-			}
-			const result = ingestAsyncEventLines(run, { maxBytes: ASYNC_EVENT_TAIL_MAX_BYTES, maxLines: ASYNC_EVENT_TAIL_MAX_LINES });
-			const latest = state.getRun(runId) ?? run;
-			if (isTerminal(latest.status) && !result.hasMore) stopAsyncEventTailer(runId);
-		} catch (error) {
-			warnOrchestratorDiagnostic(`async event tailer failed for run ${runId}`, error);
-			stopAsyncEventTailer(runId);
-		}
-	}
-
-	function startAsyncEventTailer(run: OrchestratorRunRecord | undefined): void {
-		if (!run || !run.async || !run.asyncDir || isTerminal(run.status) || asyncEventTailers.has(run.orchestratorRunId)) return;
-		const timer = setInterval(() => tailAsyncRunEvents(run.orchestratorRunId), ASYNC_EVENT_TAIL_INTERVAL_MS);
-		timer.unref?.();
-		asyncEventTailers.set(run.orchestratorRunId, timer);
-		tailAsyncRunEvents(run.orchestratorRunId);
-	}
-
 	function refreshAsyncRunState(run: OrchestratorRunRecord, options?: { ingestEvents?: boolean }): OrchestratorRunRecord | undefined {
-		if (options?.ingestEvents !== false) ingestAsyncEventLines(run);
+		if (options?.ingestEvents !== false) asyncEvents.ingestAsyncEventLines(run);
 		const latest = state.getRun(run.orchestratorRunId) ?? run;
 		if (isTerminal(latest.status)) return latest;
 		return reconcileRunFromAsyncArtifacts(latest.orchestratorRunId);
@@ -1756,101 +947,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		});
 		refreshRunMessageSnapshot(runId);
 		tapController.refresh();
-		updateUiStatus();
+		footerLifecycle.updateUiStatus();
 	}
 
 	function appendChildEntry(child: OrchestratorChildSessionRecord, event: "created" | "updated" | "completed" | "cancelled"): void {
 		pi.appendEntry(ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE, buildChildSessionEntry(child, event));
-	}
-
-	function clearUiStatusTimer(): void {
-		if (!uiStatusTimer) return;
-		clearTimeout(uiStatusTimer);
-		uiStatusTimer = null;
-	}
-
-	function buildFooterLifecycleVisibility(ctx?: ExtensionContext | null, options?: { includeUserRuns?: boolean }): { ownerModeId: string; lineage: ReturnType<typeof currentSessionLineage>; runs: OrchestratorRunRecord[]; queuedHandbacks: OrchestratorHandbackRecord[] } | undefined {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx) return undefined;
-		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) return undefined;
-		const lineage = currentSessionLineage(runtimeCtx);
-		const queuedHandbacks = state.listHandbacks().filter((record) =>
-			record.status === "queued"
-			&& record.ownerModeId === ownerModeId
-			&& handbackMatchesSessionLineage(record, lineage)
-			&& normalizeHandbackConsumer(record.consumer) !== "user"
-		);
-		const queuedHandbackRunIds = new Set(queuedHandbacks.map((record) => record.runId));
-		const runs = state.listOwnedRuns(ownerModeId)
-			.filter((run) => runMatchesSessionLineage(run, lineage))
-			.filter((run) => options?.includeUserRuns === true || normalizeRunOrigin(run.origin) !== "user")
-			.filter((run) =>
-				!isTerminal(run.status)
-				|| queuedHandbackRunIds.has(run.orchestratorRunId)
-				|| run.terminalStatusNotifiedAt === undefined
-				|| (run.status === "failed" && run.failureAcknowledgedAt === undefined)
-			);
-		return { ownerModeId, lineage, runs, queuedHandbacks };
-	}
-
-	function buildVisibleTapRoots(ctx?: ExtensionContext | null, options?: { includeUserRuns?: boolean }): TapRunRoot[] {
-		const visibility = buildFooterLifecycleVisibility(ctx, options);
-		if (!visibility) return [];
-		const rootRunIds = new Set(visibility.runs.map((run) => run.rootRunId ?? run.orchestratorRunId));
-		const children = state.listChildSessionsByRootRunIds(rootRunIds)
-			.filter((child) => child.ownerModeId === visibility.ownerModeId)
-			.filter((child) => childSessionMatchesSessionLineage(child, visibility.lineage));
-		return buildTapRoots(visibility.runs, children);
-	}
-
-	function applyUiStatus(ctx?: ExtensionContext | null): void {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx?.hasUI) return;
-		if (tapController.isActive()) {
-			tapController.refresh();
-			return;
-		}
-		const roots = buildVisibleTapRoots(runtimeCtx, { includeUserRuns: true });
-		const statusColors = resolveSubagentStatusColors(buildPromptVars(runtimeCtx.cwd).storedVars);
-		const statusText = formatTapFooterTree(
-			roots,
-			{},
-			createTapFooterFormatters(runtimeCtx.ui.theme, statusColors),
-			{},
-		);
-		if (statusText !== lastUiStatusText) {
-			runtimeCtx.ui.setStatus(uiStatusKey, statusText);
-			lastUiStatusText = statusText;
-		}
-	}
-
-	function updateUiStatus(ctx?: ExtensionContext | null, immediate = false): void {
-		if (immediate) {
-			clearUiStatusTimer();
-			applyUiStatus(ctx);
-			return;
-		}
-		clearUiStatusTimer();
-		uiStatusTimer = setTimeout(() => {
-			uiStatusTimer = null;
-			applyUiStatus(ctx);
-		}, 75);
-		uiStatusTimer.unref?.();
-	}
-
-	function acknowledgeVisibleTerminalRuns(ctx?: ExtensionContext | null): void {
-		const visibility = buildFooterLifecycleVisibility(ctx, { includeUserRuns: true });
-		if (!visibility) return;
-		const now = Date.now();
-		for (const run of visibility.runs) {
-			if (!isTerminal(run.status)) continue;
-			state.updateRun(run.orchestratorRunId, {
-				...(run.terminalStatusNotifiedAt === undefined ? { terminalStatusNotifiedAt: now } : {}),
-				...(run.status === "failed" && run.failureAcknowledgedAt === undefined ? { failureAcknowledgedAt: now } : {}),
-				updatedAt: now,
-			});
-		}
 	}
 
 	function refreshRunMessageSnapshot(runId: string): OrchestratorRunMessageDetails | undefined {
@@ -1875,13 +976,6 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			display,
 			details,
 		}, { triggerTurn: false });
-	}
-
-	function consumeQueuedHandbacksForRun(runId: string, consumedAt = Date.now()): void {
-		for (const handback of state.listHandbacksByRun(runId).filter((entry) => entry.status === "queued")) {
-			state.markHandbackConsumed(handback.handbackId, consumedAt);
-		}
-		refreshRunAggregates(runId);
 	}
 
 	function warnAsyncFallbackOnce(filePath: string, error: unknown): void {
@@ -1992,7 +1086,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			summary: fallback.summary,
 			underlyingRunId: fallback.id,
 		});
-		if (status !== "cancelled") queueHandback(state.getRun(run.orchestratorRunId) ?? run, fallback);
+		if (status !== "cancelled") handbackDelivery.queueHandback(state.getRun(run.orchestratorRunId) ?? run, fallback);
 		return state.getRun(run.orchestratorRunId) ?? run;
 	}
 
@@ -2001,8 +1095,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (!ownerModeId) return;
 		for (const run of state.listOwnedRuns(ownerModeId)) {
 			if (!run.async) continue;
-			startAsyncEventTailer(run);
-			refreshAsyncRunState(run, { ingestEvents: options?.ingestEvents ?? !asyncEventTailers.has(run.orchestratorRunId) });
+			asyncEvents.startAsyncEventTailer(run);
+			refreshAsyncRunState(run, { ingestEvents: options?.ingestEvents ?? !asyncEvents.hasAsyncEventTailer(run.orchestratorRunId) });
 		}
 	}
 
@@ -2012,8 +1106,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		if (!selectedChildSessionId) {
 			for (const run of state.listOwnedRuns(ownerModeId)) {
 				if (!run.async) continue;
-				startAsyncEventTailer(run);
-				refreshAsyncRunState(run, { ingestEvents: !asyncEventTailers.has(run.orchestratorRunId) });
+				asyncEvents.startAsyncEventTailer(run);
+				refreshAsyncRunState(run, { ingestEvents: !asyncEvents.hasAsyncEventTailer(run.orchestratorRunId) });
 			}
 			return;
 		}
@@ -2022,8 +1116,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		const rootRunId = child.rootRunId ?? child.runId;
 		for (const run of state.listRunsByRootRunId(rootRunId)) {
 			if (!run.async) continue;
-			startAsyncEventTailer(run);
-			refreshAsyncRunState(run, { ingestEvents: !asyncEventTailers.has(run.orchestratorRunId) });
+			asyncEvents.startAsyncEventTailer(run);
+			refreshAsyncRunState(run, { ingestEvents: !asyncEvents.hasAsyncEventTailer(run.orchestratorRunId) });
 		}
 	}
 
@@ -2074,250 +1168,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		refreshRunAggregates(runId);
 	}
 
-	function clearQueuedHandbackFlushTimer(): void {
-		if (!queuedHandbackFlushTimer) return;
-		clearTimeout(queuedHandbackFlushTimer);
-		queuedHandbackFlushTimer = null;
-	}
-
-	function queuedHandbackCountForContext(ctx?: ExtensionContext | null): number {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx) return 0;
-		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) return 0;
-		const lineage = currentSessionLineage(runtimeCtx);
-		return state.listHandbacks().filter((record) =>
-			record.status === "queued"
-			&& record.ownerModeId === ownerModeId
-			&& handbackMatchesSessionLineage(record, lineage)
-		).length;
-	}
-
-	function scheduleQueuedHandbackFlush(delayMs = 250, attemptsRemaining = 20): void {
-		clearQueuedHandbackFlushTimer();
-		queuedHandbackFlushTimer = setTimeout(() => {
-			queuedHandbackFlushTimer = null;
-				const queuedBeforeFlush = queuedHandbackCountForContext();
-			if (queuedBeforeFlush === 0) return;
-			reconcileDuplicateHandbacks(latestCtx);
-			flushQueuedHandbacks(latestCtx);
-			if (queuedHandbackCountForContext() > 0 && attemptsRemaining > 1) {
-				scheduleQueuedHandbackFlush(Math.min(delayMs * 2, 1000), attemptsRemaining - 1);
-			}
-		}, delayMs);
-		queuedHandbackFlushTimer.unref?.();
-	}
-
-	function reconcileDuplicateHandbacks(ctx?: ExtensionContext | null): void {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx) return;
-		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) return;
-		const lineage = currentSessionLineage(runtimeCtx);
-		const activeHandbacks = state.listHandbacks().filter((record) =>
-			record.ownerModeId === ownerModeId
-			&& record.status !== "dismissed"
-			&& handbackMatchesSessionLineage(record, lineage)
-		);
-		const { duplicates } = partitionHandbackDuplicates(activeHandbacks);
-		if (duplicates.length === 0) return;
-		const now = Date.now();
-		for (const duplicate of duplicates) {
-			state.markHandbackDismissed(duplicate.handbackId, now);
-			refreshRunAggregates(duplicate.runId);
-		}
-	}
-
-	function formatAgentVisibleContinuationContent(content: string): string {
-		return `Summary result of delegated run:\n\n${content}`;
-	}
-
-	function formatAgentHiddenContinuationContent(content: string): string {
-		return `Orchestrator async completion trigger for the pending delegated request. Answer using this result directly.\n\n${formatAgentVisibleContinuationContent(content)}`;
-	}
-
-	function formatUserHiddenContinuationContent(agent: string | undefined, content: string): string {
-		const source = agent ?? "subagent";
-		return (
-			`Background user-addressed exchange from ${source}. `
-			+ "This is provided for context only. It is not a user request to comment on, summarize, or act on unless the user later refers to it."
-			+ `\n\n${content}`
-		);
-	}
-
-	function buildContinuationDetails(
-		continuation: OrchestratorContinuationRecord,
-		handbacks: OrchestratorHandbackRecord[],
-	): OrchestratorContinuationMessageDetails {
-		return {
-			continuationId: continuation.continuationId,
-			handbackIds: continuation.handbackIds,
-			childCount: handbacks.reduce((total, entry) => total + entry.childSessionIds.length, 0),
-			runIds: [...new Set(handbacks.map((entry) => entry.runId))],
-			consumer: continuation.consumer,
-			...(continuation.agent ? { agent: continuation.agent } : {}),
-		};
-	}
-
-	function createContinuationRecord(
-		parentSessionId: string,
-		ownerModeId: string,
-		handbacks: OrchestratorHandbackRecord[],
-		now: number,
-	): OrchestratorContinuationRecord {
-		const first = handbacks[0];
-		return state.createContinuation({
-			continuationId: randomUUID(),
-			parentSessionId,
-			ownerModeId,
-			handbackIds: handbacks.map((entry) => entry.handbackId),
-			consumer: normalizeHandbackConsumer(first?.consumer),
-			...(first?.agent ? { agent: first.agent } : {}),
-			status: "launched",
-			content: handbacks.map((entry) => entry.content).join("\n\n---\n\n"),
-			createdAt: now,
-			updatedAt: now,
-			launchedAt: now,
-		});
-	}
-
-	function consumeHandbacks(handbacks: OrchestratorHandbackRecord[], consumedAt: number): void {
-		for (const handback of handbacks) {
-			state.markHandbackConsumed(handback.handbackId, consumedAt);
-			refreshRunAggregates(handback.runId);
-		}
-	}
-
-	function sendDeferredCustomMessage(
-		runtimeCtx: ExtensionContext,
-		message: {
-			customType: string;
-			content: string;
-			display: boolean;
-			details: OrchestratorContinuationMessageDetails;
-		},
-	): void {
-		if (runtimeCtx.isIdle() && !runtimeCtx.hasPendingMessages()) {
-			pi.sendMessage(message, { triggerTurn: false });
-			return;
-		}
-		pi.sendMessage(message, { triggerTurn: false, deliverAs: "followUp" });
-	}
-
-	function deliverUserHandbacks(
-		runtimeCtx: ExtensionContext,
-		ownerModeId: string,
-		handbacks: OrchestratorHandbackRecord[],
-		now: number,
-	): void {
-		for (const handback of handbacks) {
-			const continuation = createContinuationRecord(handback.parentSessionId, ownerModeId, [handback], now);
-			consumeHandbacks([handback], now);
-			pi.appendEntry(ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, buildContinuationEntry(continuation));
-			const details = buildContinuationDetails(continuation, [handback]);
-			sendDeferredCustomMessage(runtimeCtx, {
-				customType: ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE,
-				content: continuation.content,
-				display: true,
-				details,
-			});
-			sendDeferredCustomMessage(runtimeCtx, {
-				customType: ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE,
-				content: formatUserHiddenContinuationContent(continuation.agent, continuation.content),
-				display: false,
-				details,
-			});
-		}
-	}
-
-	function deliverAgentHandbacks(
-		parentSessionId: string,
-		ownerModeId: string,
-		handbacks: OrchestratorHandbackRecord[],
-		now: number,
-	): void {
-		if (handbacks.length === 0) return;
-		const continuation = createContinuationRecord(parentSessionId, ownerModeId, handbacks, now);
-		consumeHandbacks(handbacks, now);
-		pi.appendEntry(ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, buildContinuationEntry(continuation));
-		const details = buildContinuationDetails(continuation, handbacks);
-		pi.sendMessage({
-			customType: ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE,
-			content: formatAgentVisibleContinuationContent(continuation.content),
-			display: true,
-			details,
-		}, { triggerTurn: false });
-		pi.sendMessage({
-			customType: ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE,
-			content: formatAgentHiddenContinuationContent(continuation.content),
-			display: false,
-			details,
-		}, { triggerTurn: true });
-	}
-
-	function queueHandback(run: OrchestratorRunRecord, event: AsyncCompleteEvent): OrchestratorHandbackRecord | undefined {
-		const now = Date.now();
-		const children = state.listChildSessionsByRun(run.orchestratorRunId);
-		const handback = buildQueuedHandback(run, children, event, now);
-		if (!handback) return undefined;
-		const dedupeKey = buildHandbackDeduplicationKey(handback);
-		const existing = state.listHandbacksByRun(run.orchestratorRunId)
-			.find((entry) => buildHandbackDeduplicationKey(entry) === dedupeKey && entry.status !== "dismissed");
-		if (existing) {
-			refreshRunAggregates(run.orchestratorRunId);
-			scheduleQueuedHandbackFlush();
-			return existing;
-		}
-		const created = state.createHandback(handback);
-		pi.appendEntry(ORCHESTRATOR_HANDBACK_ENTRY_TYPE, buildHandbackEntry(created));
-		refreshRunAggregates(run.orchestratorRunId);
-		scheduleQueuedHandbackFlush();
-		return created;
-	}
-
-	function flushQueuedHandbacks(ctx?: ExtensionContext | null, options?: { forceAgentDelivery?: boolean }): void {
-		const runtimeCtx = ctx ?? latestCtx;
-		if (!runtimeCtx) return;
-		const ownerModeId = findCurrentModeId(runtimeCtx);
-		if (!ownerModeId) return;
-		const lineage = currentSessionLineage(runtimeCtx);
-		const queued = state.listHandbacks().filter((record) =>
-			record.status === "queued"
-			&& record.ownerModeId === ownerModeId
-			&& handbackMatchesSessionLineage(record, lineage)
-		);
-		if (queued.length === 0) return;
-		const now = Date.now();
-		const { unique, duplicates } = partitionHandbackDuplicates(queued);
-		for (const duplicate of duplicates) {
-			state.markHandbackDismissed(duplicate.handbackId, now);
-			refreshRunAggregates(duplicate.runId);
-		}
-		if (unique.length === 0) return;
-		const userHandbacks = unique.filter((entry) => normalizeHandbackConsumer(entry.consumer) === "user");
-		if (userHandbacks.length > 0) {
-			deliverUserHandbacks(runtimeCtx, ownerModeId, userHandbacks, now);
-		}
-		const agentHandbacks = unique.filter((entry) => normalizeHandbackConsumer(entry.consumer) !== "user");
-		if (agentHandbacks.length === 0) return;
-		if (!options?.forceAgentDelivery && (!runtimeCtx.isIdle() || runtimeCtx.hasPendingMessages())) return;
-		const agentHandbacksBySession = new Map<string, OrchestratorHandbackRecord[]>();
-		for (const handback of agentHandbacks) {
-			const sessionKey = handback.parentSessionId || "unknown-session";
-			const existing = agentHandbacksBySession.get(sessionKey) ?? [];
-			existing.push(handback);
-			agentHandbacksBySession.set(sessionKey, existing);
-		}
-		for (const [parentSessionId, handbacks] of agentHandbacksBySession) {
-			deliverAgentHandbacks(parentSessionId, ownerModeId, handbacks, now);
-		}
-	}
-
 	pi.on("input", async (event, ctx) => {
 		latestCtx = ctx;
 		if (event.source !== "interactive") return { action: "continue" };
-		acknowledgeVisibleTerminalRuns(ctx);
-		updateUiStatus(ctx, true);
+		footerLifecycle.acknowledgeVisibleTerminalRuns(ctx);
+		footerLifecycle.updateUiStatus(ctx, true);
 		if ((event.images?.length ?? 0) > 0) return { action: "continue" };
 		const currentMode = findCurrentModeState(ctx);
 		if (!currentMode.modeId || !currentMode.subagents?.length) return { action: "continue" };
@@ -2360,20 +1215,20 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		restoreRunMessageSnapshots(ctx.sessionManager.getBranch());
 		reconcileOwnedAsyncRuns(ctx);
-		reconcileDuplicateHandbacks(ctx);
-		flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
-		updateUiStatus(ctx, true);
-		scheduleQueuedHandbackFlush();
+		handbackDelivery.reconcileDuplicateHandbacks(ctx);
+		handbackDelivery.flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
+		footerLifecycle.updateUiStatus(ctx, true);
+		handbackDelivery.scheduleQueuedHandbackFlush();
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {
 		latestCtx = ctx;
 		tapController.handleCtx(ctx);
 		reconcileOwnedAsyncRuns(ctx);
-		reconcileDuplicateHandbacks(ctx);
-		flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
-		updateUiStatus(ctx, true);
-		scheduleQueuedHandbackFlush();
+		handbackDelivery.reconcileDuplicateHandbacks(ctx);
+		handbackDelivery.flushQueuedHandbacks(ctx, { forceAgentDelivery: true });
+		footerLifecycle.updateUiStatus(ctx, true);
+		handbackDelivery.scheduleQueuedHandbackFlush();
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -2382,15 +1237,12 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		latestCtx?.ui.setEditorComponent(undefined);
 		latestCtx = null;
 		pending.clear();
-		for (const pendingFlush of pendingTextDeltaFlushes.values()) {
-			if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
-		}
-		pendingTextDeltaFlushes.clear();
+		childEvents.clearPendingTextDeltaFlushes();
 		for (const close of devStreamFileClosers.values()) close();
 		devStreamFileClosers.clear();
-		stopAllAsyncEventTailers();
-		clearQueuedHandbackFlushTimer();
-		clearUiStatusTimer();
+		asyncEvents.stopAllAsyncEventTailers();
+		handbackDelivery.clearQueuedHandbackFlushTimer();
+		footerLifecycle.clearUiStatusTimer();
 		clearRunMessageSnapshots();
 		modeDepthCache.clear();
 		subagentDepthCache.clear();
@@ -2495,7 +1347,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		} satisfies OrchestratorRunRecord);
 		for (const child of launchChildSessions) {
 			const created = state.createChildSession(child);
-			appendNodeLogForChild(created, {
+			childEvents.appendNodeLogForChild(created, {
 				type: EVENT_SUBAGENT_TASK,
 				agent: created.agent,
 				timestamp: created.createdAt,
@@ -2503,7 +1355,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			});
 			appendChildEntry(created, "created");
 		}
-		updateUiStatus(ctx, true);
+		footerLifecycle.updateUiStatus(ctx, true);
 
 		let settled = false;
 		const settleResponse = (response: ProgrammaticSubagentResponse): void => {
@@ -2633,7 +1485,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		}
 		publishRunMessage(orchestratorRunId, request.showRunCard, ctx);
 		refreshRunAggregates(orchestratorRunId);
-		startAsyncEventTailer(state.getRun(orchestratorRunId));
+		asyncEvents.startAsyncEventTailer(state.getRun(orchestratorRunId));
 
 		return { orchestratorRunId, response };
 	}
@@ -2662,15 +1514,15 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		state,
 		pending,
 		getLatestCtx: () => latestCtx,
-		handleChildEvent,
+		handleChildEvent: childEvents.handleChildEvent,
 		refreshRunAggregates,
 		adaptSubagentModeResponse,
 		toRunStatus,
 		summarizeAsyncFailure,
 		truncateDisplayText,
 		finalizeChildrenFromResults,
-		queueHandback,
-		flushQueuedHandbacks,
+		queueHandback: handbackDelivery.queueHandback,
+		flushQueuedHandbacks: handbackDelivery.flushQueuedHandbacks,
 		asyncErrorSummaryLimit: ASYNC_ERROR_SUMMARY_LIMIT,
 		completeEntryType: ORCHESTRATOR_COMPLETE_ENTRY_TYPE,
 	});
@@ -2904,7 +1756,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			}
 			if (action === "get") {
 				if (run.async && isTerminal(run.status)) {
-					consumeQueuedHandbacksForRun(run.orchestratorRunId);
+					handbackDelivery.consumeQueuedHandbacksForRun(run.orchestratorRunId);
 				}
 				const refreshedRun = state.getOwnedRun(currentModeId, runId) ?? run;
 				const children = state.listChildSessionsByRun(refreshedRun.orchestratorRunId);
