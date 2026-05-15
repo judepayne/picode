@@ -32,7 +32,7 @@ interface JsonSchemaNode {
 	enum?: unknown[];
 	properties?: Record<string, JsonSchemaNode>;
 	required?: string[];
-	type?: "object" | "string";
+	type?: "boolean" | "object" | "string";
 }
 
 interface LoadedPolicy {
@@ -239,6 +239,9 @@ function validateValueAgainstSchema(root: JsonSchemaNode, schema: JsonSchemaNode
 	if (schema.type === "string" && typeof value !== "string") {
 		return `${currentPath} must be a string`;
 	}
+	if (schema.type === "boolean" && typeof value !== "boolean") {
+		return `${currentPath} must be a boolean`;
+	}
 
 	if (schema.type === "object") {
 		if (!isPlainObject(value)) return `${currentPath} must be an object`;
@@ -277,7 +280,7 @@ function validateValueAgainstSchema(root: JsonSchemaNode, schema: JsonSchemaNode
 	return undefined;
 }
 
-function validatePolicySchema(schema: JsonSchemaNode, policy: unknown): string | undefined {
+export function validatePolicySchema(schema: JsonSchemaNode, policy: unknown): string | undefined {
 	return validateValueAgainstSchema(schema, schema, policy, "$policy");
 }
 

@@ -38,7 +38,7 @@ Start pi, or if pi is already running, reload:
 - can switch profiles at runtime and clears cached approvals when the profile changes
 - accepts inter-extension profile switch requests and, if a turn is active, queues the switch until `agent_end`
 - applies delegated subagent profile lineage ceilings from `PI_GATE_PROFILE_LINEAGE` by evaluating each concrete tool call against every profile in the lineage and choosing the strictest result (`deny > ask > allow`)
-- falls back to **YOLO permission mode** if policy loading or validation fails
+- fails closed if policy loading or validation fails; tool calls are blocked until the policy is fixed
 
 ## Commands
 
@@ -270,22 +270,20 @@ At runtime, pi-gate validates the policy against the shipped schema and then per
 - circular inheritance
 - invalid `activeProfile`
 
-## YOLO permission mode
+## Invalid policy behavior
 
-If policy loading or validation fails, pi-gate does not enforce anything.
-
-Instead it warns in the UI and switches to YOLO mode.
+If policy loading or validation fails, pi-gate fails closed: it warns in the UI, marks the footer as an error, and blocks tool calls until the policy is fixed.
 
 Typical warning format:
 
 ```text
-schema validation failed! <error-message>. You're currently in YOLO permission mode!
+schema validation failed! <error-message>. Tool calls are blocked until the gate policy is fixed.
 ```
 
 Status footer in that state:
 
 ```text
-gate:yolo
+gate:error
 ```
 
 ## Runtime profile switching

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { describe, test } from "node:test";
 
 import {
+	buildAsyncRunnerSpawnConfig,
 	cancelAsyncRun,
 	isAsyncAvailable,
 	watchCompletion,
@@ -51,6 +52,30 @@ function seedResult(runId: string): AsyncResultFile {
 	fs.writeFileSync(asyncRunResultPath(runId), JSON.stringify(file, null, 2));
 	return file;
 }
+
+describe("launchAsyncRun", () => {
+	test("builds the detached async runner spawn command", () => {
+		const config = buildAsyncRunnerSpawnConfig({
+			cfgPath: "/tmp/run-config.json",
+			cwd: "/workspace/project",
+			jitiCliPath: "/node_modules/.bin/jiti",
+			runnerPath: "/pkg/extensions/subagent-mode/async-runner-main.ts",
+		});
+
+		assert.strictEqual(config.command, process.execPath);
+		assert.deepStrictEqual(config.args, [
+			"/node_modules/.bin/jiti",
+			"/pkg/extensions/subagent-mode/async-runner-main.ts",
+			"/tmp/run-config.json",
+		]);
+		assert.deepStrictEqual(config.options, {
+			cwd: "/workspace/project",
+			detached: true,
+			stdio: "ignore",
+			windowsHide: true,
+		});
+	});
+});
 
 describe("isAsyncAvailable", () => {
 	test("returns a boolean without throwing", () => {

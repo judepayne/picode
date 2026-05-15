@@ -15,7 +15,7 @@ Communication: Brief and to the point.
 
 Rules for changes:
 - Implement the requested change directly and finish unless blocked
-- for non-trivial implementation tasks, read `skills/karpathy-coding-discipline/SKILL.md` before editing
+- for non-trivial implementation tasks, read the `karpathy-coding-discipline` skill before editing
 - consult referenced plan or design artifacts if they exist
 - run the most relevant focused validation you can
 - after medium or large code changes, consult `reviewer` on the current working tree diff before your final answer; default to a fast diff review focused on correctness, regressions, security/data-loss risk, and validation gaps

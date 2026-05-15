@@ -13,40 +13,11 @@ All medium findings from the release review have been addressed or explicitly re
 
 ## Low
 
-### Pi-gate schema validator does not enforce boolean type
+All low findings from the release review have been addressed or explicitly resolved:
 
-`extensions/pi-gate/index.ts`
-`extensions/pi-gate/policy.schema.json`
-
-The local schema validator models only object/string type checks, while the schema declares fields such as `profiles.*.unattended` as boolean. An invalid value like `"true"` may pass local validation and behave unexpectedly.
-
-### Pi-gate README mismatch around invalid policy behavior
-
-`extensions/pi-gate/README.md`
-
-Docs say invalid policy falls back to YOLO/no enforcement, but current code blocks tool calls until the policy is fixed. The README should be updated or the implementation intentionally changed.
-
-### Async detached launch path under-tested
-
-`extensions/subagent-mode/test/...`
-
-Tests do not fully exercise the detached `jiti async-runner-main.ts <cfg>` launch path. Existing tests mostly validate in-process async runner behavior and availability checks.
-
-### Missing regression tests for risky orchestrator paths
-
-`extensions/subagent-orchestrator/test/`
-
-Original review called out missing tests for post-reload async cancellation and `dev_subagent_stream_to_file` path restrictions/exposure. Some coverage was added during the recent fixes, but this should be revisited for completeness.
-
-### Docs mismatch around `/vars bootstrap` and auto-bootstrap
-
-`README.md`
-`extensions/z-prompt-vars/index.ts`
-
-README says `/vars bootstrap` creates project-local files, but the extension also auto-bootstraps on session start and may create global vars. This may surprise users and should be documented more explicitly.
-
-### Installed package skill path references may be fragile
-
-`extensions/agent-assets/agents/*.md`
-
-Agent cards reference repo-relative skill paths such as `skills/.../SKILL.md`. In installed package contexts, those paths may not be under the user’s current working directory even though skills are registered via `pi.skills`; skill-name references may be safer.
+- **Pi-gate schema validator does not enforce boolean type** — fixed. The local schema validator now supports `type: "boolean"`, and a regression test rejects string `unattended` values.
+- **Pi-gate README mismatch around invalid policy behavior** — fixed. The README now documents the current fail-closed `gate:error` behavior instead of YOLO fallback.
+- **Async detached launch path under-tested** — improved. The detached async runner spawn command/options are now factored into a pure helper with regression coverage for `jiti async-runner-main.ts <cfg>` launch shape.
+- **Missing regression tests for risky orchestrator paths** — revisited. Existing coverage now includes disabled-by-default `dev_subagent_stream_to_file`, explicit env-flag registration, async cancel already-finished behavior, and async event ingestion after launch/reload-like tailing paths.
+- **Docs mismatch around `/vars bootstrap` and auto-bootstrap** — fixed. Root and z-prompt-vars docs now describe session-start auto-bootstrap, project/global file creation, and preservation of global plan/design defaults.
+- **Installed package skill path references may be fragile** — fixed. Built-in agent cards now reference registered skill names instead of repo-relative `skills/.../SKILL.md` paths.

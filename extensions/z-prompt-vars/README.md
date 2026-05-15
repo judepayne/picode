@@ -34,7 +34,7 @@ and the placeholders are resolved from a combination of:
 `extensions/z-prompt-vars/index.ts`
 
 This file is the runtime entry point. It:
-- bootstraps missing project vars files on session start
+- bootstraps missing project/global vars files on session start
 - registers the `before_agent_start` hook
 - registers the `/vars` command
 - registers the `vars` tool
@@ -48,7 +48,7 @@ This file is the runtime entry point. It:
 This file contains the core implementation. It:
 - reads merged vars from project and global config files
 - writes vars to the configured write target
-- bootstraps the initial project vars files when requested
+- bootstraps the initial project/global vars files when requested
 - manages the tiny write-location config file
 - flattens nested stored values into dot-path keys
 - computes the built-in derived vars for plan/design
@@ -106,9 +106,9 @@ If a user mistakenly puts a path there instead of just a filename, the extension
 
 This config controls where `/vars set`, `/vars unset`, and the `vars` tool write changes, and which vars filename is used inside the fixed project/global directories.
 
-When bootstrap creates the initial vars file, it seeds:
-- `paths.plan = ".pi/plans/active.md"`
-- `paths.design = ".pi/designs/active.md"`
+When bootstrap creates the initial vars files, it seeds:
+- `paths.plan = ".pi/plans/active.md"` unless the project file is being created and a global `paths.plan` already exists
+- `paths.design = ".pi/designs/active.md"` unless the project file is being created and a global `paths.design` already exists
 - `subagents.dispatch.defaultContext = "fresh"`
 
 Allowed dispatch defaults:
@@ -131,7 +131,7 @@ Recommendation:
 6. Project vars are merged over global vars.
 7. Built-in derived vars are computed from the merged config.
 8. The extension interpolates `${...}` placeholders in the system prompt text.
-9. On session start, the extension bootstraps the missing project vars files if needed.
+9. On session start, the extension bootstraps missing project/global vars files if needed.
 10. During the turn, the user or agent can inspect, bootstrap, or mutate vars with:
    - `/vars ...`
    - `vars({ action: ... })`
@@ -201,7 +201,7 @@ Supported forms:
 /vars location global
 ```
 
-`/vars bootstrap` creates the initial project vars files if they are missing and does not overwrite existing files.
+`/vars bootstrap` creates the initial project/global vars files if they are missing and does not overwrite existing files. Project path defaults are not seeded over existing global `paths.plan` or `paths.design` values.
 
 `/vars set` first tries to parse the value as JSON. If JSON parsing fails, the raw text is stored as a string.
 

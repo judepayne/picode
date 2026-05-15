@@ -124,6 +124,34 @@ export interface LaunchAsyncRunOutput {
 	pid: number;
 }
 
+export interface AsyncRunnerSpawnConfig {
+	command: string;
+	args: string[];
+	options: {
+		cwd: string;
+		detached: true;
+		stdio: "ignore";
+		windowsHide: true;
+	};
+}
+
+export function buildAsyncRunnerSpawnConfig(input: { cfgPath: string; cwd: string; jitiCliPath: string; runnerPath?: string }): AsyncRunnerSpawnConfig {
+	return {
+		command: process.execPath,
+		args: [
+			input.jitiCliPath,
+			input.runnerPath ?? path.join(path.dirname(fileURLToPath(import.meta.url)), "async-runner-main.ts"),
+			input.cfgPath,
+		],
+		options: {
+			cwd: input.cwd,
+			detached: true,
+			stdio: "ignore",
+			windowsHide: true,
+		},
+	};
+}
+
 export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput {
 	if (!jitiCliPath) {
 		throw new Error("jiti is not available; async runs cannot be launched.");
@@ -143,13 +171,8 @@ export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput
 	const cfgPath = asyncConfigPath(runId);
 	writePrivateFile(cfgPath, JSON.stringify(config, null, 2));
 
-	const runnerPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "async-runner-main.ts");
-	const proc = spawn(process.execPath, [jitiCliPath, runnerPath, cfgPath], {
-		cwd: config.cwd,
-		detached: true,
-		stdio: "ignore",
-		windowsHide: true,
-	});
+	const spawnConfig = buildAsyncRunnerSpawnConfig({ cfgPath, cwd: config.cwd, jitiCliPath });
+	const proc = spawn(spawnConfig.command, spawnConfig.args, spawnConfig.options);
 	proc.unref();
 
 	return {

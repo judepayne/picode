@@ -71,21 +71,22 @@ Reload Pi:
 /reload
 ```
 
-Bootstrap the prompt-vars files:
+Bootstrap the prompt-vars files if you want to create them explicitly:
 
 ```text
 /vars bootstrap
 ```
 
-That command creates these project-local files if they do not already exist:
+The extension also auto-bootstraps missing vars files on session start. Bootstrap creates:
 
 - `<cwd>/.pi/agent-mode-vars.json`
 - `<cwd>/.pi/agent-mode-vars-config.json`
+- `~/.pi/agent/agent-mode-vars.json`
 
 It seeds:
 
-- `paths.plan = ".pi/plans/active.md"`
-- `paths.design = ".pi/designs/active.md"`
+- `paths.plan = ".pi/plans/active.md"`, unless a global `paths.plan` already exists
+- `paths.design = ".pi/designs/active.md"`, unless a global `paths.design` already exists
 - `subagents.dispatch.defaultContext = "fresh"`
 - `pi-location = "project"`
 
@@ -305,7 +306,7 @@ Useful commands:
 /vars location global
 ```
 
-For most users, `/vars bootstrap` is enough to get started.
+For most users, the session-start auto-bootstrap is enough to get started; `/vars bootstrap` runs the same bootstrap explicitly.
 
 ---
 

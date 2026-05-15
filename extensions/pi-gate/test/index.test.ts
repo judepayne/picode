@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, afterEach } from "node:test";
 
-import piGate, { extractMutationTargets } from "../index.ts";
+import piGate, { extractMutationTargets, validatePolicySchema } from "../index.ts";
+import schema from "../policy.schema.json" with { type: "json" };
 
 type ToolDecision = { block?: boolean; reason?: string } | undefined;
 type ToolCallHandler = (event: { toolName: string; input: Record<string, unknown> }, ctx: FakeContext) => Promise<ToolDecision> | ToolDecision;
@@ -165,6 +166,20 @@ describe("pi-gate bash mutation analysis", () => {
 		const analysis = extractMutationTargets("printf x 1>/tmp/pi-gate-test", cwd);
 		assert.equal(analysis.mutating, true);
 		assert.ok(analysis.paths.some((value) => value.endsWith("/tmp/pi-gate-test")));
+	});
+});
+
+describe("pi-gate policy schema validation", () => {
+	it("rejects non-boolean unattended values", () => {
+		const error = validatePolicySchema(schema as never, {
+			activeProfile: "worker",
+			permission: { "*": "allow" },
+			profiles: {
+				worker: { unattended: "true", permission: { "*": "allow" } },
+			},
+		});
+
+		assert.match(error ?? "", /unattended must be a boolean/);
 	});
 });
 
