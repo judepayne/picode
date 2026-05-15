@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { buildTapRoots, formatTapCrumb, formatTapFooterTree, moveTapSelection } from "../tap-navigation.ts";
+import { buildTapRoots, createTapFooterFormatters, DEFAULT_SUBAGENT_STATUS_COLORS, formatTapCrumb, formatTapFooterTree, moveTapSelection, resolveSubagentStatusColors } from "../tap-navigation.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorRunRecord } from "../types.ts";
 
 function run(id: string, overrides: Partial<OrchestratorRunRecord> = {}): OrchestratorRunRecord {
@@ -25,6 +25,7 @@ const formatters = {
 	running: (text: string) => `{${text}}`,
 	queued: (text: string) => `?${text}?`,
 	complete: (text: string) => `(${text})`,
+	cancelled: (text: string) => `~${text}~`,
 	failed: (text: string) => `!${text}!`,
 	selected: (text: string) => `[${text}]`,
 };
@@ -101,7 +102,7 @@ describe("tap navigation", () => {
 		assert.equal(formatTapCrumb(roots, { rootIndex: 1, childSessionId: "user-child" }), "tap: root > user > scout 1");
 	});
 
-	test("footer tree shows all roots and styles queued, running, complete, failed, selected, and tool-failed children", () => {
+	test("footer tree shows all roots and styles queued, running, complete, failed, selected, and completed children with failed tools", () => {
 		const roots = buildTapRoots(
 			[run("run-a", { launchedAt: 200 }), run("run-b", { launchedAt: 100 }), run("user-run", { origin: "user", launchedAt: 50, status: "queued" })],
 			[
@@ -111,10 +112,10 @@ describe("tap navigation", () => {
 				child("user-child", "user-run", 0, { status: "queued" }),
 			],
 		);
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > (scout 1), !scout 2!, run 2 > !scout 1!, user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, formatters), "root > [● run 1] > (scout 1), !scout 2!, run 2 > !scout 1!, user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, formatters), "root > run 1 > (scout 1), [!● scout 2!], run 2 > !scout 1!, user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, formatters), "root > run 1 > (scout 1), !scout 2!, run 2 > !scout 1!, user > [?● scout 1?]");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > (scout 1), !scout 2!, run 2 > (scout 1), user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, formatters), "root > [● run 1] > (scout 1), !scout 2!, run 2 > (scout 1), user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, formatters), "root > run 1 > (scout 1), [!● scout 2!], run 2 > (scout 1), user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, formatters), "root > run 1 > (scout 1), !scout 2!, run 2 > (scout 1), user > [?● scout 1?]");
 	});
 
 	test("queued async non-chain child in a running or started run renders as running", () => {
@@ -149,5 +150,29 @@ describe("tap navigation", () => {
 			],
 		);
 		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "step-2" }, formatters), "root > run 1 > (scout 1) → [{● scout 2}] → ?scout 3?, run 2 > {scout 1}, {scout 2}");
+	});
+
+	test("subagent status colors default to hex values and can be overridden by vars", () => {
+		assert.deepEqual(resolveSubagentStatusColors({}), DEFAULT_SUBAGENT_STATUS_COLORS);
+		assert.deepEqual(resolveSubagentStatusColors({
+			"footer.colors.subagentStatus.running": "#123abc",
+			"footer.colors.subagentStatus.queued": "456DEF",
+			"footer.colors.subagentStatus.complete": "not-a-color",
+		}), {
+			...DEFAULT_SUBAGENT_STATUS_COLORS,
+			running: "#123abc",
+			queued: "#456def",
+		});
+
+		const custom = createTapFooterFormatters({ bold: (text) => `**${text}**` }, {
+			queued: "#f0c986",
+			running: "#71e37d",
+			complete: "#bababa",
+			cancelled: "#874a4a",
+			failed: "#FF4D4D",
+		});
+		assert.equal(custom.running("scout 1"), "\u001b[38;2;113;227;125mscout 1\u001b[39m");
+		assert.equal(custom.cancelled("scout 1"), "\u001b[38;2;135;74;74mscout 1\u001b[39m");
+		assert.equal(custom.failed("scout 1"), "\u001b[38;2;255;77;77m**scout 1**\u001b[39m");
 	});
 });

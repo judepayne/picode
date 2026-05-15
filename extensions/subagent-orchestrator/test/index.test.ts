@@ -124,6 +124,20 @@ class FakeContext {
 	constructor(cwd: string, options: { hasUI?: boolean } = {}) {
 		this.cwd = cwd;
 		this.hasUI = options.hasUI ?? false;
+		mkdirSync(join(cwd, ".pi"), { recursive: true });
+		writeFileSync(join(cwd, ".pi", "agent-mode-vars.json"), `${JSON.stringify({
+			footer: {
+				colors: {
+					subagentStatus: {
+						queued: "#f0c986",
+						running: "#71e37d",
+						complete: "#bababa",
+						cancelled: "#874a4a",
+						failed: "#FF4D4D",
+					},
+				},
+			},
+		}, null, 2)}\n`, "utf8");
 	}
 }
 
@@ -244,7 +258,7 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			const runRecord = JSON.parse(readFileSync(join(runDir, runFile), "utf8")) as { origin?: string; status?: string };
 			assert.equal(runRecord.origin, "user");
 			assert.equal(runRecord.status, "running");
-			assert.equal(ctx.statuses.get("subagent-orchestrator"), "● root > user > <syntaxType>scout 1</syntaxType>");
+			assert.equal(ctx.statuses.get("subagent-orchestrator"), "● root > user > \u001b[38;2;113;227;125mscout 1\u001b[39m");
 
 			pi.events.dispatch("subagent:mode:request.response", {
 				requestId,

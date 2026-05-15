@@ -43,6 +43,7 @@ export interface TapFooterFormatters {
 	running: (text: string) => string;
 	queued: (text: string) => string;
 	complete: (text: string) => string;
+	cancelled: (text: string) => string;
 	failed: (text: string) => string;
 	selected: (text: string) => string;
 	neutral?: (text: string) => string;
@@ -53,16 +54,54 @@ export interface TapFooterFormatOptions {
 }
 
 export interface TapFooterTheme {
-	fg(color: "syntaxType" | "warning" | "dim" | "error", text: string): string;
 	bold(text: string): string;
 }
 
-export function createTapFooterFormatters(theme: TapFooterTheme): TapFooterFormatters {
+export type SubagentFooterStatusColor = "queued" | "running" | "complete" | "cancelled" | "failed";
+export type SubagentFooterStatusColors = Record<SubagentFooterStatusColor, string>;
+
+export const DEFAULT_SUBAGENT_STATUS_COLORS: SubagentFooterStatusColors = {
+	queued: "#f0c986",
+	running: "#71e37d",
+	complete: "#bababa",
+	cancelled: "#874a4a",
+	failed: "#FF4D4D",
+};
+
+export const SUBAGENT_STATUS_COLOR_VAR_PREFIX = "footer.colors.subagentStatus";
+
+function normalizeHexColor(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	const match = /^#?([0-9a-fA-F]{6})$/.exec(trimmed);
+	return match ? `#${match[1]!.toLowerCase()}` : undefined;
+}
+
+export function resolveSubagentStatusColors(vars: Record<string, unknown> = {}): SubagentFooterStatusColors {
 	return {
-		running: (text) => theme.fg("syntaxType", text),
-		queued: (text) => theme.fg("warning", text),
-		complete: (text) => theme.fg("dim", text),
-		failed: (text) => theme.fg("error", theme.bold(text)),
+		queued: normalizeHexColor(vars[`${SUBAGENT_STATUS_COLOR_VAR_PREFIX}.queued`]) ?? DEFAULT_SUBAGENT_STATUS_COLORS.queued,
+		running: normalizeHexColor(vars[`${SUBAGENT_STATUS_COLOR_VAR_PREFIX}.running`]) ?? DEFAULT_SUBAGENT_STATUS_COLORS.running,
+		complete: normalizeHexColor(vars[`${SUBAGENT_STATUS_COLOR_VAR_PREFIX}.complete`]) ?? DEFAULT_SUBAGENT_STATUS_COLORS.complete,
+		cancelled: normalizeHexColor(vars[`${SUBAGENT_STATUS_COLOR_VAR_PREFIX}.cancelled`]) ?? DEFAULT_SUBAGENT_STATUS_COLORS.cancelled,
+		failed: normalizeHexColor(vars[`${SUBAGENT_STATUS_COLOR_VAR_PREFIX}.failed`]) ?? DEFAULT_SUBAGENT_STATUS_COLORS.failed,
+	};
+}
+
+function colorizeHex(text: string, color: string): string {
+	const hex = normalizeHexColor(color) ?? "#ffffff";
+	const r = Number.parseInt(hex.slice(1, 3), 16);
+	const g = Number.parseInt(hex.slice(3, 5), 16);
+	const b = Number.parseInt(hex.slice(5, 7), 16);
+	return `\u001b[38;2;${r};${g};${b}m${text}\u001b[39m`;
+}
+
+export function createTapFooterFormatters(theme: TapFooterTheme, colors: SubagentFooterStatusColors = DEFAULT_SUBAGENT_STATUS_COLORS): TapFooterFormatters {
+	return {
+		running: (text) => colorizeHex(text, colors.running),
+		queued: (text) => colorizeHex(text, colors.queued),
+		complete: (text) => colorizeHex(text, colors.complete),
+		cancelled: (text) => colorizeHex(text, colors.cancelled),
+		failed: (text) => colorizeHex(theme.bold(text), colors.failed),
 		selected: (text) => text,
 	};
 }
@@ -285,13 +324,15 @@ function styleNodeLabel(node: TapTreeNode, selected: boolean, formatters: TapFoo
 	const marker = selected ? options.selectedMarker ?? "● " : "";
 	const label = `${marker}${agentLabel(node)}`;
 	const status = effectiveFooterStatus(node);
-	const statusStyled = status === "failed" || (node.failedToolCount ?? 0) > 0
+	const statusStyled = status === "failed"
 		? formatters.failed(label)
-		: status === "complete" || status === "cancelled"
+		: status === "complete"
 			? formatters.complete(label)
-			: status === "queued"
-				? formatters.queued(label)
-				: formatters.running(label);
+			: status === "cancelled"
+				? formatters.cancelled(label)
+				: status === "queued"
+					? formatters.queued(label)
+					: formatters.running(label);
 	return selected ? formatters.selected(statusStyled) : statusStyled;
 }
 

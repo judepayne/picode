@@ -239,6 +239,11 @@ Examples of useful stored keys:
 - `release.owner`
 - `paths.design`
 - `subagents.dispatch.defaultContext`
+- `footer.colors.subagentStatus.running`
+- `footer.colors.subagentStatus.queued`
+- `footer.colors.subagentStatus.complete`
+- `footer.colors.subagentStatus.cancelled`
+- `footer.colors.subagentStatus.failed`
 
 Recommended default for subagent dispatch:
 - `subagents.dispatch.defaultContext = "fresh"`
@@ -256,6 +261,16 @@ The user-addressed subagent dispatch flow reads:
 If a continued thread is already active, the user gets a short `scout is busy` style message instead of starting a second concurrent continued thread.
 
 Continued user subagent context is in-memory only and resets on reload or restart.
+
+Subagent footer status colors can be overridden with hex values:
+
+```text
+/vars set footer.colors.subagentStatus.running "#71e37d"
+/vars set footer.colors.subagentStatus.queued "#f0c986"
+/vars set footer.colors.subagentStatus.complete "#bababa"
+/vars set footer.colors.subagentStatus.cancelled "#874a4a"
+/vars set footer.colors.subagentStatus.failed "#FF4D4D"
+```
 
 Because project vars override global vars, you can set a team-wide global default and override it in a specific workspace.
 

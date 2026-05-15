@@ -14,6 +14,7 @@ import { formatModelReference, readNamedAgentExtensionPathsFromCards, readNamedA
 import { SubagentEditor } from "./subagent-editor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
+import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
 import { currentParentChildId, currentSubagentDepth, currentTopLevelRunId } from "../subagent-mode/depth.ts";
 import {
 	EVENT_CHILD_CANCELLED as SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
@@ -46,7 +47,7 @@ import { DEFAULT_SYNC_TIMEOUT_SECONDS, formatSyncIdleTimeoutMessage, MAX_SYNC_TI
 import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, openSubagentStream, setActiveSubagentStreamService, subagentStreamTopic, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler } from "./stream.ts";
 import { createJsonlFileSubagentStreamHandler } from "./stream-handlers.ts";
 import { createTapController } from "./tap-controller.ts";
-import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, type TapRunRoot } from "./tap-navigation.ts";
+import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, resolveSubagentStatusColors, type TapRunRoot } from "./tap-navigation.ts";
 import { registerSubagentEventHandlers, type LoggedChildEvent, type PendingRequest, type SubagentModeRunResult } from "./event-handlers.ts";
 import {
 	findStickyUserSubagentSession,
@@ -1811,10 +1812,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			return;
 		}
 		const roots = buildVisibleTapRoots(runtimeCtx, { includeUserRuns: true });
+		const statusColors = resolveSubagentStatusColors(buildPromptVars(runtimeCtx.cwd).storedVars);
 		const statusText = formatTapFooterTree(
 			roots,
 			{},
-			createTapFooterFormatters(runtimeCtx.ui.theme),
+			createTapFooterFormatters(runtimeCtx.ui.theme, statusColors),
 			{},
 		);
 		if (statusText !== lastUiStatusText) {

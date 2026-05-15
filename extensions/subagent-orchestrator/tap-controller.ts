@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
 import type { SubagentStreamEvent, SubagentStreamHandler } from "./stream.ts";
-import { createTapFooterFormatters, formatTapFooterTree, moveTapSelection, normalizeTapSelection, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
+import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
+import { createTapFooterFormatters, formatTapFooterTree, moveTapSelection, normalizeTapSelection, resolveSubagentStatusColors, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
 import { appendTapTranscriptTreeEvent, createTapTranscriptTreeComponent, createTapTranscriptTreeState, requestTapTranscriptTreeRender, resetTapTranscriptTree, setTapTranscriptTreeToolsExpanded, TAP_STATUS_KEY, TAP_TRANSCRIPT_KEY } from "./tap-transcript-tree.ts";
 
 export interface TapController {
@@ -65,10 +66,11 @@ export function createTapController(input: TapControllerInput): TapController {
 
 	function renderFooter(ctx = latestCtx): void {
 		if (!ctx?.hasUI || !active) return;
+		const statusColors = resolveSubagentStatusColors(buildPromptVars(ctx.cwd).storedVars);
 		const footerTree = formatTapFooterTree(
 			roots,
 			selection,
-			createTapFooterFormatters(ctx.ui.theme),
+			createTapFooterFormatters(ctx.ui.theme, statusColors),
 			{ selectedMarker: "● " },
 		);
 		ctx.ui.setStatus(TAP_STATUS_KEY, footerTree);

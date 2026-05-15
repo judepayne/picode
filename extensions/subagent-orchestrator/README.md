@@ -89,7 +89,7 @@ The orchestrator can show:
 - optional visible run cards
 - surfaced completion handbacks once async work finishes
 
-Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`. While delegated work is visible, the footer tree shows the run structure directly. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chain steps, and `,` for parallel siblings. Node color indicates lifecycle: green running, amber queued, grey complete, red failed.
+Direct user `~scout`, `~worker`, and `~reviewer` launches get an immediate notification such as `Scout running in background`. While delegated work is visible, the footer tree shows the run structure directly. It uses `● root >` when the root is selected, `●` for the selected tapped child, `>` for nesting, `→` for chain steps, and `,` for parallel siblings. Node color indicates lifecycle: running (`#71e37d`), queued (`#f0c986`), complete (`#bababa`), cancelled (`#874a4a`), and failed (`#FF4D4D`). Users can override these defaults with z-prompt-vars keys under `footer.colors.subagentStatus.*`.
 
 When delegated work fails, the red footer node is meant to prompt the next conversation rather than turn the user into an orchestrator operator. In practice, the normal next step is simply to ask the main agent to investigate, for example:
 
@@ -356,7 +356,7 @@ The orchestrator reads the current top-level mode state to decide which subagent
 
 ### Hard dependency: `z-prompt-vars`
 
-`subagent-orchestrator` directly imports `getMergedStoredVarValue` from `../z-prompt-vars/prompt-vars.ts` in `user-dispatch.ts`. The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars via this import. This package seeds that default to `fresh`, but you can also set it to `continue` when you want repeated direct user follow-ups to stay in the same delegated thread until reload or shutdown.
+`subagent-orchestrator` directly imports prompt-var helpers from `../z-prompt-vars/prompt-vars.ts`. The user-facing `~subagent` shorthand reads the default dispatch context from prompt vars, and the footer renderer reads optional `footer.colors.subagentStatus.*` overrides. This package seeds the dispatch default to `fresh`, but you can also set it to `continue` when you want repeated direct user follow-ups to stay in the same delegated thread until reload or shutdown.
 
 ### Child runtime composition
 
