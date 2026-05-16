@@ -142,6 +142,7 @@ async function runSingle(
 			depth: currentSubagentDepth(),
 			maxSubagentDepth: spec.maxSubagentDepth ?? 2,
 			env: spec.env,
+			nodeLog: childNodeLog(spec, childId),
 		},
 		toChildCallbacks(callbacks),
 		options,
@@ -198,6 +199,7 @@ async function runParallel(
 				depth: currentSubagentDepth(),
 				maxSubagentDepth: spec.maxSubagentDepth ?? 2,
 				env: spec.env,
+				nodeLog: childNodeLog(spec, childId),
 			},
 			toChildCallbacks(callbacks),
 			options,
@@ -369,6 +371,7 @@ async function runChainSingleStep(ctx: ChainStepContext): Promise<DelegatedChild
 			depth: currentSubagentDepth(),
 			maxSubagentDepth: ctx.spec.maxSubagentDepth ?? 2,
 			env: ctx.spec.env,
+			nodeLog: childNodeLog(ctx.spec, childId),
 		},
 		toChildCallbacks(ctx.callbacks),
 		ctx.options,
@@ -408,6 +411,7 @@ async function runChainParallelStep(ctx: ChainStepContext): Promise<DelegatedChi
 				depth: currentSubagentDepth(),
 				maxSubagentDepth: ctx.spec.maxSubagentDepth ?? 2,
 				env: ctx.spec.env,
+				nodeLog: childNodeLog(ctx.spec, childId),
 			},
 			toChildCallbacks(ctx.callbacks),
 			ctx.options,
@@ -448,6 +452,14 @@ function aggregateRunStatus(results: DelegatedChildResult[]): RunStatus {
 	if (results.some((r) => r.status === "cancelled")) return "cancelled";
 	if (results.some((r) => r.status === "failed")) return "failed";
 	return "complete";
+}
+
+function childNodeLog(spec: RunSpec, childId: string): ChildExecutionRequest["nodeLog"] {
+	if (!spec.nodeLog) return undefined;
+	return {
+		...spec.nodeLog,
+		childSessionId: childId,
+	};
 }
 
 function toChildCallbacks(callbacks: SyncRunCallbacks): RunChildCallbacks {

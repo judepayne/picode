@@ -3,7 +3,7 @@ import { before, describe, test } from "node:test";
 import { initTheme } from "@mariozechner/pi-coding-agent";
 
 import { EVENT_CHILD_COMPLETE, EVENT_CHILD_PROGRESS, EVENT_CHILD_STARTED, EVENT_CHILD_TEXT_DELTA, EVENT_CHILD_TEXT_FINAL, EVENT_CHILD_TOOL_END, EVENT_CHILD_TOOL_START } from "../../subagent-mode/types.ts";
-import { EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";
+import { EVENT_SUBAGENT_EXPANDED_TASK, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";
 import {
 	__debugTapTranscriptTree,
 	appendTapTranscriptTreeEvent,
@@ -54,6 +54,13 @@ describe("tap transcript tree", () => {
 		assert.match(renderText(state), /Read three files and summarize them\./);
 		assert.doesNotMatch(renderText(state), /Duplicate task/);
 		assert.equal(state.nodes.length, 1);
+	});
+
+	test("expanded task event renders as a compact audit status", () => {
+		const state = createTapTranscriptTreeState();
+		resetTapTranscriptTree(state, { selectedChildSessionId: "child-1" });
+		appendTapTranscriptTreeEvent(state, event({ eventType: EVENT_SUBAGENT_EXPANDED_TASK, event: { task: "Full expanded task", taskCharCount: 18 } }));
+		assert.match(renderText(state), /expanded task recorded \(18 chars\)/);
 	});
 
 	test("text deltas render as assistant markdown output", () => {

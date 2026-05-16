@@ -250,7 +250,8 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 			warnDroppedChildEvent(runId, event, "could not correlate to a child session");
 			return;
 		}
-		appendNodeLogForChild(child, event);
+		const workerLogMatchesChild = event.nodeLogWritten === true && event.childId === child.childSessionId;
+		if (!workerLogMatchesChild) appendNodeLogForChild(child, event);
 		if (event.type === SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
 			scheduleTextDeltaStateFlush(child, event);
 			return;

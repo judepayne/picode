@@ -118,6 +118,17 @@ describe("subagent-orchestrator state store", () => {
 			assert.equal(store.readNodeLogSince("child-1", "bogus").records.length, 1);
 			assert.equal(store.readNodeLogSince("child-1", "999999").records.length, 0);
 
+			const nodeLogPath = path.join(root, "node-logs", "child-1.jsonl");
+			const cursorBeforePartial = store.readNodeLogSince("child-1").cursor;
+			fs.appendFileSync(nodeLogPath, "{\"cursor\":\"" + cursorBeforePartial + "\",\"childSessionId\":\"child-1\",\"runId\":\"run-1\",\"timestamp\":11,\"eventType\":\"partial\",\"event\":{\"partial\":", "utf8");
+			const partialRead = store.readNodeLogSince("child-1", cursorBeforePartial);
+			assert.equal(partialRead.records.length, 0);
+			assert.equal(partialRead.cursor, cursorBeforePartial);
+			fs.appendFileSync(nodeLogPath, "true}}\n", "utf8");
+			const completedRead = store.readNodeLogSince("child-1", cursorBeforePartial);
+			assert.equal(completedRead.records.length, 1);
+			assert.equal(completedRead.records[0]?.event.partial, true);
+
 			fs.writeFileSync(path.join(root, "runs", "run-2.json"), JSON.stringify({
 				orchestratorRunId: "run-2",
 				ownerModeId: "designer",

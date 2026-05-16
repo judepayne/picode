@@ -11,7 +11,7 @@ import {
 	EVENT_CHILD_TOOL_END,
 	EVENT_CHILD_TOOL_START,
 } from "../subagent-mode/types.ts";
-import { EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "./stream.ts";
+import { EVENT_SUBAGENT_EXPANDED_TASK, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "./stream.ts";
 
 export const TAP_TRANSCRIPT_KEY = "subagent-orchestrator-tap";
 export const TAP_STATUS_KEY = "subagent-orchestrator";
@@ -281,6 +281,12 @@ export function appendTapTranscriptTreeEvent(state: TapTranscriptTreeState, even
 			state.seenTask = true;
 			sealCurrentAssistant(state);
 			state.nodes.push(new TaskMessageNode(task));
+			return;
+		}
+		case EVENT_SUBAGENT_EXPANDED_TASK: {
+			sealCurrentAssistant(state);
+			const count = numberField(event.event, "taskCharCount");
+			state.nodes.push(new StatusLineNode(`expanded task recorded${count !== undefined ? ` (${count} chars)` : ""}`, "dim"));
 			return;
 		}
 		case EVENT_CHILD_STARTED:

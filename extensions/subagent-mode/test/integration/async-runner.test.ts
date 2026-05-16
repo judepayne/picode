@@ -23,7 +23,7 @@ import {
 	asyncRunResultPath,
 	TEMP_ROOT_DIR,
 } from "../../paths.ts";
-import { ASYNC_SCHEMA_VERSION, type AsyncResultFile, type AsyncRunManifest } from "../../types.ts";
+import { ASYNC_SCHEMA_VERSION, EVENT_SUBAGENT_EXPANDED_TASK, type AsyncResultFile, type AsyncRunManifest } from "../../types.ts";
 
 function piInstalled(): boolean {
 	try {
@@ -39,6 +39,8 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 		const runId = `async-main-test-${Date.now()}`;
 		const cfgPath = asyncConfigPath(runId);
 		fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+		const nodeLogsDir = fs.mkdtempSync(`${TEMP_ROOT_DIR}/async-node-logs-`);
+		const childSessionId = "async-child-session-1";
 		fs.writeFileSync(cfgPath, JSON.stringify({
 			runId,
 			cwd: process.cwd(),
@@ -47,6 +49,12 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 				context: "fresh",
 				agent: "scout",
 				task: "Say exactly 'async-hello' and nothing else.",
+				childIds: [childSessionId],
+				nodeLog: {
+					nodeLogsDir,
+					runId: "orchestrator-async-run",
+					rootRunId: "root-async-run",
+				},
 			},
 		}));
 
@@ -74,11 +82,24 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 		// Events stream has at least the lifecycle markers.
 		const eventsRaw = fs.readFileSync(asyncRunEventsPath(runId), "utf-8");
 		const lines = eventsRaw.trim().split("\n").filter(Boolean);
-		const types = lines.map((line) => JSON.parse(line).type as string);
+		const eventRecords = lines.map((line) => JSON.parse(line) as { type: string; nodeLogWritten?: boolean });
+		const types = eventRecords.map((event) => event.type);
 		assert.ok(types.includes("subagent:mode:run.started"));
 		assert.ok(types.includes("subagent:mode:child.started"));
 		assert.ok(types.includes("subagent:mode:child.complete"));
 		assert.ok(types.includes("subagent:mode:run.complete"));
+		assert.equal(types.includes("subagent:mode:child.text.delta"), false, "async control event log should not contain text deltas when worker node logs are configured");
+		assert.ok(eventRecords.some((event) => event.type === "subagent:mode:child.complete" && event.nodeLogWritten === true));
+
+		const nodeLogLines = fs.readFileSync(`${nodeLogsDir}/${childSessionId}.jsonl`, "utf-8").trim().split("\n");
+		const nodeLogRecords = nodeLogLines.map((line) => JSON.parse(line) as { childSessionId: string; runId: string; rootRunId?: string; eventType: string; event?: { task?: string } });
+		assert.equal(nodeLogRecords[0]?.eventType, EVENT_SUBAGENT_EXPANDED_TASK);
+		assert.equal(nodeLogRecords[0]?.event?.task, "Say exactly 'async-hello' and nothing else.");
+		assert.ok(nodeLogRecords.some((record) => record.eventType === "subagent:mode:child.text.delta"), "worker node log should contain text deltas");
+		assert.ok(nodeLogRecords.some((record) => record.eventType === "subagent:mode:child.complete"));
+		assert.equal(nodeLogRecords[0]?.childSessionId, childSessionId);
+		assert.equal(nodeLogRecords[0]?.runId, "orchestrator-async-run");
+		assert.equal(nodeLogRecords[0]?.rootRunId, "root-async-run");
 
 		if (process.platform !== "win32") {
 			const mode = (target: string) => fs.statSync(target).mode & 0o777;
@@ -93,5 +114,6 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 
 		// Housekeep.
 		fs.rmSync(asyncRunDir(runId), { recursive: true, force: true });
+		fs.rmSync(nodeLogsDir, { recursive: true, force: true });
 	});
 });

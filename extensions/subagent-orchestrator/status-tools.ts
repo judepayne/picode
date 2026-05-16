@@ -13,6 +13,7 @@ import {
 	EVENT_CHILD_THINKING_START as SUBAGENT_MODE_CHILD_THINKING_START_EVENT,
 	EVENT_CHILD_TOOL_END as SUBAGENT_MODE_CHILD_TOOL_END_EVENT,
 	EVENT_CHILD_TOOL_START as SUBAGENT_MODE_CHILD_TOOL_START_EVENT,
+	EVENT_SUBAGENT_EXPANDED_TASK,
 } from "../subagent-mode/types.ts";
 import { shortenDisplayPath } from "./run-ui.ts";
 import type { LoggedChildEvent } from "./event-handlers.ts";
@@ -239,6 +240,9 @@ export function formatNodeLogLines(records: OrchestratorNodeLogRecord[]): string
 		}
 
 		switch (record.eventType) {
+			case EVENT_SUBAGENT_EXPANDED_TASK:
+				lines.push(`expanded task: ${typeof event.task === "string" ? event.task : ""}`);
+				break;
 			case SUBAGENT_MODE_CHILD_STARTED_EVENT:
 				lines.push(`started ${event.agent ?? "child"}`);
 				break;

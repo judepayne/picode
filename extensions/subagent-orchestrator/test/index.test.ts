@@ -329,8 +329,13 @@ describe("subagent-orchestrator extension entrypoint", () => {
 				const rootPending = tool.execute("tool", { agent: "scout", task: "parent" }, new AbortController().signal, undefined, rootCtx);
 				const rootRequest = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
 				assert.ok(rootRequest);
-				const rootRequestId = (rootRequest.data as { requestId?: string }).requestId;
+				const rootRequestData = rootRequest.data as { requestId?: string; spec?: { nodeLog?: { nodeLogsDir?: string; runId?: string; rootRunId?: string }; childIds?: string[] } };
+				const rootRequestId = rootRequestData.requestId;
 				assert.ok(rootRequestId);
+				assert.equal(rootRequestData.spec?.nodeLog?.runId, rootRequestId);
+				assert.equal(rootRequestData.spec?.nodeLog?.rootRunId, rootRequestId);
+				assert.ok(rootRequestData.spec?.nodeLog?.nodeLogsDir?.endsWith(".pi/state/subagent-orchestrator/node-logs"));
+				assert.equal(rootRequestData.spec?.childIds?.length, 1);
 				pi.events.dispatch("subagent:mode:request.response", {
 					requestId: rootRequestId,
 					ok: true,
@@ -358,8 +363,12 @@ describe("subagent-orchestrator extension entrypoint", () => {
 				const nestedPending = tool.execute("tool", { agent: "worker", task: "nested" }, new AbortController().signal, undefined, nestedCtx);
 				const nestedRequest = pi.events.emitted.filter((entry) => entry.event === "subagent:mode:request").at(-1);
 				assert.ok(nestedRequest);
-				const nestedRequestId = (nestedRequest.data as { requestId?: string }).requestId;
+				const nestedRequestData = nestedRequest.data as { requestId?: string; spec?: { nodeLog?: { nodeLogsDir?: string; runId?: string; rootRunId?: string }; childIds?: string[] } };
+				const nestedRequestId = nestedRequestData.requestId;
 				assert.ok(nestedRequestId);
+				assert.equal(nestedRequestData.spec?.nodeLog?.runId, nestedRequestId);
+				assert.equal(nestedRequestData.spec?.nodeLog?.rootRunId, parentChild.runId);
+				assert.equal(nestedRequestData.spec?.childIds?.length, 1);
 				pi.events.dispatch("subagent:mode:request.response", {
 					requestId: nestedRequestId,
 					ok: true,

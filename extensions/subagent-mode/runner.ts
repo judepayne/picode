@@ -3,396 +3,251 @@
  *
  *   runChild(request, callbacks) → DelegatedChildResult
  *
- * Spawns `pi --mode json -p`, streams its stdout line-by-line through the
- * normalizer, and emits normalized ChildEvents via the caller-provided
- * callback. Handles:
- *   - stdin closed at spawn (pi -p hangs waiting for stdin otherwise)
- *   - line-buffered JSONL parsing across chunk boundaries
- *   - cancellation via AbortSignal → SIGTERM → (3s later) SIGKILL
- *   - gate-profile and depth/identity env injection
- *   - deterministic emit order: child.started → …normalized… → child.complete
- *
- * This file is the substrate's core. Everything above it (sync-executor,
- * async-executor, orchestrator-bridge) composes children into runs.
+ * Public facade for child execution. By default, child spawn/stdout parsing runs
+ * in a worker thread and transcript-grade events stay out of the callback. The
+ * worker owns node-log persistence when a node-log target is supplied. The
+ * in-process runner remains available as a fallback when the worker cannot
+ * start.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 
-import { buildChildPiArgs, buildChildEnv, cleanupChildTempDir, resolvePiSpawnCommand } from "./pi-spawn.ts";
+import { appendChildNodeLogRecord, appendExpandedTaskNodeLogRecord } from "./node-log-writer.ts";
+import { runChildInProcess } from "./runner-core.ts";
+import type { RunChildCallbacks, RunChildOptions } from "./runner-core.ts";
+import { isControlPlaneChildEvent, type RunnerWorkerMainMessage, type RunnerWorkerParentMessage } from "./runner-worker-protocol.ts";
 import {
-	buildFinalResult,
-	createNormalizerState,
-	normalizeRawEvent,
-	parseRawLine,
-	type NormalizerIdentity,
-	type NormalizerState,
-} from "./normalizer.ts";
-import {
-	EVENT_CHILD_CANCELLED,
 	EVENT_CHILD_COMPLETE,
 	EVENT_CHILD_ERROR,
-	EVENT_CHILD_STARTED,
 	type ChildEvent,
 	type ChildExecutionRequest,
 	type DelegatedChildResult,
 } from "./types.ts";
 
-// ============================================================================
-// Public surface
-// ============================================================================
-
-export type ChildEventHandler = (event: ChildEvent) => void | Promise<void>;
-
-export const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
-
-export interface RunChildCallbacks {
-	onEvent: ChildEventHandler;
-	/** Per-raw-line tap for async event-log persistence or debugging. */
-	onRawLine?: (line: string) => void;
-	signal?: AbortSignal;
-}
-
-export interface RunChildOptions {
-	cwd?: string;
-	/** Additional env to layer on top of the gate/depth contract. */
-	extraEnv?: Record<string, string | undefined>;
-	/** Tools to enable in the child (names and/or extension paths). */
-	tools?: string[];
-	/** Extension paths; when undefined, pi's default discovery applies. */
-	extensions?: string[];
-	/** Suppress skill auto-discovery in the child. */
-	disableSkills?: boolean;
-	/** Inline system prompt text; written to tmp file. */
-	systemPrompt?: string;
-	/** Thinking level (off|minimal|low|medium|high|xhigh). */
-	thinking?: string;
-	/** Directory for pi session files (if session enabled). */
-	sessionDir?: string;
-}
-
-export function resolveDefaultChildExtensionPaths(): string[] {
-	const assetsRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
-	const extensionRoot = path.join(assetsRoot, "extensions");
-	const preferred = ["agent-assets", "pi-gate", "subagent-mode", "subagent-orchestrator", "z-prompt-vars"];
-	return preferred
-		.map((name) => {
-			const dir = path.join(extensionRoot, name);
-			const entry = path.join(dir, "index.ts");
-			if (fs.existsSync(dir)) return dir;
-			if (fs.existsSync(entry)) return entry;
-			return undefined;
-		})
-		.filter((value): value is string => Boolean(value));
-}
+export {
+	MAX_STDOUT_LINE_BYTES,
+	resolveDefaultChildExtensionPaths,
+	runChildInProcess,
+} from "./runner-core.ts";
+export type { ChildEventHandler, RunChildCallbacks, RunChildOptions } from "./runner-core.ts";
 
 export async function runChild(
 	request: ChildExecutionRequest,
 	callbacks: RunChildCallbacks,
 	options: RunChildOptions = {},
 ): Promise<DelegatedChildResult> {
-	const identity: NormalizerIdentity = {
+	return runChildWithWorker(request, callbacks, options);
+}
+
+function runChildWithWorker(
+	request: ChildExecutionRequest,
+	callbacks: RunChildCallbacks,
+	options: RunChildOptions,
+): Promise<DelegatedChildResult> {
+	writeExpandedTaskNodeLog(request);
+	let worker: Worker;
+	try {
+		worker = createRunnerWorker();
+	} catch (error) {
+		return fallbackToInProcess(request, callbacks, options, error);
+	}
+
+	return new Promise<DelegatedChildResult>((resolve, reject) => {
+		let settled = false;
+		let escapedEvent = false;
+		let eventWork = Promise.resolve();
+
+		const abort = (): void => {
+			postToWorker(worker, { type: "cancel", reason: "aborted" });
+		};
+
+		const cleanup = (): void => {
+			worker.off("message", onMessage);
+			worker.off("error", onWorkerError);
+			worker.off("exit", onExit);
+			callbacks.signal?.removeEventListener("abort", abort);
+			void worker.terminate();
+		};
+
+		const finish = (result: DelegatedChildResult): void => {
+			if (settled) return;
+			settled = true;
+			void eventWork.then(() => {
+				cleanup();
+				resolve(result);
+			}, (error) => {
+				cleanup();
+				reject(error);
+			});
+		};
+
+		const handleWorkerFailure = (error: unknown): void => {
+			if (settled) return;
+			if (!escapedEvent) {
+				settled = true;
+				cleanup();
+				void fallbackToInProcess(request, callbacks, options, error).then(resolve, reject);
+				return;
+			}
+			const result = workerFailureResult(request, error);
+			enqueueEvent(workerFailureErrorEvent(request, result.error ?? "runner worker failed"));
+			enqueueEvent(workerFailureCompleteEvent(request, result));
+			finish(result);
+		};
+
+		const enqueueEvent = (event: ChildEvent): void => {
+			escapedEvent = true;
+			eventWork = eventWork.then(() => callbacks.onEvent(event));
+		};
+
+		function onMessage(message: RunnerWorkerParentMessage): void {
+			if (settled) return;
+			switch (message.type) {
+				case "event":
+					enqueueEvent(message.event);
+					return;
+				case "raw-line":
+					callbacks.onRawLine?.(message.line);
+					return;
+				case "result":
+					finish(message.result);
+					return;
+				case "error":
+					handleWorkerFailure(new Error(message.message));
+					return;
+			}
+		}
+
+		function onWorkerError(error: Error): void {
+			handleWorkerFailure(error);
+		}
+
+		function onExit(code: number): void {
+			if (!settled && code !== 0) handleWorkerFailure(new Error(`runner worker exited with code ${code}`));
+		}
+
+		worker.on("message", onMessage);
+		worker.on("error", onWorkerError);
+		worker.on("exit", onExit);
+
+		callbacks.signal?.addEventListener("abort", abort, { once: true });
+		postToWorker(worker, {
+			type: "run",
+			request,
+			options: toRunnerWorkerOptions(options),
+			includeRawLines: Boolean(callbacks.onRawLine),
+			emitDataPlaneEvents: options.emitDataPlaneEvents === true,
+		});
+		if (callbacks.signal?.aborted) abort();
+	});
+}
+
+function createRunnerWorker(): Worker {
+	return new Worker(new URL("./runner-worker.ts", import.meta.url));
+}
+
+function postToWorker(worker: Worker, message: RunnerWorkerMainMessage): void {
+	worker.postMessage(message);
+}
+
+async function fallbackToInProcess(
+	request: ChildExecutionRequest,
+	callbacks: RunChildCallbacks,
+	options: RunChildOptions,
+	error: unknown,
+): Promise<DelegatedChildResult> {
+	console.warn(`[picode] subagent runner worker failed; falling back to in-main execution: ${errorMessage(error)}`);
+	return runChildInProcess(request, fallbackCallbacks(callbacks, options, request), options);
+}
+
+export function toRunnerWorkerOptions(options: RunChildOptions): RunChildOptions {
+	return {
+		...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+		...(options.extraEnv !== undefined ? { extraEnv: options.extraEnv } : {}),
+		...(options.tools !== undefined ? { tools: options.tools } : {}),
+		...(options.extensions !== undefined ? { extensions: options.extensions } : {}),
+		...(options.disableSkills !== undefined ? { disableSkills: options.disableSkills } : {}),
+		...(options.systemPrompt !== undefined ? { systemPrompt: options.systemPrompt } : {}),
+		...(options.thinking !== undefined ? { thinking: options.thinking } : {}),
+		...(options.sessionDir !== undefined ? { sessionDir: options.sessionDir } : {}),
+		...(options.emitDataPlaneEvents !== undefined ? { emitDataPlaneEvents: options.emitDataPlaneEvents } : {}),
+	};
+}
+
+function fallbackCallbacks(callbacks: RunChildCallbacks, options: RunChildOptions, request?: ChildExecutionRequest): RunChildCallbacks {
+	return {
+		...callbacks,
+		onEvent: (event) => {
+			const hasNodeLogTarget = request?.nodeLog !== undefined;
+			const nodeLogWritten = writeNodeLog(request?.nodeLog, event);
+			if (options.emitDataPlaneEvents === true || isControlPlaneChildEvent(event) || (hasNodeLogTarget && !nodeLogWritten)) {
+				return callbacks.onEvent(nodeLogWritten ? { ...event, nodeLogWritten: true } : event);
+			}
+		},
+	};
+}
+
+function writeNodeLog(config: ChildExecutionRequest["nodeLog"], event: ChildEvent): boolean {
+	try {
+		return appendChildNodeLogRecord(config, event);
+	} catch (error) {
+		console.warn(`[picode] subagent in-main runner could not append node log: ${errorMessage(error)}`);
+		return false;
+	}
+}
+
+function writeExpandedTaskNodeLog(request: ChildExecutionRequest): void {
+	try {
+		appendExpandedTaskNodeLogRecord(request);
+	} catch (error) {
+		console.warn(`[picode] subagent runner could not append expanded task node log: ${errorMessage(error)}`);
+	}
+}
+
+function workerFailureResult(request: ChildExecutionRequest, error: unknown): DelegatedChildResult {
+	return {
+		childId: request.childId,
+		agent: request.agent,
+		status: "failed",
+		error: `runner worker failed: ${errorMessage(error)}`,
+		sessionFile: request.sessionFile,
+	};
+}
+
+function workerFailureErrorEvent(request: ChildExecutionRequest, message: string): ChildEvent {
+	return {
+		type: EVENT_CHILD_ERROR,
 		runId: request.runId,
 		topLevelRunId: request.topLevelRunId,
 		childId: request.childId,
 		parentChildId: request.parentChildId,
 		agent: request.agent,
-		depth: request.depth,
+		timestamp: Date.now(),
 		stepIndex: request.stepIndex,
 		taskIndex: request.taskIndex,
+		depth: request.depth,
+		message,
+		fatal: true,
 	};
-
-	const state = createNormalizerState();
-	if (request.sessionFile) state.sessionFile = request.sessionFile;
-
-	const { args, tempDir } = buildChildPiArgs({
-		task: request.task,
-		sessionEnabled: Boolean(request.sessionFile),
-		sessionFile: request.sessionFile,
-		sessionDir: options.sessionDir,
-		model: request.model,
-		thinking: options.thinking,
-		tools: options.tools,
-		extensions: options.extensions ?? resolveDefaultChildExtensionPaths(),
-		disableSkills: options.disableSkills,
-		systemPrompt: options.systemPrompt,
-		promptFileStem: `subagent-${request.agent}`,
-	});
-
-	const env = {
-		...process.env,
-		...buildChildEnv({
-			agent: request.agent,
-			maxDepth: request.maxSubagentDepth,
-			topLevelRunId: request.topLevelRunId,
-			// Env sent to the spawned child is its OWN childId — so that if the
-			// child delegates further, its grandchildren stamp parentChildId =
-			// this child. Do NOT use request.parentChildId here (that's the
-			// current child's parent, not what its descendants need).
-			parentChildId: request.childId,
-			extra: { ...options.extraEnv, ...request.env },
-		}),
-	};
-
-	const spawnCmd = resolvePiSpawnCommand(args);
-
-	// Fire child.started before spawn so subscribers see the lifecycle boundary
-	// even if spawn fails immediately.
-	await callbacks.onEvent({
-		type: EVENT_CHILD_STARTED,
-		runId: identity.runId,
-		topLevelRunId: identity.topLevelRunId,
-		childId: identity.childId,
-		parentChildId: identity.parentChildId,
-		agent: identity.agent,
-		timestamp: Date.now(),
-		stepIndex: identity.stepIndex,
-		taskIndex: identity.taskIndex,
-		depth: identity.depth,
-		sessionFile: request.sessionFile,
-	});
-
-	let proc: ChildProcess;
-	try {
-		proc = spawn(spawnCmd.command, spawnCmd.args, {
-			cwd: options.cwd ?? request.cwd ?? process.cwd(),
-			env,
-			stdio: ["ignore", "pipe", "pipe"], // stdin closed; stdout/stderr piped
-		});
-	} catch (error) {
-		cleanupChildTempDir(tempDir);
-		const message = error instanceof Error ? error.message : String(error);
-		await callbacks.onEvent({
-			type: EVENT_CHILD_ERROR,
-			runId: identity.runId,
-			topLevelRunId: identity.topLevelRunId,
-			childId: identity.childId,
-			parentChildId: identity.parentChildId,
-			agent: identity.agent,
-			timestamp: Date.now(),
-			stepIndex: identity.stepIndex,
-			taskIndex: identity.taskIndex,
-			depth: identity.depth,
-			message: `spawn failed: ${message}`,
-			fatal: true,
-		});
-		const result = buildFinalResult({
-			identity,
-			state,
-			exitCode: -1,
-			cancelled: false,
-			spawnError: message,
-		});
-		await callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
-		return result;
-	}
-
-	const outcome = await streamAndCollect(proc, identity, state, callbacks);
-	cleanupChildTempDir(tempDir);
-
-	const result = buildFinalResult({
-		identity,
-		state,
-		exitCode: outcome.exitCode,
-		cancelled: outcome.cancelled,
-		spawnError: outcome.spawnError,
-	});
-
-	if (outcome.cancelled) {
-		await callbacks.onEvent(finalEvent(EVENT_CHILD_CANCELLED, identity, { reason: outcome.cancelReason }));
-	}
-	await callbacks.onEvent(finalEvent(EVENT_CHILD_COMPLETE, identity, { result }));
-	return result;
 }
 
-// ============================================================================
-// Internal: stdout streaming + lifecycle
-// ============================================================================
-
-interface StreamOutcome {
-	exitCode: number;
-	cancelled: boolean;
-	cancelReason?: string;
-	spawnError?: string;
-}
-
-function streamAndCollect(
-	proc: ChildProcess,
-	identity: NormalizerIdentity,
-	state: NormalizerState,
-	callbacks: RunChildCallbacks,
-): Promise<StreamOutcome> {
-	return new Promise<StreamOutcome>((resolve) => {
-		let cancelled = false;
-		let cancelReason: string | undefined;
-		let killTimer: NodeJS.Timeout | undefined;
-
-		let stdoutBuf = "";
-		let stderrBuf = "";
-		let discardingOversizedStdoutLine = false;
-		let reportedOversizedStdoutLine = false;
-		let stdoutWork = Promise.resolve();
-
-		const emitOversizedStdoutLine = async (): Promise<void> => {
-			if (reportedOversizedStdoutLine) return;
-			reportedOversizedStdoutLine = true;
-			await callbacks.onEvent({
-				type: EVENT_CHILD_ERROR,
-				runId: identity.runId,
-				topLevelRunId: identity.topLevelRunId,
-				childId: identity.childId,
-				parentChildId: identity.parentChildId,
-				agent: identity.agent,
-				timestamp: Date.now(),
-				stepIndex: identity.stepIndex,
-				taskIndex: identity.taskIndex,
-				depth: identity.depth,
-				message: `child stdout line exceeded ${MAX_STDOUT_LINE_BYTES} bytes and was discarded`,
-				fatal: false,
-			});
-		};
-
-		const flushLine = async (line: string): Promise<void> => {
-			if (!line.trim()) return;
-			if (Buffer.byteLength(line, "utf8") > MAX_STDOUT_LINE_BYTES) {
-				await emitOversizedStdoutLine();
-				return;
-			}
-			callbacks.onRawLine?.(line);
-			let raw: ReturnType<typeof parseRawLine>;
-			try {
-				raw = parseRawLine(line);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				await callbacks.onEvent({
-					type: EVENT_CHILD_ERROR,
-					runId: identity.runId,
-					topLevelRunId: identity.topLevelRunId,
-					childId: identity.childId,
-					parentChildId: identity.parentChildId,
-					agent: identity.agent,
-					timestamp: Date.now(),
-					stepIndex: identity.stepIndex,
-					taskIndex: identity.taskIndex,
-					depth: identity.depth,
-					message,
-					fatal: false,
-				});
-				return;
-			}
-			if (!raw) return;
-			const events = normalizeRawEvent(raw, identity, state);
-			for (const event of events) await callbacks.onEvent(event);
-		};
-
-		const processStdoutText = async (text: string): Promise<void> => {
-			let chunkText = text;
-			if (discardingOversizedStdoutLine) {
-				const newlineIndex = chunkText.indexOf("\n");
-				if (newlineIndex === -1) return;
-				discardingOversizedStdoutLine = false;
-				chunkText = chunkText.slice(newlineIndex + 1);
-			}
-			stdoutBuf += chunkText;
-			const lines = stdoutBuf.split("\n");
-			stdoutBuf = lines.pop() ?? "";
-			for (const line of lines) await flushLine(line);
-			if (Buffer.byteLength(stdoutBuf, "utf8") > MAX_STDOUT_LINE_BYTES) {
-				await emitOversizedStdoutLine();
-				stdoutBuf = "";
-				discardingOversizedStdoutLine = true;
-			}
-		};
-
-		proc.stdout?.on("data", (chunk: Buffer) => {
-			proc.stdout?.pause();
-			stdoutWork = stdoutWork
-				.then(() => processStdoutText(chunk.toString("utf-8")))
-				.catch(() => undefined)
-				.finally(() => proc.stdout?.resume());
-		});
-
-		proc.stderr?.on("data", (chunk: Buffer) => {
-			const text = chunk.toString("utf-8");
-			// Keep the most recent ~20KB so noisy stderr cannot grow unbounded.
-			stderrBuf = (stderrBuf + text).slice(-20000);
-		});
-
-		proc.once("error", (error) => {
-			if (killTimer) clearTimeout(killTimer);
-			resolve({
-				exitCode: -1,
-				cancelled,
-				cancelReason,
-				spawnError: error instanceof Error ? error.message : String(error),
-			});
-		});
-
-		proc.once("close", (code, signal) => {
-			void (async () => {
-			if (killTimer) clearTimeout(killTimer);
-			await stdoutWork;
-			if (!discardingOversizedStdoutLine && stdoutBuf.trim()) await flushLine(stdoutBuf);
-
-			// Capture stderr into state.errorMessage only when the process failed
-			// and the normalizer did not already surface a structured error.
-			const exitCode = typeof code === "number" ? code : (signal ? -1 : 0);
-			if (exitCode !== 0 && !state.errorMessage && stderrBuf.trim()) {
-				state.errorMessage = stderrBuf.trim().slice(0, 2000);
-			}
-
-			resolve({ exitCode, cancelled, cancelReason });
-			})();
-		});
-
-		const abort = (reason?: string): void => {
-			if (cancelled) return;
-			cancelled = true;
-			cancelReason = reason ?? "aborted";
-			try {
-				proc.kill("SIGTERM");
-			} catch {
-				// Already exited.
-			}
-			killTimer = setTimeout(() => {
-				if (!proc.killed) {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// Best effort.
-					}
-				}
-			}, 3000);
-		};
-
-		if (callbacks.signal) {
-			if (callbacks.signal.aborted) {
-				abort("signal already aborted");
-			} else {
-				callbacks.signal.addEventListener("abort", () => abort(), { once: true });
-			}
-		}
-	});
-}
-
-function finalEvent(
-	type: typeof EVENT_CHILD_COMPLETE | typeof EVENT_CHILD_CANCELLED,
-	identity: NormalizerIdentity,
-	payload: Record<string, unknown>,
-): ChildEvent {
+function workerFailureCompleteEvent(request: ChildExecutionRequest, result: DelegatedChildResult): ChildEvent {
 	return {
-		type,
-		runId: identity.runId,
-		topLevelRunId: identity.topLevelRunId,
-		childId: identity.childId,
-		parentChildId: identity.parentChildId,
-		agent: identity.agent,
+		type: EVENT_CHILD_COMPLETE,
+		runId: request.runId,
+		topLevelRunId: request.topLevelRunId,
+		childId: request.childId,
+		parentChildId: request.parentChildId,
+		agent: request.agent,
 		timestamp: Date.now(),
-		stepIndex: identity.stepIndex,
-		taskIndex: identity.taskIndex,
-		depth: identity.depth,
-		...payload,
-	} as ChildEvent;
+		stepIndex: request.stepIndex,
+		taskIndex: request.taskIndex,
+		depth: request.depth,
+		result,
+	};
+}
+
+function errorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	return String(error);
 }

@@ -71,12 +71,27 @@ function sameIdSet(actualIds: string[], expectedIds: string[]): boolean {
 }
 
 function parseJsonlBuffer(buffer: Buffer, offset = 0): OrchestratorNodeLogRecord[] {
-	const text = buffer.subarray(offset).toString("utf8");
-	if (!text.trim()) return [];
-	return text
-		.split(/\r?\n/)
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as OrchestratorNodeLogRecord);
+	return parseJsonlBufferWithCursor(buffer, offset).records;
+}
+
+function parseJsonlBufferWithCursor(buffer: Buffer, offset = 0): { records: OrchestratorNodeLogRecord[]; cursor: string } {
+	const safeOffset = Math.min(Math.max(0, offset), buffer.length);
+	if (safeOffset >= buffer.length) return { records: [], cursor: String(safeOffset) };
+	let parseEnd = buffer.length;
+	if (buffer[buffer.length - 1] !== 0x0a) {
+		const lastNewline = buffer.lastIndexOf(0x0a);
+		if (lastNewline < safeOffset) return { records: [], cursor: String(safeOffset) };
+		parseEnd = lastNewline + 1;
+	}
+	const text = buffer.subarray(safeOffset, parseEnd).toString("utf8");
+	if (!text.trim()) return { records: [], cursor: String(parseEnd) };
+	return {
+		records: text
+			.split(/\r?\n/)
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as OrchestratorNodeLogRecord),
+		cursor: String(parseEnd),
+	};
 }
 
 function summarizeRun(record: OrchestratorRunRecord): OrchestratorRunSummary {
@@ -612,10 +627,7 @@ export function createStateStore(rootDir: string) {
 		if (!fs.existsSync(filePath)) return { records: [], cursor: "0" };
 		const buffer = fs.readFileSync(filePath);
 		const start = Math.min(parseCursor(cursor), buffer.length);
-		return {
-			records: parseJsonlBuffer(buffer, start),
-			cursor: String(buffer.length),
-		};
+		return parseJsonlBufferWithCursor(buffer, start);
 	}
 
 	return {

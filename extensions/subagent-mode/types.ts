@@ -38,6 +38,19 @@ export interface ParallelTaskSpec {
 	count?: number;
 }
 
+export interface NodeLogWriteConfig {
+	/** Directory containing per-child node-log JSONL files. */
+	nodeLogsDir: string;
+	/** Orchestrator run id to stamp into node-log records. */
+	runId: string;
+	/** Root orchestrator run id for nested run grouping. */
+	rootRunId?: string;
+}
+
+export interface ChildNodeLogWriteConfig extends NodeLogWriteConfig {
+	childSessionId: string;
+}
+
 export interface RunSpec {
 	mode: RunMode;
 	context: ContextMode;
@@ -59,6 +72,8 @@ export interface RunSpec {
 	childIds?: string[];
 	/** Optional stable child ids for chain parallel fan-out, keyed by step index. */
 	chainParallelChildIds?: Record<string, string[]>;
+	/** Optional worker data-plane node-log write target. */
+	nodeLog?: NodeLogWriteConfig;
 	/** When true, the bridge spawns a detached async runner and returns an asyncId. */
 	async?: boolean;
 }
@@ -80,6 +95,7 @@ export interface ChildExecutionRequest {
 	depth: number;
 	maxSubagentDepth: number;
 	env?: Record<string, string>;
+	nodeLog?: ChildNodeLogWriteConfig;
 }
 
 // ============================================================================
@@ -135,6 +151,9 @@ export const EVENT_MODE_REQUEST_STARTED = `${EVENT_PREFIX}request.started` as co
 export const EVENT_MODE_REQUEST_RESPONSE = `${EVENT_PREFIX}request.response` as const;
 export const EVENT_MODE_CANCEL = `${EVENT_PREFIX}cancel` as const;
 
+/** Node-log-only audit record for the exact task text passed to a child. */
+export const EVENT_SUBAGENT_EXPANDED_TASK = "picode:subagent.expanded_task" as const;
+
 /**
  * Identity fields stamped on every child-level event. The tree structure
  * (topLevelRunId / runId / childId / parentChildId) is authoritative — session
@@ -150,6 +169,8 @@ export interface ChildEventBase {
 	stepIndex?: number;
 	taskIndex?: number;
 	depth: number;
+	/** Internal marker: event was already persisted by the runner data plane. */
+	nodeLogWritten?: true;
 }
 
 // Draft per-event payloads. Phase 1 Task 1 finalizes fields against real

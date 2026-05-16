@@ -13,7 +13,7 @@ import {
 } from "../../subagent-mode/types.ts";
 import { createStateStore } from "../state.ts";
 import { createJsonlFileSubagentStreamHandler } from "../stream-handlers.ts";
-import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";
+import { createSubagentStreamService, emitSubagentStreamRecord, EVENT_SUBAGENT_EXPANDED_TASK, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";
 import type { OrchestratorChildSessionRecord } from "../types.ts";
 
 class FakeEventBus {
@@ -74,6 +74,10 @@ async function flushHandlers(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function waitForPoll(): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, 30));
+}
+
 describe("subagent stream service", () => {
 	test("replays existing sanitized records and follows future records", async () => {
 		const state = tempState();
@@ -95,21 +99,20 @@ describe("subagent stream service", () => {
 		});
 
 		const events: SubagentStreamEvent[] = [];
-		const close = createSubagentStreamService(pi as never, state).open(child.childSessionId, (event) => events.push(event));
+		const close = createSubagentStreamService(pi as never, state, { pollIntervalMs: 10 }).open(child.childSessionId, (event) => events.push(event));
 		await flushHandlers();
 		assert.equal(events.length, 2);
 		assert.equal(events[0]?.replay, true);
 		assert.deepEqual(events[1]?.event, { type: EVENT_CHILD_TEXT_FINAL, textElided: true, charCount: 11 });
 
-		const live = state.appendNodeLogRecord(child.childSessionId, {
+		state.appendNodeLogRecord(child.childSessionId, {
 			runId: child.runId,
 			rootRunId: child.rootRunId,
 			timestamp: 13,
 			eventType: EVENT_CHILD_TOOL_END,
 			event: { type: EVENT_CHILD_TOOL_END, agent: "scout", toolName: "read", toolCallId: "tool-1", ok: true, resultSummary: "result" },
 		});
-		emitSubagentStreamRecord(pi as never, live, child);
-		await flushHandlers();
+		await waitForPoll();
 		assert.equal(events.length, 3);
 		assert.equal(events[2]?.replay, false);
 		assert.deepEqual(events[2]?.event, { type: EVENT_CHILD_TOOL_END, toolName: "read", toolCallId: "tool-1", ok: true, resultElided: true, resultPreview: "result", resultSummary: "string" });
@@ -251,6 +254,25 @@ describe("subagent stream service", () => {
 		const lines = readFileSync(filePath, "utf8").trim().split("\n");
 		assert.equal(lines.length, 1);
 		assert.equal(JSON.parse(lines[0]!).event.delta, "logged");
+	});
+
+	test("replays expanded task audit events", async () => {
+		const state = tempState();
+		const pi = new FakePi();
+		const child = state.createChildSession(childRecord({ taskSummary: "Critique previous summary" }));
+		state.appendNodeLogRecord(child.childSessionId, {
+			runId: child.runId,
+			rootRunId: child.rootRunId,
+			timestamp: 10,
+			eventType: EVENT_SUBAGENT_EXPANDED_TASK,
+			event: { type: EVENT_SUBAGENT_EXPANDED_TASK, agent: "scout", context: "fresh", stepIndex: 1, task: "Critique this summary:\nhello", taskCharCount: 28 },
+		});
+
+		const events: SubagentStreamEvent[] = [];
+		createSubagentStreamService(pi as never, state).open(child.childSessionId, (event) => events.push(event));
+		await flushHandlers();
+		assert.equal(events.length, 1);
+		assert.deepEqual(events[0]?.event, { type: EVENT_SUBAGENT_EXPANDED_TASK, agent: "scout", context: "fresh", stepIndex: 1, task: "Critique this summary:\nhello", taskCharCount: 28 });
 	});
 
 	test("replays delegated task events", async () => {

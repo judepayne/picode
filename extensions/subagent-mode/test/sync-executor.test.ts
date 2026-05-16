@@ -82,6 +82,33 @@ describe("executeRun: single mode", () => {
 		assert.strictEqual(recorder.requests[0]?.childId, "child-session-1");
 	});
 
+	test("threads worker node-log identity into child execution requests", async () => {
+		const { runChild, recorder } = makeMock();
+		await executeRun(
+			{
+				mode: "single",
+				context: "fresh",
+				agent: "scout",
+				task: "probe",
+				childIds: ["child-session-1"],
+				nodeLog: {
+					nodeLogsDir: "/tmp/picode-node-logs",
+					runId: "orchestrator-run-1",
+					rootRunId: "root-run-1",
+				},
+			},
+			{ onEvent: () => {} },
+			{},
+			{ runChild },
+		);
+		assert.deepStrictEqual(recorder.requests[0]?.nodeLog, {
+			nodeLogsDir: "/tmp/picode-node-logs",
+			runId: "orchestrator-run-1",
+			rootRunId: "root-run-1",
+			childSessionId: "child-session-1",
+		});
+	});
+
 	test("uses precomputed child session files from the run spec", async () => {
 		const { runChild, recorder } = makeMock();
 		await executeRun(

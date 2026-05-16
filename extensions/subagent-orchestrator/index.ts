@@ -564,6 +564,7 @@ function buildSubagentModeRunSpec(
 	currentThinking?: string,
 	childIds?: string[],
 	sessionFiles?: string[],
+	nodeLog?: { nodeLogsDir: string; runId: string; rootRunId?: string },
 ): Record<string, unknown> {
 	const env = childEnv(request.agent);
 	const maxSubagentDepth = resolveDelegatedRunMaxSubagentDepth({
@@ -584,6 +585,7 @@ function buildSubagentModeRunSpec(
 		...(request.systemPrompt ? { systemPrompt: request.systemPrompt } : {}),
 		...(Array.isArray(childIds) && childIds.length > 0 ? { childIds } : {}),
 		...(Array.isArray(sessionFiles) && sessionFiles.length > 0 ? { sessionFiles } : {}),
+		...(nodeLog ? { nodeLog } : {}),
 	};
 	if (request.shape === "single") {
 		return {
@@ -1476,6 +1478,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				pi.getThinkingLevel(),
 				launchChildSessions.map((child) => child.childSessionId),
 				sessionFiles,
+				{
+					nodeLogsDir: state.nodeLogsDir,
+					runId: orchestratorRunId,
+					...(rootRunId ? { rootRunId } : {}),
+				},
 			),
 		});
 

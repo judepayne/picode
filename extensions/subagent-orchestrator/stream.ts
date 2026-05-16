@@ -7,12 +7,14 @@ import {
 	EVENT_CHILD_THINKING_START,
 	EVENT_CHILD_TOOL_END,
 	EVENT_CHILD_TOOL_START,
+	EVENT_SUBAGENT_EXPANDED_TASK,
 } from "../subagent-mode/types.ts";
 import type { createStateStore } from "./state.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorNodeLogRecord } from "./types.ts";
 
 export const SUBAGENT_STREAM_TOPIC_PREFIX = "picode:subagent-stream:";
 export const EVENT_SUBAGENT_TASK = "picode:subagent.task" as const;
+export { EVENT_SUBAGENT_EXPANDED_TASK };
 
 const STREAM_SUMMARY_LIMIT = 500;
 const STREAM_TASK_LIMIT = 8000;
@@ -37,7 +39,10 @@ export interface OpenSubagentStreamOptions {
 export type SubagentStreamHandler = (event: SubagentStreamEvent) => void | Promise<void>;
 
 type StateStore = ReturnType<typeof createStateStore>;
-type EventBusUnsubscribe = (() => void) | void;
+
+export interface SubagentStreamServiceOptions {
+	pollIntervalMs?: number;
+}
 
 type ActiveStreamService = {
 	open(childSessionId: string, handler: SubagentStreamHandler, options?: OpenSubagentStreamOptions): () => void;
@@ -58,16 +63,18 @@ export function openSubagentStream(childSessionId: string, handler: SubagentStre
 	return activeStreamService.open(childSessionId, handler, options);
 }
 
-export function createSubagentStreamService(pi: ExtensionAPI, state: StateStore): ActiveStreamService {
+export function createSubagentStreamService(pi: ExtensionAPI, state: StateStore, serviceOptions: SubagentStreamServiceOptions = {}): ActiveStreamService {
+	const pollIntervalMs = Math.max(10, serviceOptions.pollIntervalMs ?? 100);
+	void pi;
+
 	function open(childSessionId: string, handler: SubagentStreamHandler, options: OpenSubagentStreamOptions = {}): () => void {
 		const child = state.getChildSession(childSessionId);
 		if (!child) throw new Error(`Child session ${childSessionId} was not found.`);
 
 		let closed = false;
-		let replaying = true;
 		let handlerQueue = Promise.resolve();
+		let cursor = "0";
 		const seenCursors = new Set<string>();
-		const bufferedLive: SubagentStreamEvent[] = [];
 
 		const deliver = (event: SubagentStreamEvent): void => {
 			if (closed || seenCursors.has(event.cursor)) return;
@@ -82,35 +89,29 @@ export function createSubagentStreamService(pi: ExtensionAPI, state: StateStore)
 			});
 		};
 
-		const liveHandler = (data: unknown): void => {
-			const event = data as SubagentStreamEvent;
-			if (!shouldIncludeStreamEvent(event, options)) return;
-			if (replaying) {
-				bufferedLive.push(event);
-				return;
-			}
-			deliver(event);
-		};
-
-		const unsubscribe = pi.events.on(subagentStreamTopic(childSessionId), liveHandler) as EventBusUnsubscribe;
-
-		try {
-			for (const record of replayRecords(state, childSessionId, options)) {
-				const event = sanitizeNodeLogRecord(record, child, { replay: true });
-				if (event && shouldIncludeStreamEvent(event, options)) deliver(event);
-			}
-		} catch (error) {
-			if (typeof unsubscribe === "function") unsubscribe();
-			throw error;
+		const replay = replayRecords(state, childSessionId, options);
+		cursor = replay.cursor;
+		for (const record of replay.records) {
+			const event = sanitizeNodeLogRecord(record, child, { replay: true });
+			if (event && shouldIncludeStreamEvent(event, options)) deliver(event);
 		}
 
-		replaying = false;
-		for (const event of bufferedLive.sort((a, b) => Number(a.cursor) - Number(b.cursor))) deliver(event);
-		bufferedLive.length = 0;
+		const poll = (): void => {
+			if (closed) return;
+			const next = state.readNodeLogSince(childSessionId, cursor);
+			cursor = next.cursor;
+			for (const record of next.records) {
+				const currentChild = state.getChildSession(childSessionId) ?? child;
+				const event = sanitizeNodeLogRecord(record, currentChild, { replay: false });
+				if (event && shouldIncludeStreamEvent(event, options)) deliver(event);
+			}
+		};
+		const timer = setInterval(poll, pollIntervalMs);
+		timer.unref?.();
 
 		return () => {
 			closed = true;
-			if (typeof unsubscribe === "function") unsubscribe();
+			clearInterval(timer);
 		};
 	}
 
@@ -123,14 +124,20 @@ export function emitSubagentStreamRecord(pi: ExtensionAPI, record: OrchestratorN
 	pi.events.emit(subagentStreamTopic(record.childSessionId), event);
 }
 
-function replayRecords(state: StateStore, childSessionId: string, options: OpenSubagentStreamOptions): OrchestratorNodeLogRecord[] {
+function replayRecords(state: StateStore, childSessionId: string, options: OpenSubagentStreamOptions): { records: OrchestratorNodeLogRecord[]; cursor: string } {
 	const replay = options.replay ?? "all";
-	if (replay === "none") return [];
-	if (typeof replay === "object") {
-		return state.readNodeLogSince(childSessionId, replay.afterCursor).records
-			.filter((record) => record.cursor !== replay.afterCursor);
+	if (replay === "none") {
+		const result = state.readNodeLogSince(childSessionId);
+		return { records: [], cursor: result.cursor };
 	}
-	return state.readNodeLog(childSessionId);
+	if (typeof replay === "object") {
+		const result = state.readNodeLogSince(childSessionId, replay.afterCursor);
+		return {
+			cursor: result.cursor,
+			records: result.records.filter((record) => record.cursor !== replay.afterCursor),
+		};
+	}
+	return state.readNodeLogSince(childSessionId);
 }
 
 function shouldIncludeStreamEvent(event: SubagentStreamEvent, options: OpenSubagentStreamOptions): boolean {
@@ -158,6 +165,16 @@ function sanitizeEventPayload(eventType: string, event: Record<string, unknown>)
 				type: event.type,
 				agent: event.agent,
 				task: truncateString(stringField(event.task), STREAM_TASK_LIMIT),
+			});
+		case EVENT_SUBAGENT_EXPANDED_TASK:
+			return compactRecord({
+				type: event.type,
+				agent: event.agent,
+				context: event.context,
+				stepIndex: event.stepIndex,
+				taskIndex: event.taskIndex,
+				task: truncateString(stringField(event.task), STREAM_TASK_LIMIT),
+				taskCharCount: event.taskCharCount,
 			});
 		case EVENT_CHILD_TOOL_START:
 			return compactRecord({

@@ -58,6 +58,8 @@ export interface LoggedChildEvent extends Record<string, unknown> {
 	toolCount?: number;
 	recentOutput?: string;
 	result?: { status?: string; finalText?: string; error?: string; sessionFile?: string };
+	/** Internal marker: subagent-mode data plane already persisted this event. */
+	nodeLogWritten?: boolean;
 }
 
 export interface SubagentEventNames {
