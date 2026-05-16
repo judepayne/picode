@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { buildTapRoots, createTapFooterFormatters, DEFAULT_SUBAGENT_STATUS_COLORS, formatTapCrumb, formatTapFooterTree, moveTapSelection, resolveSubagentStatusColors } from "../tap-navigation.ts";
+import { buildTapRoots, createTapFooterFormatters, DEFAULT_SUBAGENT_SEPARATOR_COLOR, DEFAULT_SUBAGENT_STATUS_COLORS, formatTapCrumb, formatTapFooterTree, moveTapSelection, resolveSubagentSeparatorColor, resolveSubagentStatusColors } from "../tap-navigation.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorRunRecord } from "../types.ts";
 
 function run(id: string, overrides: Partial<OrchestratorRunRecord> = {}): OrchestratorRunRecord {
@@ -87,7 +87,7 @@ describe("tap navigation", () => {
 			child("parent", "run-a", 0),
 			child("nested", "run-a", 0, { agent: "worker", parentChildSessionId: "parent" }),
 		]);
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > {scout 1} > {worker 1}");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > r1 > {scout 1} > {worker 1}");
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "parent" }, "down").selection, { rootIndex: 0, childSessionId: "nested" });
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "nested" }, "up").selection, { rootIndex: 0, childSessionId: "parent" });
 		assert.deepEqual(moveTapSelection(roots, { rootIndex: 0, childSessionId: "parent" }, "up").selection, { rootIndex: 0 });
@@ -113,10 +113,10 @@ describe("tap navigation", () => {
 				child("user-child", "user-run", 0, { status: "queued" }),
 			],
 		);
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > (scout 1), !scout 2!, run 2 > (scout 1), user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, formatters), "root > [● run 1] > (scout 1), !scout 2!, run 2 > (scout 1), user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, formatters), "root > run 1 > (scout 1), [!● scout 2!], run 2 > (scout 1), user > ?scout 1?");
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, formatters), "root > run 1 > (scout 1), !scout 2!, run 2 > (scout 1), user > [?● scout 1?]");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > r1 > (scout 1), !scout 2! | r2 > (scout 1) | user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0 }, formatters), "root > [● r1] > (scout 1), !scout 2! | r2 > (scout 1) | user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "child-b" }, formatters), "root > r1 > (scout 1), [!● scout 2!] | r2 > (scout 1) | user > ?scout 1?");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 2, childSessionId: "user-child" }, formatters), "root > r1 > (scout 1), !scout 2! | r2 > (scout 1) | user > [?● scout 1?]");
 	});
 
 	test("queued async non-chain child in a running or started run renders as running", () => {
@@ -124,19 +124,19 @@ describe("tap navigation", () => {
 			[run("run-a", { status: "running" })],
 			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single" })],
 		);
-		assert.equal(formatTapFooterTree(runningRoots, {}, formatters), "● root > run 1 > {scout 1}");
+		assert.equal(formatTapFooterTree(runningRoots, {}, formatters), "● root > r1 > {scout 1}");
 
 		const startedRoots = buildTapRoots(
 			[run("run-a", { status: "queued" })],
 			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single", asyncDir: "/tmp/async-run" })],
 		);
-		assert.equal(formatTapFooterTree(startedRoots, {}, formatters), "● root > run 1 > {scout 1}");
+		assert.equal(formatTapFooterTree(startedRoots, {}, formatters), "● root > r1 > {scout 1}");
 
 		const syncRoots = buildTapRoots(
 			[run("run-a", { status: "running", async: false })],
 			[child("child-a", "run-a", 0, { status: "queued", requestShape: "single", async: false })],
 		);
-		assert.equal(formatTapFooterTree(syncRoots, {}, formatters), "● root > run 1 > ?scout 1?");
+		assert.equal(formatTapFooterTree(syncRoots, {}, formatters), "● root > r1 > ?scout 1?");
 	});
 
 	test("footer tree uses arrow separators for chain steps and commas for parallel siblings", () => {
@@ -150,11 +150,13 @@ describe("tap navigation", () => {
 				child("parallel-2", "parallel-run", 1, { requestShape: "parallel" }),
 			],
 		);
-		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "step-2" }, formatters), "root > run 1 > (scout 1) → [{● scout 2}] → ?scout 3?, run 2 > {scout 1}, {scout 2}");
+		assert.equal(formatTapFooterTree(roots, { rootIndex: 0, childSessionId: "step-2" }, formatters), "root > r1 > (scout 1) → [{● scout 2}] → ?scout 3? | r2 > {scout 1}, {scout 2}");
 	});
 
-	test("subagent status colors default to hex values and can be overridden by vars", () => {
+	test("subagent status colors and root separator color default to hex values and can be overridden by vars", () => {
 		assert.deepEqual(resolveSubagentStatusColors({}), DEFAULT_SUBAGENT_STATUS_COLORS);
+		assert.equal(resolveSubagentSeparatorColor({}), DEFAULT_SUBAGENT_SEPARATOR_COLOR);
+		assert.equal(resolveSubagentSeparatorColor({ "footer.colors.subagentSeparator": "ABCDEF" }), "#abcdef");
 		assert.deepEqual(resolveSubagentStatusColors({
 			"footer.colors.subagentStatus.running": "#123abc",
 			"footer.colors.subagentStatus.queued": "456DEF",
@@ -175,5 +177,6 @@ describe("tap navigation", () => {
 		assert.equal(custom.running("scout 1"), "\u001b[38;2;113;227;125mscout 1\u001b[39m");
 		assert.equal(custom.cancelled("scout 1"), "\u001b[38;2;135;74;74mscout 1\u001b[39m");
 		assert.equal(custom.failed("scout 1"), "\u001b[38;2;255;77;77m**scout 1**\u001b[39m");
+		assert.equal(custom.separator?.("|"), "\u001b[38;2;30;105;227m**|**\u001b[39m");
 	});
 });

@@ -109,7 +109,7 @@ describe("footer lifecycle nested tap roots", () => {
 		assert.equal(roots[0]?.children[0]?.childSessionId, "scout-child");
 		assert.equal(roots[0]?.children[0]?.children[0]?.childSessionId, "worker-child");
 		assert.equal(roots[0]?.children[0]?.children[0]?.children[0]?.childSessionId, "reviewer-child");
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > {scout 1} > {worker 1} > {reviewer 1}");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > r1 > {scout 1} > {worker 1} > {reviewer 1}");
 	});
 
 	test("keeps active nested runs visible when their terminal root is hidden", () => {
@@ -126,7 +126,7 @@ describe("footer lifecycle nested tap roots", () => {
 			childSessionMatchesSessionLineage: (record) => record.parentSessionId === "parent-session",
 		}).buildVisibleTapRoots({} as never);
 
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > {scout 1} > {worker 1}");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > r1 > {scout 1} > {worker 1}");
 	});
 
 	test("does not pull unrelated hidden roots into a visible root tree", () => {
@@ -140,6 +140,6 @@ describe("footer lifecycle nested tap roots", () => {
 		];
 		const roots = createController(runs, children).buildVisibleTapRoots({} as never);
 
-		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > run 1 > {scout 1}");
+		assert.equal(formatTapFooterTree(roots, {}, formatters), "● root > r1 > {scout 1}");
 	});
 });

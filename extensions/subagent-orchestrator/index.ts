@@ -847,6 +847,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	const devStreamFileClosers = new Map<string, () => void>();
 	let asyncEvents!: ReturnType<typeof createAsyncEventManager>;
 	let childEvents!: ReturnType<typeof createChildEventController>;
+	let eventHandlersDisposer: (() => void) | undefined;
 	let footerLifecycle!: ReturnType<typeof createFooterLifecycleController<ReturnType<typeof currentSessionLineage>>>;
 	let handbackDelivery!: ReturnType<typeof createHandbackDeliveryController<ReturnType<typeof currentSessionLineage>>>;
 	const tapController = createTapController({
@@ -1282,6 +1283,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		eventHandlersDisposer?.();
+		eventHandlersDisposer = undefined;
 		tapController.dispose();
 		latestCtx?.ui.setStatus(uiStatusKey, undefined);
 		latestCtx?.ui.setEditorComponent(undefined);
@@ -1542,7 +1545,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		return { orchestratorRunId, response };
 	}
 
-	registerSubagentEventHandlers(pi, {
+	eventHandlersDisposer = registerSubagentEventHandlers(pi, {
 		events: {
 			requestStarted: SUBAGENT_MODE_REQUEST_STARTED_EVENT,
 			requestResponse: SUBAGENT_MODE_REQUEST_RESPONSE_EVENT,

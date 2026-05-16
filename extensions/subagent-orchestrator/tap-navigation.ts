@@ -47,6 +47,7 @@ export interface TapFooterFormatters {
 	failed: (text: string) => string;
 	selected: (text: string) => string;
 	neutral?: (text: string) => string;
+	separator?: (text: string) => string;
 }
 
 export interface TapFooterFormatOptions {
@@ -68,7 +69,9 @@ export const DEFAULT_SUBAGENT_STATUS_COLORS: SubagentFooterStatusColors = {
 	failed: "#FF4D4D",
 };
 
+export const DEFAULT_SUBAGENT_SEPARATOR_COLOR = "#1e69e3";
 export const SUBAGENT_STATUS_COLOR_VAR_PREFIX = "footer.colors.subagentStatus";
+export const SUBAGENT_SEPARATOR_COLOR_VAR = "footer.colors.subagentSeparator";
 
 function normalizeHexColor(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
@@ -87,6 +90,10 @@ export function resolveSubagentStatusColors(vars: Record<string, unknown> = {}):
 	};
 }
 
+export function resolveSubagentSeparatorColor(vars: Record<string, unknown> = {}): string {
+	return normalizeHexColor(vars[SUBAGENT_SEPARATOR_COLOR_VAR]) ?? DEFAULT_SUBAGENT_SEPARATOR_COLOR;
+}
+
 function colorizeHex(text: string, color: string): string {
 	const hex = normalizeHexColor(color) ?? "#ffffff";
 	const r = Number.parseInt(hex.slice(1, 3), 16);
@@ -95,7 +102,11 @@ function colorizeHex(text: string, color: string): string {
 	return `\u001b[38;2;${r};${g};${b}m${text}\u001b[39m`;
 }
 
-export function createTapFooterFormatters(theme: TapFooterTheme, colors: SubagentFooterStatusColors = DEFAULT_SUBAGENT_STATUS_COLORS): TapFooterFormatters {
+export function createTapFooterFormatters(
+	theme: TapFooterTheme,
+	colors: SubagentFooterStatusColors = DEFAULT_SUBAGENT_STATUS_COLORS,
+	separatorColor: string = DEFAULT_SUBAGENT_SEPARATOR_COLOR,
+): TapFooterFormatters {
 	return {
 		running: (text) => colorizeHex(text, colors.running),
 		queued: (text) => colorizeHex(text, colors.queued),
@@ -103,6 +114,7 @@ export function createTapFooterFormatters(theme: TapFooterTheme, colors: Subagen
 		cancelled: (text) => colorizeHex(text, colors.cancelled),
 		failed: (text) => colorizeHex(theme.bold(text), colors.failed),
 		selected: (text) => text,
+		separator: (text) => colorizeHex(theme.bold(text), separatorColor),
 	};
 }
 
@@ -356,8 +368,13 @@ function formatFooterNode(
 	return `${displayLabel} > ${node.children.map((child) => formatFooterNode(child, selectedChildSessionId, formatters, options)).join(footerChildSeparator(node.children))}`;
 }
 
+function compactRootLabel(root: TapRunRoot): string {
+	const match = /^run\s+(\d+)$/i.exec(root.label.trim());
+	return root.kind === "run" && match ? `r${match[1]}` : root.label;
+}
+
 function formatRootLabel(root: TapRunRoot, selected: boolean, formatters: TapFooterFormatters, options: TapFooterFormatOptions): string {
-	const label = `${selected ? options.selectedMarker ?? "● " : ""}${root.label}`;
+	const label = `${selected ? options.selectedMarker ?? "● " : ""}${compactRootLabel(root)}`;
 	return selected ? formatters.selected(formatters.neutral?.(label) ?? label) : formatters.neutral?.(label) ?? label;
 }
 
@@ -371,10 +388,11 @@ export function formatTapFooterTree(
 	if (!normalized) return undefined;
 	const selectedRootIndex = normalized.rootIndex;
 	const rootLabel = normalized.rootIndex === undefined ? `${options.selectedMarker ?? "● "}root` : "root";
+	const rootSeparator = ` ${formatters.separator?.("|") ?? "|"} `;
 	const tree = roots.map((root, rootIndex) => {
 		const label = formatRootLabel(root, rootIndex === selectedRootIndex && !normalized.childSessionId, formatters, options);
 		if (root.children.length === 0) return label;
 		return `${label} > ${root.children.map((child) => formatFooterNode(child, normalized.childSessionId, formatters, options)).join(footerChildSeparator(root.children))}`;
-	}).join(", ");
+	}).join(rootSeparator);
 	return `${formatters.neutral?.(rootLabel) ?? rootLabel} > ${tree}`;
 }

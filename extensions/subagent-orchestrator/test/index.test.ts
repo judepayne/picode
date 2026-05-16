@@ -23,10 +23,18 @@ class FakeEventBus {
 	readonly handlers = new Map<string, unknown[]>();
 	readonly emitted: Array<{ event: string; data: unknown }> = [];
 
-	on(event: string, handler: unknown): void {
+	on(event: string, handler: unknown): () => void {
 		const handlers = this.handlers.get(event) ?? [];
 		handlers.push(handler);
 		this.handlers.set(event, handlers);
+		return () => this.off(event, handler);
+	}
+
+	off(event: string, handler: unknown): void {
+		const handlers = this.handlers.get(event) ?? [];
+		const nextHandlers = handlers.filter((entry) => entry !== handler);
+		if (nextHandlers.length > 0) this.handlers.set(event, nextHandlers);
+		else this.handlers.delete(event);
 	}
 
 	emit(event: string, data: unknown): void {
@@ -203,6 +211,24 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			assert.ok(pi.lifecycle.has("session_start"));
 			assert.ok(pi.lifecycle.has("turn_end"));
 			assert.ok(pi.lifecycle.has("session_shutdown"));
+		});
+	});
+
+	test("does not accumulate subagent event handlers across re-registration", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			subagentOrchestratorExtension(pi as never);
+			assert.equal(pi.events.handlers.get("subagent:mode:child.started")?.length, 1);
+			assert.equal(pi.events.handlers.get("subagent:mode:child.text.delta")?.length, 1);
+			assert.equal(pi.events.handlers.get("subagent:mode:request.response")?.length, 1);
+
+			for (const handler of pi.lifecycle.get("session_shutdown") ?? []) {
+				await (handler as () => void | Promise<void>)();
+			}
+			assert.equal(pi.events.handlers.has("subagent:mode:child.started"), false);
+			assert.equal(pi.events.handlers.has("subagent:mode:child.text.delta"), false);
+			assert.equal(pi.events.handlers.has("subagent:mode:request.response"), false);
 		});
 	});
 

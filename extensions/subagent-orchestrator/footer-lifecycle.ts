@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
-import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, resolveSubagentStatusColors, type TapRunRoot } from "./tap-navigation.ts";
+import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, resolveSubagentSeparatorColor, resolveSubagentStatusColors, type TapRunRoot } from "./tap-navigation.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorHandbackRecord, OrchestratorRunRecord, RunOrigin } from "./types.ts";
 
 export interface FooterLifecycleTapController {
@@ -48,9 +48,24 @@ export interface FooterLifecycleController<Lineage> {
 	resetLastUiStatusText(): void;
 }
 
+const FOOTER_COLOR_CACHE_TTL_MS = 2_000;
+
 export function createFooterLifecycleController<Lineage>(input: FooterLifecycleInput<Lineage>): FooterLifecycleController<Lineage> {
 	let uiStatusTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastUiStatusText: string | undefined;
+	let cachedFooterColors: { cwd: string; expiresAt: number; statusColors: ReturnType<typeof resolveSubagentStatusColors>; separatorColor: string } | undefined;
+
+	function resolveFooterColors(cwd: string): { statusColors: ReturnType<typeof resolveSubagentStatusColors>; separatorColor: string } {
+		const now = Date.now();
+		if (cachedFooterColors && cachedFooterColors.cwd === cwd && cachedFooterColors.expiresAt > now) {
+			return cachedFooterColors;
+		}
+		const vars = buildPromptVars(cwd).storedVars;
+		const statusColors = resolveSubagentStatusColors(vars);
+		const separatorColor = resolveSubagentSeparatorColor(vars);
+		cachedFooterColors = { cwd, expiresAt: now + FOOTER_COLOR_CACHE_TTL_MS, statusColors, separatorColor };
+		return { statusColors, separatorColor };
+	}
 
 	function clearUiStatusTimer(): void {
 		if (!uiStatusTimer) return;
@@ -120,11 +135,11 @@ export function createFooterLifecycleController<Lineage>(input: FooterLifecycleI
 			return;
 		}
 		const roots = buildVisibleTapRoots(runtimeCtx, { includeUserRuns: true });
-		const statusColors = resolveSubagentStatusColors(buildPromptVars(runtimeCtx.cwd).storedVars);
+		const { statusColors, separatorColor } = resolveFooterColors(runtimeCtx.cwd);
 		const statusText = formatTapFooterTree(
 			roots,
 			{},
-			createTapFooterFormatters(runtimeCtx.ui.theme, statusColors),
+			createTapFooterFormatters(runtimeCtx.ui.theme, statusColors, separatorColor),
 			{},
 		);
 		if (statusText !== lastUiStatusText) {

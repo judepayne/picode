@@ -16,6 +16,7 @@ import { emitSubagentStreamRecord } from "./stream.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorNodeLogRecord, RunStatus } from "./types.ts";
 
 const TEXT_DELTA_STATE_FLUSH_INTERVAL_MS = 500;
+const RUN_AGGREGATE_REFRESH_INTERVAL_MS = 100;
 
 export interface ChildEventState {
 	listChildSessionsByRun(runId: string): OrchestratorChildSessionRecord[];
@@ -55,6 +56,7 @@ function finalAnswerRecentOutput(text: string | undefined, limit = 4): string[] 
 
 export function createChildEventController(input: ChildEventControllerInput): ChildEventController {
 	const pendingTextDeltaFlushes = new Map<string, { runId: string; chunks: string[]; timer: ReturnType<typeof setTimeout> | null }>();
+	const pendingAggregateRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
 
 	function findEventChildByIndex(runId: string, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
 		const children = input.state.listChildSessionsByRun(runId);
@@ -144,6 +146,25 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 			pendingFlush.timer.unref?.();
 		}
 		pendingTextDeltaFlushes.set(child.childSessionId, pendingFlush);
+	}
+
+	function scheduleRunAggregateRefresh(runId: string): void {
+		if (pendingAggregateRefreshes.has(runId)) return;
+		const timer = setTimeout(() => {
+			pendingAggregateRefreshes.delete(runId);
+			input.refreshRunAggregates(runId);
+		}, RUN_AGGREGATE_REFRESH_INTERVAL_MS);
+		timer.unref?.();
+		pendingAggregateRefreshes.set(runId, timer);
+	}
+
+	function refreshRunAggregatesNow(runId: string): void {
+		const timer = pendingAggregateRefreshes.get(runId);
+		if (timer) {
+			clearTimeout(timer);
+			pendingAggregateRefreshes.delete(runId);
+		}
+		input.refreshRunAggregates(runId);
 	}
 
 	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
@@ -249,7 +270,8 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 		if (updated && appendEntryOnUpdate && event.type && event.type !== SUBAGENT_MODE_CHILD_TEXT_DELTA_EVENT) {
 			input.appendChildEntry(updated, input.isTerminal(updated.status) ? (updated.status === "cancelled" ? "cancelled" : "completed") : "updated");
 		}
-		input.refreshRunAggregates(runId);
+		if (updated && input.isTerminal(updated.status)) refreshRunAggregatesNow(runId);
+		else scheduleRunAggregateRefresh(runId);
 	}
 
 	function clearPendingTextDeltaFlushes(): void {
@@ -257,6 +279,8 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 			if (pendingFlush.timer) clearTimeout(pendingFlush.timer);
 		}
 		pendingTextDeltaFlushes.clear();
+		for (const timer of pendingAggregateRefreshes.values()) clearTimeout(timer);
+		pendingAggregateRefreshes.clear();
 	}
 
 	return {

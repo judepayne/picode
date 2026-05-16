@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
 import type { SubagentStreamEvent, SubagentStreamHandler } from "./stream.ts";
 import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
-import { createTapFooterFormatters, formatTapFooterTree, moveTapSelection, normalizeTapSelection, resolveSubagentStatusColors, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
+import { createTapFooterFormatters, formatTapFooterTree, moveTapSelection, normalizeTapSelection, resolveSubagentSeparatorColor, resolveSubagentStatusColors, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";
 import { appendTapTranscriptTreeEvent, createTapTranscriptTreeComponent, createTapTranscriptTreeState, requestTapTranscriptTreeRender, resetTapTranscriptTree, setTapTranscriptTreeToolsExpanded, TAP_STATUS_KEY, TAP_TRANSCRIPT_KEY } from "./tap-transcript-tree.ts";
 
 export interface TapController {
@@ -34,6 +34,8 @@ function isTapDownKey(data: string): boolean {
 }
 
 const TAP_STREAM_RENDER_INTERVAL_MS = 500;
+const TAP_FOOTER_REFRESH_DEBOUNCE_MS = 75;
+const FOOTER_COLOR_CACHE_TTL_MS = 2_000;
 
 export function createTapController(input: TapControllerInput): TapController {
 	let latestCtx: ExtensionContext | undefined;
@@ -46,14 +48,35 @@ export function createTapController(input: TapControllerInput): TapController {
 	let unsubscribeInput: (() => void) | undefined;
 	let pollTimer: ReturnType<typeof setInterval> | undefined;
 	let renderTimer: ReturnType<typeof setTimeout> | undefined;
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let transcriptWidgetChildSessionId: string | undefined;
 	let polling = false;
+	let lastFooterTree: string | undefined;
+	let cachedFooterColors: { cwd: string; expiresAt: number; statusColors: ReturnType<typeof resolveSubagentStatusColors>; separatorColor: string } | undefined;
 	const transcript = createTapTranscriptTreeState();
 
 	function clearScheduledRender(): void {
 		if (!renderTimer) return;
 		clearTimeout(renderTimer);
 		renderTimer = undefined;
+	}
+
+	function clearScheduledRefresh(): void {
+		if (!refreshTimer) return;
+		clearTimeout(refreshTimer);
+		refreshTimer = undefined;
+	}
+
+	function resolveFooterColors(cwd: string): { statusColors: ReturnType<typeof resolveSubagentStatusColors>; separatorColor: string } {
+		const now = Date.now();
+		if (cachedFooterColors && cachedFooterColors.cwd === cwd && cachedFooterColors.expiresAt > now) {
+			return cachedFooterColors;
+		}
+		const vars = buildPromptVars(cwd).storedVars;
+		const statusColors = resolveSubagentStatusColors(vars);
+		const separatorColor = resolveSubagentSeparatorColor(vars);
+		cachedFooterColors = { cwd, expiresAt: now + FOOTER_COLOR_CACHE_TTL_MS, statusColors, separatorColor };
+		return { statusColors, separatorColor };
 	}
 
 	function clearStream(): void {
@@ -66,14 +89,16 @@ export function createTapController(input: TapControllerInput): TapController {
 
 	function renderFooter(ctx = latestCtx): void {
 		if (!ctx?.hasUI || !active) return;
-		const statusColors = resolveSubagentStatusColors(buildPromptVars(ctx.cwd).storedVars);
+		const { statusColors, separatorColor } = resolveFooterColors(ctx.cwd);
 		const footerTree = formatTapFooterTree(
 			roots,
 			selection,
-			createTapFooterFormatters(ctx.ui.theme, statusColors),
+			createTapFooterFormatters(ctx.ui.theme, statusColors, separatorColor),
 			{ selectedMarker: "● " },
 		);
+		if (footerTree === lastFooterTree) return;
 		ctx.ui.setStatus(TAP_STATUS_KEY, footerTree);
+		lastFooterTree = footerTree;
 	}
 
 	function renderTranscript(ctx = latestCtx): void {
@@ -195,6 +220,8 @@ export function createTapController(input: TapControllerInput): TapController {
 
 	function open(initialSelection: TapSelection = {}, ctx = latestCtx): boolean {
 		if (!ctx?.hasUI) return false;
+		clearScheduledRefresh();
+		lastFooterTree = undefined;
 		roots = rebuildRoots(ctx);
 		if (!hasTapTarget(roots)) return false;
 		const nextSelection = normalizeTapSelection(roots, initialSelection);
@@ -275,12 +302,14 @@ export function createTapController(input: TapControllerInput): TapController {
 		active = false;
 		selection = undefined;
 		roots = [];
+		clearScheduledRefresh();
 		clearPollTimer();
 		clearStream();
 		if (latestCtx?.hasUI) {
 			latestCtx.ui.setWidget(TAP_TRANSCRIPT_KEY, undefined);
 			transcriptWidgetChildSessionId = undefined;
 			latestCtx.ui.setStatus(TAP_STATUS_KEY, undefined);
+			lastFooterTree = undefined;
 		}
 		if (wasActive) input.onClose?.();
 	}
@@ -291,14 +320,19 @@ export function createTapController(input: TapControllerInput): TapController {
 			ensureInputListener(ctx);
 		},
 		refresh(): void {
-			if (!active) return;
-			roots = rebuildRoots();
-			selection = normalizeTapSelection(roots, selection);
-			if (!selection) {
-				close();
-				return;
-			}
-			subscribeSelectedChild(undefined, "footer");
+			if (!active || refreshTimer) return;
+			refreshTimer = setTimeout(() => {
+				refreshTimer = undefined;
+				if (!active) return;
+				roots = rebuildRoots();
+				selection = normalizeTapSelection(roots, selection);
+				if (!selection) {
+					close();
+					return;
+				}
+				subscribeSelectedChild(undefined, "footer");
+			}, TAP_FOOTER_REFRESH_DEBOUNCE_MS);
+			refreshTimer.unref?.();
 		},
 		close,
 		isActive(): boolean {

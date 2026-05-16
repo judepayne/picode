@@ -244,6 +244,7 @@ Examples of useful stored keys:
 - `footer.colors.subagentStatus.complete`
 - `footer.colors.subagentStatus.cancelled`
 - `footer.colors.subagentStatus.failed`
+- `footer.colors.subagentSeparator`
 
 Recommended default for subagent dispatch:
 - `subagents.dispatch.defaultContext = "fresh"`

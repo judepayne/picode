@@ -139,17 +139,17 @@ describe("tap controller", () => {
 		controller.handleCtx(fake.context as never);
 
 		assert.deepEqual(fake.input(CTRL_SLASH), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● run 1 > ${running("scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● r1 > ${running("scout 1")}`);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
 
 		assert.deepEqual(fake.input(CTRL_SLASH), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("● scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("● scout 1")}`);
 
 		assert.deepEqual(fake.input(ESC), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● run 1 > ${running("scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● r1 > ${running("scout 1")}`);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
 		assert.deepEqual(fake.input(ESC), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `● root > run 1 > ${running("scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `● root > r1 > ${running("scout 1")}`);
 		assert.deepEqual(fake.input(ESC), { consume: true });
 		assert.equal(fake.statuses.get("subagent-orchestrator"), undefined);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap"), undefined);
@@ -161,7 +161,7 @@ describe("tap controller", () => {
 		controller.handleCtx(fake.context as never);
 
 		assert.deepEqual(fake.input(CTRL_SLASH_LEGACY), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● run 1 > ${running("scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● r1 > ${running("scout 1")}`);
 	});
 
 	test("failed unselected footer nodes render in error style", () => {
@@ -170,7 +170,7 @@ describe("tap controller", () => {
 		controller.handleCtx(fake.context as never);
 
 		fake.input(CTRL_SLASH);
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● run 1 > ${failed("scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > ● r1 > ${failed("scout 1")}`);
 	});
 
 	test("closing tap can restore the shared normal footer status", () => {
@@ -237,7 +237,7 @@ describe("tap controller", () => {
 		fake.input(CTRL_SLASH);
 		fake.input(CTRL_SLASH);
 		assert.deepEqual(opened, ["child-1"]);
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("● scout 1")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("● scout 1")}`);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.join("\n").includes("inspect files"), true);
 
 		controller.dispose();
@@ -263,12 +263,12 @@ describe("tap controller", () => {
 		now += 301;
 		fake.input(CTRL_SLASH);
 		fake.input(CTRL_SLASH);
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("● scout 1")}, ${running("scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("● scout 1")}, ${running("scout 2")}`);
 		fake.input(CTRL_DOT);
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("scout 1")}, ${running("● scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("scout 1")}, ${running("● scout 2")}`);
 
 		handlers.get("child-1")?.({ childSessionId: "child-1", runId: "run-1", cursor: "1", eventType: EVENT_CHILD_TEXT_DELTA, event: { delta: "old-event" }, replay: false });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("scout 1")}, ${running("● scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("scout 1")}, ${running("● scout 2")}`);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("old-event"), false);
 
 		handlers.get("child-2")?.({ childSessionId: "child-2", runId: "run-1", cursor: "2", eventType: EVENT_CHILD_TEXT_DELTA, event: { delta: "new-event" }, replay: false });
@@ -276,7 +276,7 @@ describe("tap controller", () => {
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("new-event"), true);
 	});
 
-	test("failed stream open can be retried on refresh", () => {
+	test("failed stream open can be retried on refresh", async () => {
 		let now = 1000;
 		Date.now = () => now;
 		const fake = ctx();
@@ -297,6 +297,7 @@ describe("tap controller", () => {
 		fake.input(CTRL_SLASH);
 		assert.equal(attempts, 1);
 		controller.refresh();
+		await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.equal(attempts, 2);
 		assert.equal(fake.widgets.get("subagent-orchestrator-tap")?.includes("recovered"), true);
 	});
@@ -339,12 +340,12 @@ describe("tap controller", () => {
 		fake.input(CTRL_SLASH);
 		fake.input(CTRL_SLASH);
 		fake.input(CTRL_DOT);
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("scout 1")}, ${running("● scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("scout 1")}, ${running("● scout 2")}`);
 
 		assert.deepEqual(fake.input(CTRL_DOT_RELEASE), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("scout 1")}, ${running("● scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("scout 1")}, ${running("● scout 2")}`);
 
 		assert.deepEqual(fake.input(CTRL_DOT_REPEAT), { consume: true });
-		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > run 1 > ${running("scout 1")}, ${running("● scout 2")}`);
+		assert.equal(fake.statuses.get("subagent-orchestrator"), `root > r1 > ${running("scout 1")}, ${running("● scout 2")}`);
 	});
 });

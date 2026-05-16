@@ -124,10 +124,55 @@ function safeEventHandler(eventName: string, handler: (data: unknown) => void): 
 	};
 }
 
-export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterSubagentEventHandlersInput): void {
-	const { events, state, pending } = input;
+type EventBusUnsubscribe = (() => void) | { dispose?: () => void; unsubscribe?: () => void } | void;
+type EventBusWithHandlerState = ExtensionAPI["events"] & Record<symbol, unknown> & { off?: (event: string, handler: (data: unknown) => void) => void };
+interface ActiveEventHandlersState {
+	token: symbol;
+	dispose: () => void;
+}
 
-	pi.events.on(events.requestStarted, safeEventHandler(events.requestStarted, (data) => {
+const EVENT_HANDLERS_STATE_KEY = Symbol.for("picode.subagent-orchestrator.event-handlers");
+
+export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterSubagentEventHandlersInput): () => void {
+	const { events, state, pending } = input;
+	const eventBus = pi.events as EventBusWithHandlerState;
+	const previousState = eventBus[EVENT_HANDLERS_STATE_KEY] as ActiveEventHandlersState | undefined;
+	const token = Symbol("subagent-orchestrator-event-handlers");
+	const disposers: Array<() => void> = [];
+	const isCurrent = (): boolean => (eventBus[EVENT_HANDLERS_STATE_KEY] as ActiveEventHandlersState | undefined)?.token === token;
+	const dispose = (): void => {
+		for (const disposeOne of disposers.splice(0)) disposeOne();
+		if (isCurrent()) delete eventBus[EVENT_HANDLERS_STATE_KEY];
+	};
+	const on = (event: string, handler: (data: unknown) => void): void => {
+		const guarded = (data: unknown): void => {
+			if (!isCurrent()) return;
+			handler(data);
+		};
+		const registered = pi.events.on(event, guarded) as EventBusUnsubscribe;
+		disposers.push(() => {
+			if (typeof registered === "function") {
+				registered();
+				return;
+			}
+			if (registered && typeof registered === "object") {
+				if (typeof registered.unsubscribe === "function") {
+					registered.unsubscribe();
+					return;
+				}
+				if (typeof registered.dispose === "function") {
+					registered.dispose();
+					return;
+				}
+			}
+			eventBus.off?.(event, guarded);
+		});
+	};
+
+	eventBus[EVENT_HANDLERS_STATE_KEY] = { token, dispose } satisfies ActiveEventHandlersState;
+	previousState?.dispose();
+
+	on(events.requestStarted, safeEventHandler(events.requestStarted, (data) => {
 		const requestId = (data as { requestId?: unknown })?.requestId;
 		if (typeof requestId !== "string") return;
 		const existingRun = state.getRun(requestId);
@@ -152,18 +197,18 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		input.handleChildEvent(event.requestId, event);
 	});
 
-	pi.events.on(events.childStarted, forwardLoggedChildEvent);
-	pi.events.on(events.childThinkingStart, forwardLoggedChildEvent);
-	pi.events.on(events.childThinkingEnd, forwardLoggedChildEvent);
-	pi.events.on(events.childTextDelta, forwardLoggedChildEvent);
-	pi.events.on(events.childTextFinal, forwardLoggedChildEvent);
-	pi.events.on(events.childToolStart, forwardLoggedChildEvent);
-	pi.events.on(events.childToolEnd, forwardLoggedChildEvent);
-	pi.events.on(events.childError, forwardLoggedChildEvent);
-	pi.events.on(events.childComplete, forwardLoggedChildEvent);
-	pi.events.on(events.childCancelled, forwardLoggedChildEvent);
+	on(events.childStarted, forwardLoggedChildEvent);
+	on(events.childThinkingStart, forwardLoggedChildEvent);
+	on(events.childThinkingEnd, forwardLoggedChildEvent);
+	on(events.childTextDelta, forwardLoggedChildEvent);
+	on(events.childTextFinal, forwardLoggedChildEvent);
+	on(events.childToolStart, forwardLoggedChildEvent);
+	on(events.childToolEnd, forwardLoggedChildEvent);
+	on(events.childError, forwardLoggedChildEvent);
+	on(events.childComplete, forwardLoggedChildEvent);
+	on(events.childCancelled, forwardLoggedChildEvent);
 
-	pi.events.on(events.childProgress, safeEventHandler(events.childProgress, (data) => {
+	on(events.childProgress, safeEventHandler(events.childProgress, (data) => {
 		const evt = data as LoggedChildEvent & {
 			requestId?: unknown;
 			currentTool?: unknown;
@@ -187,7 +232,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		});
 	}));
 
-	pi.events.on(events.requestResponse, safeEventHandler(events.requestResponse, (data) => {
+	on(events.requestResponse, safeEventHandler(events.requestResponse, (data) => {
 		const payload = data as {
 			requestId?: unknown;
 			result?: SubagentModeRunResult | null;
@@ -215,7 +260,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		);
 	}));
 
-	pi.events.on(events.runComplete, safeEventHandler(events.runComplete, (data) => {
+	on(events.runComplete, safeEventHandler(events.runComplete, (data) => {
 		const payload = data as {
 			requestId?: unknown;
 			runId?: unknown;
@@ -287,7 +332,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		}
 	}));
 
-	pi.events.on(events.legacyStarted, safeEventHandler(events.legacyStarted, (data) => {
+	on(events.legacyStarted, safeEventHandler(events.legacyStarted, (data) => {
 		const event = data as AsyncStartedEvent;
 		if (typeof event.id !== "string") return;
 		pi.events.emit(events.notifySuppress, { asyncId: event.id });
@@ -312,7 +357,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		input.refreshRunAggregates(run.orchestratorRunId);
 	}));
 
-	pi.events.on(events.legacyComplete, safeEventHandler(events.legacyComplete, (data) => {
+	on(events.legacyComplete, safeEventHandler(events.legacyComplete, (data) => {
 		const event = data as AsyncCompleteEvent;
 		if (typeof event.id !== "string") return;
 		const run = state.findRunByUnderlyingId(event.id);
@@ -348,6 +393,8 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 			);
 		}
 	}));
+
+	return dispose;
 }
 
 function isTerminal(status: RunStatus): boolean {
