@@ -460,9 +460,17 @@ function readSubagentConfiguredExtensions(agent: string): string[] | undefined {
 	return value;
 }
 
+function canonicalExistingPath(value: string): string {
+	try {
+		return fs.realpathSync.native(value);
+	} catch {
+		return path.resolve(value);
+	}
+}
+
 function pathIncludesExtension(toolPath: string, extensionPath: string): boolean {
-	const normalizedToolPath = path.resolve(toolPath);
-	const normalizedExtensionPath = path.resolve(extensionPath);
+	const normalizedToolPath = canonicalExistingPath(toolPath);
+	const normalizedExtensionPath = canonicalExistingPath(extensionPath);
 	return normalizedToolPath === normalizedExtensionPath || normalizedToolPath.startsWith(`${normalizedExtensionPath}${path.sep}`);
 }
 

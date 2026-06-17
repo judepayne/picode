@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import agentAssetsExtension from "../../agent-assets/index.ts";
 import { asyncRunManifestPath } from "../../subagent-mode/paths.ts";
@@ -57,6 +58,11 @@ class FakePi {
 	readonly commands = new Map<string, unknown>();
 	readonly messageRenderers = new Map<string, unknown>();
 	readonly lifecycle = new Map<string, unknown[]>();
+	readonly allTools: Array<{ name: string; sourceInfo?: { source?: string; path?: string } }>;
+
+	constructor(allTools: Array<{ name: string; sourceInfo?: { source?: string; path?: string } }> = []) {
+		this.allTools = allTools;
+	}
 
 	registerTool(tool: ToolRegistration): void {
 		this.tools.set(tool.name, tool);
@@ -88,8 +94,8 @@ class FakePi {
 		return undefined;
 	}
 
-	getAllTools(): Array<{ name: string }> {
-		return [];
+	getAllTools(): Array<{ name: string; sourceInfo?: { source?: string; path?: string } }> {
+		return this.allTools;
 	}
 
 	getActiveTools(): string[] {
@@ -304,6 +310,44 @@ describe("subagent-orchestrator extension entrypoint", () => {
 		});
 	});
 
+	test("does not warn when child tool provenance uses a symlinked package path", async () => {
+		await withTempProcessCwd(async () => {
+			const extensionDir = dirname(dirname(fileURLToPath(import.meta.url)));
+			const linkedExtensionDir = join(process.cwd(), "linked-subagent-orchestrator");
+			symlinkSync(extensionDir, linkedExtensionDir, "dir");
+			const builtinTools = ["read", "grep", "find", "ls", "bash"].map((name) => ({
+				name,
+				sourceInfo: { source: "builtin", path: `<builtin:${name}>` },
+			}));
+			const pi = new FakePi([
+				...builtinTools,
+				{ name: "delegate_subagent", sourceInfo: { source: "local", path: join(linkedExtensionDir, "index.ts") } },
+			]);
+			agentAssetsExtension(pi as never);
+			subagentOrchestratorExtension(pi as never);
+			const tool = pi.tools.get("delegate_subagent");
+			assert.ok(tool);
+			const ctx = new FakeContext(process.cwd(), { hasUI: true });
+
+			const pending = tool.execute("tool", { agent: "scout", task: "noop" }, new AbortController().signal, undefined, ctx);
+			const request = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+			assert.ok(request);
+			const requestId = (request.data as { requestId?: string }).requestId;
+			assert.ok(requestId);
+			pi.events.dispatch("subagent:mode:request.response", {
+				requestId,
+				ok: true,
+				result: {
+					mode: "single",
+					status: "complete",
+					results: [{ agent: "scout", status: "complete", finalText: "ok" }],
+				},
+			});
+			await pending;
+
+			assert.equal(ctx.notifications.some((message) => message.includes("unknown tools") && message.includes("delegate_subagent")), false);
+		});
+	});
 
 	test("nested delegated runs inherit the root owner for footer visibility", async () => {
 		await withTempProcessCwd(async () => {
