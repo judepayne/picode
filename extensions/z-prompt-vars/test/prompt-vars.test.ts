@@ -17,6 +17,7 @@ import {
 	getVisibleVars,
 	getWriteLocationConfigPath,
 	interpolatePrompt,
+	setAutomodeEnabled,
 	setVar,
 	setWriteLocation,
 	unsetVar,
@@ -78,6 +79,8 @@ describe("prompt-vars", () => {
 		assert.deepStrictEqual(second.existing.sort(), expectedFirstCreated);
 		assert.match(varsFile, /"paths"/);
 		assert.match(varsFile, /"defaultContext": "fresh"/);
+		assert.match(varsFile, /"automode"/);
+		assert.match(varsFile, /"enabled": false/);
 		assert.match(configFile, /"pi-location": "project"/);
 		assert.match(formatBootstrapResult(first), /created=/);
 	});
@@ -187,6 +190,7 @@ describe("prompt-vars", () => {
 		const vars = getVisibleVars(state);
 
 		assert.strictEqual(vars["project.name"], "Prompt Vars");
+		assert.strictEqual(vars["automode.enabled"], "false");
 		assert.strictEqual(vars["plan.path"], path.join(cwd, ".pi", "plans", "active.md"));
 		assert.strictEqual(vars["plan.active"], "true");
 		assert.ok(vars.plan.includes("Plan file:"));
@@ -225,6 +229,55 @@ describe("prompt-vars", () => {
 		assert.strictEqual(getVarValue(state, "plan.exists"), "true");
 		assert.match(formatMutationResult("paths.plan", state), /write-location="project"/);
 		assert.match(formatMutationResult("paths.plan", state), new RegExp(planFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	});
+
+	test("automode.enabled can be cleared generically but only enabled through the automode helper", () => {
+		const cwd = makeWorkspace();
+		assert.throws(
+			() => setVar(cwd, "automode.enabled", true),
+			/Start automode with \/automode from Designer mode/i,
+		);
+		assert.throws(
+			() => setVar(cwd, "automode", { enabled: true }),
+			/Cannot set "automode" directly/i,
+		);
+		assert.throws(
+			() => setVar(cwd, "automode.enabled", "false"),
+			/must be a boolean/i,
+		);
+
+		let state = setAutomodeEnabled(cwd, true);
+		assert.strictEqual(getRawStoredVarValue(state, "automode.enabled"), true);
+		assert.strictEqual(getVarValue(state, "automode.enabled"), "true");
+
+		state = setVar(cwd, "automode.enabled", false);
+		assert.strictEqual(getRawStoredVarValue(state, "automode.enabled"), false);
+		assert.strictEqual(getVarValue(state, "automode.enabled"), "false");
+	});
+
+	test("automode writes project state regardless of generic write location", () => {
+		const cwd = makeWorkspace();
+		setWriteLocation(cwd, "global");
+
+		let state = setAutomodeEnabled(cwd, true);
+
+		assert.strictEqual(state.writeLocation, "global");
+		assert.strictEqual(state.projectConfig.automode && typeof state.projectConfig.automode === "object" && !Array.isArray(state.projectConfig.automode)
+			? (state.projectConfig.automode as { enabled?: unknown }).enabled
+			: undefined, true);
+		assert.strictEqual(getVarValue(state, "automode.enabled"), "true");
+
+		state = setVar(cwd, "automode.enabled", false);
+		assert.strictEqual(state.writeLocation, "global");
+		assert.strictEqual(state.projectConfig.automode && typeof state.projectConfig.automode === "object" && !Array.isArray(state.projectConfig.automode)
+			? (state.projectConfig.automode as { enabled?: unknown }).enabled
+			: undefined, false);
+		assert.strictEqual(getVarValue(state, "automode.enabled"), "false");
+
+		setAutomodeEnabled(cwd, true);
+		state = unsetVar(cwd, "automode.enabled");
+		assert.strictEqual(getRawStoredVarValue(state, "automode.enabled"), undefined);
+		assert.strictEqual(getVarValue(state, "automode.enabled"), "false");
 	});
 
 	test("derived vars cannot be set directly", () => {

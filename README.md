@@ -88,6 +88,7 @@ It seeds:
 - `paths.plan = ".pi/plans/active.md"`, unless a global `paths.plan` already exists
 - `paths.design = ".pi/designs/active.md"`, unless a global `paths.design` already exists
 - `subagents.dispatch.defaultContext = "fresh"`
+- `automode.enabled = false`
 - `pi-location = "project"`
 
 Once that is done, a good quick smoke test is:
@@ -106,6 +107,7 @@ Once that is done, a good quick smoke test is:
 |---|---|
 | See current agent | `/agents` |
 | Switch agent | `/agents <name>` or `Ctrl + ,` / `Ctrl + .` |
+| Start automode from Designer | `/automode` or `/automode on` |
 | Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>` |
 | Delegate through the active agent | Just ask in plain English |
 | Check / set prompt vars | `/vars` or `/vars set <key> <value>` |
@@ -143,6 +145,8 @@ The default rhythm is simple:
 4. **reviewer** checks non-trivial implementation work when needed.
 
 If the task is tiny, you can skip straight to Builder. If the task is fuzzy, start with Designer. If the path is clear but the work is still non-trivial, Planner is usually the right next stop.
+
+When a design is complete, Designer can also start explicit automode. Run `/automode` from Designer to set `automode.enabled=true` and let the modes hand off through Designer → Planner → Builder using system-generated handoff turns. Automode cannot be started from Planner or Builder, and natural-language prompts do not trigger it.
 
 ---
 
@@ -287,6 +291,7 @@ Picode uses `z-prompt-vars` so prompts can refer to project-aware values such as
 - `${design.path}`
 - `${plan.exists}`
 - `${design.exists}`
+- `${automode.enabled}`
 
 By default those paths resolve to:
 
@@ -488,6 +493,10 @@ Use a local-path install and run `/reload` after editing files in this repositor
 ### My overlay cards are not being picked up
 
 Check the `picode` block in `.pi/settings.json` or `~/.pi/agent/settings.json` and confirm the configured directories actually exist.
+
+### `/automode` will not start
+
+Automode can only be started explicitly from Designer mode. Switch with `/agents Designer`, then run `/automode`.
 
 ### Where are release notes?
 

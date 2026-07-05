@@ -5,13 +5,16 @@ import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
+import { Type } from "@sinclair/typebox";
 import { collectAgentAssetDiagnostics, collectAgentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
+import { buildPromptVars, getVarValue, setAutomodeEnabled } from "../z-prompt-vars/prompt-vars.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
 const MODE_STATUS_KEY = "agent-mode";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
+const MODE_HANDOFF_MESSAGE_TYPE = "agent-mode-handoff";
 const LEGACY_MODE_CONTEXT_MESSAGE_TYPE = "agent-mode-context";
 const GATE_SWITCH_PROFILE_EVENT = "gate:switch-profile";
 
@@ -365,6 +368,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 	let modes: ModeDefinition[] = [];
 	let currentIndex = 0;
+	let pendingModeIndex: number | undefined;
 	let loadError: string | undefined;
 	let loadWarnings: string[] = [];
 
@@ -384,6 +388,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	function loadModes(): void {
 		loadError = undefined;
 		loadWarnings = [];
+		pendingModeIndex = undefined;
 		const cards = collectAgentCards(pi);
 		const diagnostics = collectAgentAssetDiagnostics(pi);
 		const discovered = new Map<string, ModeDefinition>();
@@ -460,6 +465,11 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}).tools;
 	}
 
+	function getActiveToolsForMode(mode: ModeDefinition, automodeEnabled: boolean): string[] {
+		const tools = getEffectiveTools(mode).filter((tool) => tool !== "switch_agent_mode");
+		return automodeEnabled ? [...new Set([...tools, "switch_agent_mode"])] : tools;
+	}
+
 	function notifyModeToolWarnings(ctx: ExtensionContext, mode: ModeDefinition): void {
 		const resolved = resolveToolSelection(mode.toolSelection, {
 			defaultMode: "all",
@@ -512,8 +522,8 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		const effectiveTools = getEffectiveTools(current);
-		pi.setActiveTools(effectiveTools);
+		const automodeEnabled = readAutomodeEnabled(ctx, current.id) === "true";
+		pi.setActiveTools(getActiveToolsForMode(current, automodeEnabled));
 		if (ctx.hasUI) {
 			notifyModeToolWarnings(ctx, current);
 		}
@@ -548,6 +558,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			return;
 		}
 
+		pendingModeIndex = undefined;
 		currentIndex = nextIndex;
 		await applyCurrentMode(ctx, { persist: true });
 	}
@@ -558,6 +569,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(loadError ? `Agent mode: ${loadError}` : "Agent mode: no modes loaded", "warning");
 			return;
 		}
+		pendingModeIndex = undefined;
 		currentIndex = (currentIndex + 1) % modes.length;
 		await applyCurrentMode(ctx, { persist: true });
 	}
@@ -568,12 +580,62 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(loadError ? `Agent mode: ${loadError}` : "Agent mode: no modes loaded", "warning");
 			return;
 		}
+		pendingModeIndex = undefined;
 		currentIndex = (currentIndex - 1 + modes.length) % modes.length;
 		await applyCurrentMode(ctx, { persist: true });
 	}
 
-	function buildModeSystemPrompt(mode: ModeDefinition): string {
-		const effectiveTools = getEffectiveTools(mode);
+	function modeHandoffOptions(ctx: ExtensionContext): { triggerTurn: true; deliverAs?: "followUp" } {
+		const isIdle = typeof ctx.isIdle === "function" ? ctx.isIdle() : true;
+		return isIdle ? { triggerTurn: true } : { triggerTurn: true, deliverAs: "followUp" };
+	}
+
+	function sendModeHandoffMessage(ctx: ExtensionContext, targetMode: ModeDefinition, handoffPrompt: string): void {
+		pi.sendMessage({
+			customType: MODE_HANDOFF_MESSAGE_TYPE,
+			content: `Agent-mode handoff (system-generated, not user input): ${handoffPrompt}`,
+			display: false,
+			details: {
+				targetMode: targetMode.name,
+				targetModeId: targetMode.id,
+			},
+		}, modeHandoffOptions(ctx));
+	}
+
+	function queueModeSwitchForTool(ctx: ExtensionContext, identifier: string): { mode?: ModeDefinition; error?: string } {
+		if (modes.length === 0) {
+			updateStatus(ctx);
+			return { error: loadError ? `Agent mode: ${loadError}` : "Agent mode: no modes loaded" };
+		}
+		const nextIndex = findModeIndex(identifier);
+		if (nextIndex < 0) return { error: `Agent mode: unknown mode \"${identifier}\"` };
+		pendingModeIndex = nextIndex;
+		return { mode: modes[nextIndex] };
+	}
+
+	async function applyPendingModeSwitch(ctx: ExtensionContext): Promise<ModeDefinition | undefined> {
+		if (pendingModeIndex === undefined) return undefined;
+		if (readAutomodeEnabled(ctx, getCurrentMode()?.id) !== "true") {
+			pendingModeIndex = undefined;
+			return undefined;
+		}
+		if (pendingModeIndex < 0 || pendingModeIndex >= modes.length) {
+			pendingModeIndex = undefined;
+			return undefined;
+		}
+		currentIndex = pendingModeIndex;
+		pendingModeIndex = undefined;
+		await applyCurrentMode(ctx, { persist: true });
+		return getCurrentMode();
+	}
+
+	function readAutomodeEnabled(ctx: ExtensionContext, modeId?: string): string {
+		const value = getVarValue(buildPromptVars(ctx.cwd, modeId), "automode.enabled");
+		return value === "true" ? "true" : "false";
+	}
+
+	function buildModeSystemPrompt(ctx: ExtensionContext, mode: ModeDefinition): string {
+		const effectiveTools = getActiveToolsForMode(mode, readAutomodeEnabled(ctx, mode.id) === "true");
 		return [
 			`ACTIVE MODE OVERRIDE`,
 			``,
@@ -622,11 +684,15 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, ctx) => {
+		const pendingMode = await applyPendingModeSwitch(ctx);
+		if (!pendingMode) {
+			await applyCurrentMode(ctx, { persist: false, notify: false });
+		}
 		const current = getCurrentMode();
 		if (!current) return undefined;
 		return {
-			systemPrompt: `${buildModeSystemPrompt(current)}\n\n${event.systemPrompt}\n`,
+			systemPrompt: `${buildModeSystemPrompt(ctx, current)}\n\n${event.systemPrompt}\n`,
 		};
 	});
 
@@ -662,6 +728,115 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		});
 	}
 
+	pi.registerTool({
+		name: "switch_agent_mode",
+		label: "Switch Agent Mode",
+		description: "Switch the active top-level agent mode, optionally queuing a system-generated handoff turn.",
+		promptSnippet: "switch_agent_mode({ mode, triggerTurn?, handoffPrompt? })",
+		promptGuidelines: [
+			"Use switch_agent_mode only while automode.enabled is true, for automode continuation handoffs.",
+			"Do not use switch_agent_mode to start automode; only the explicit user /automode command starts automode.",
+			"When switch_agent_mode triggerTurn is true, provide a concise handoffPrompt for the target mode.",
+		],
+		parameters: Type.Object(
+			{
+				mode: Type.String({ description: "Target agent mode name or id, such as Planner or Builder." }),
+				triggerTurn: Type.Optional(Type.Boolean({ description: "Queue a system-generated follow-up turn after switching." })),
+				handoffPrompt: Type.Optional(Type.String({ description: "Instruction for the target mode when triggerTurn is true." })),
+			},
+			{ additionalProperties: false },
+		),
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			const requestedMode = typeof params.mode === "string" ? params.mode.trim() : "";
+			if (!requestedMode) {
+				return {
+					content: [{ type: "text" as const, text: "mode is required." }],
+					isError: true,
+					details: { mode: requestedMode },
+				};
+			}
+			const triggerTurn = params.triggerTurn === true;
+			const handoffPrompt = typeof params.handoffPrompt === "string" ? params.handoffPrompt.trim() : "";
+			const currentMode = getCurrentMode();
+			if (readAutomodeEnabled(ctx, currentMode?.id) !== "true") {
+				return {
+					content: [{ type: "text" as const, text: "switch_agent_mode is only available while automode.enabled is true. Use /agents for manual mode switching." }],
+					isError: true,
+					details: { mode: requestedMode, automode: false },
+				};
+			}
+			if (triggerTurn && !handoffPrompt) {
+				return {
+					content: [{ type: "text" as const, text: "handoffPrompt is required when triggerTurn is true." }],
+					isError: true,
+					details: { mode: requestedMode, triggerTurn },
+				};
+			}
+
+			const result = queueModeSwitchForTool(ctx, requestedMode);
+			if (!result.mode) {
+				return {
+					content: [{ type: "text" as const, text: result.error ?? `Agent mode: unknown mode \"${requestedMode}\"` }],
+					isError: true,
+					details: { mode: requestedMode },
+				};
+			}
+			if (triggerTurn) {
+				sendModeHandoffMessage(ctx, result.mode, handoffPrompt);
+			}
+			return {
+				content: [{ type: "text" as const, text: `Queued agent mode switch to ${result.mode.name}${triggerTurn ? " and queued a handoff turn" : " for the next agent turn"}.` }],
+				details: { mode: result.mode.name, modeId: result.mode.id, triggerTurn, queued: true },
+			};
+		},
+	});
+
+	const automodeCommand = {
+		description: "start Designer-only automode, turn it off, or show status",
+		handler: async (args: string, ctx: ExtensionContext) => {
+			const action = args.trim().toLowerCase() || "on";
+			const current = getCurrentMode();
+			if (action !== "on" && action !== "off" && action !== "status") {
+				ctx.ui.notify("Usage: /automode [on|off|status]", "warning");
+				return;
+			}
+
+			try {
+				if (action === "status") {
+					ctx.ui.notify(`Automode: ${readAutomodeEnabled(ctx, current?.id)} | Current agent: ${current?.name ?? "none"}`, "info");
+					return;
+				}
+
+				if (action === "off") {
+					pendingModeIndex = undefined;
+					setAutomodeEnabled(ctx.cwd, false, current?.id);
+					await applyCurrentMode(ctx, { persist: false, notify: false });
+					ctx.ui.notify("Automode off.", "info");
+					return;
+				}
+
+				if (current?.id !== "designer") {
+					ctx.ui.notify("Automode can only be started from Designer. Switch to Designer first with /agents Designer.", "warning");
+					return;
+				}
+
+				setAutomodeEnabled(ctx.cwd, true, current.id);
+				await applyCurrentMode(ctx, { persist: false, notify: false });
+				sendModeHandoffMessage(
+					ctx,
+					current,
+					"Automode was explicitly started by the user from Designer. Check whether there are no further high-value design questions and whether the active design is written up well enough for Planner. If both gates pass, use switch_agent_mode to hand off to Planner with a follow-up prompt. If not, ask the user or update the design instead.",
+				);
+				ctx.ui.notify("Automode started.", "info");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				ctx.ui.notify(`Automode failed: ${message}`, "warning");
+			}
+		},
+	};
+
+	pi.registerCommand("automode", automodeCommand);
+
 	const agentsCommand = {
 		description: "show current agent, switch by name, or use next/prev",
 		getArgumentCompletions: (prefix: string) => buildAgentCommandCompletions(prefix, modes),
@@ -688,7 +863,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 				return;
 			}
 
-			const effectiveTools = getEffectiveTools(current);
+			const effectiveTools = getActiveToolsForMode(current, readAutomodeEnabled(ctx, current.id) === "true");
 			ctx.ui.notify(
 				[
 					`Current agent: ${current.name}`,

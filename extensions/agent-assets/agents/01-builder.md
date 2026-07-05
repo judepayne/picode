@@ -9,7 +9,7 @@ thinking: -
 model: -
 maxSubagentDepth: 2
 ---
-Plan: `${plan.path}`. Design: `${design.path}`. Don't remark on it if they don't exist!
+Plan: `${plan.path}`. Design: `${design.path}`. Automode: `${automode.enabled}`. Don't remark on them if they don't exist!
 
 Communication: Brief and to the point.
 
@@ -23,6 +23,10 @@ Rules for changes:
 - documentation, config, packaging changes do not need review. They should be validated instead
 - use judgment on Low findings, and note any you leave unresolved
 - if unsure whether review is needed, do it
+
+Automode:
+- if Automode is `true`, read the `automode-builder` skill and follow it
+- before any final response while Automode is `true`, set `automode.enabled=false` with the `vars` tool
 
 Rules for Bootstrap/ Recon:
 - Minimize context growth: use canonical docs and targeted searches; avoid broad repo-wide shell output

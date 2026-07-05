@@ -12,6 +12,10 @@ const WRITE_FILE_NAME_KEY = "vars-file-name";
 const DEFAULT_WRITE_LOCATION = "project" as const;
 const DEFAULT_PLAN_PATH = ".pi/plans/active.md";
 const DEFAULT_DESIGN_PATH = ".pi/designs/active.md";
+const DEFAULT_PROMPT_VARS: PromptVarMap = {
+	"automode.enabled": "false",
+};
+
 const RESERVED_DERIVED_VAR_KEYS = new Set([
 	"plan",
 	"plan.path",
@@ -323,6 +327,9 @@ function defaultBootstrapVarsConfig(): VarsConfig {
 				defaultContext: "fresh",
 			},
 		},
+		automode: {
+			enabled: false,
+		},
 	};
 }
 
@@ -370,6 +377,7 @@ function getPromptInterpolationVars(storedVars: StoredVarMap, builtInPromptVars:
 		customVars[key] = stringifyVarValue(value);
 	}
 	return {
+		...DEFAULT_PROMPT_VARS,
 		...customVars,
 		...builtInPromptVars,
 	};
@@ -386,6 +394,9 @@ function validateMutableVarKey(key: string): string {
 	}
 	if (trimmed === "paths") {
 		throw new Error('Cannot set "paths" directly. Use "paths.plan" or "paths.design" to set individual path values.');
+	}
+	if (trimmed === "automode") {
+		throw new Error('Cannot set "automode" directly. Use "automode.enabled" to clear automode, or /automode from Designer to start it.');
 	}
 	if (trimmed.startsWith("paths.plan.") || trimmed.startsWith("paths.design.")) {
 		throw new Error(`Cannot set nested keys under ${trimmed.startsWith("paths.plan.") ? "paths.plan" : "paths.design"}; those keys are scalar path values.`);
@@ -556,7 +567,7 @@ export function setWriteLocation(cwd: string, location: PiLocation, modeId?: str
 	return buildPromptVars(cwd, modeId);
 }
 
-export function setVar(cwd: string, key: string, value: unknown, modeId?: string): VarsState {
+function setVarInternal(cwd: string, key: string, value: unknown, modeId: string | undefined, options?: { allowAutomodeEnable?: boolean; writeLocationOverride?: PiLocation }): VarsState {
 	const normalizedKey = validateMutableVarKey(key);
 	if ((normalizedKey === "paths.plan" || normalizedKey === "paths.design") && typeof value !== "string") {
 		throw new Error(`${normalizedKey} must be a string path.`);
@@ -564,17 +575,39 @@ export function setVar(cwd: string, key: string, value: unknown, modeId?: string
 	if ((normalizedKey === "paths.plan" || normalizedKey === "paths.design") && !value.trim()) {
 		throw new Error(`value is required for key ${normalizedKey}.`);
 	}
+	if (normalizedKey === "automode.enabled" && typeof value !== "boolean") {
+		throw new Error("automode.enabled must be a boolean.");
+	}
+	if (normalizedKey === "automode.enabled" && value === true && options?.allowAutomodeEnable !== true) {
+		throw new Error('Cannot set automode.enabled=true directly. Start automode with /automode from Designer mode.');
+	}
 
-	const writeLocation = ensureWriteLocationConfig(cwd);
+	const currentWriteLocation = ensureWriteLocationConfig(cwd);
+	const writeLocation = {
+		value: normalizedKey === "automode.enabled" ? "project" : options?.writeLocationOverride ?? currentWriteLocation.value,
+		varsFileName: currentWriteLocation.varsFileName,
+	};
 	const { config } = readScopeConfig(cwd, writeLocation.value, writeLocation.varsFileName, true);
 	const nextConfig = setNestedValue(config, normalizedKey, value);
 	writeVarsConfig(cwd, nextConfig, writeLocation.value, writeLocation.varsFileName);
 	return buildPromptVars(cwd, modeId);
 }
 
+export function setVar(cwd: string, key: string, value: unknown, modeId?: string): VarsState {
+	return setVarInternal(cwd, key, value, modeId);
+}
+
+export function setAutomodeEnabled(cwd: string, enabled: boolean, modeId?: string): VarsState {
+	return setVarInternal(cwd, "automode.enabled", enabled, modeId, { allowAutomodeEnable: enabled, writeLocationOverride: "project" });
+}
+
 export function unsetVar(cwd: string, key: string, modeId?: string): VarsState {
 	const normalizedKey = validateMutableVarKey(key);
-	const writeLocation = ensureWriteLocationConfig(cwd);
+	const currentWriteLocation = ensureWriteLocationConfig(cwd);
+	const writeLocation = {
+		value: normalizedKey === "automode.enabled" ? "project" : currentWriteLocation.value,
+		varsFileName: currentWriteLocation.varsFileName,
+	};
 	const { config } = readScopeConfig(cwd, writeLocation.value, writeLocation.varsFileName, true);
 	const nextConfig = unsetNestedValue(config, normalizedKey);
 	writeVarsConfig(cwd, nextConfig, writeLocation.value, writeLocation.varsFileName);

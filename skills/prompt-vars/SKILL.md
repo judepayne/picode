@@ -86,9 +86,11 @@ Examples of useful stored keys:
 - `release.owner`
 - `paths.design`
 - `subagents.dispatch.defaultContext`
+- `automode.enabled`
 
 Recommended default:
 - `subagents.dispatch.defaultContext = "fresh"`
+- `automode.enabled = false`
 
 Use `fork` only as an exception when a subagent truly needs prior session context.
 
@@ -158,6 +160,10 @@ Examples:
 - `/vars set subagents.dispatch.defaultContext "fork"`
 
 Prefer `fresh` as the default. Use `fork` only when the delegated task specifically benefits from prior session context.
+
+## Automode
+
+`automode.enabled` is a stored var used by the Designer → Planner → Builder automode workflow. Generic vars mutation may clear it to `false`, but must not start automode by setting it to `true`; start automode only with `/automode` from Designer. Builder should set it to `false` with the `vars` tool whenever automode completes, blocks, or stops for user input.
 
 ## Guidelines
 

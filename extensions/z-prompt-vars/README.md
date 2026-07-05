@@ -110,6 +110,7 @@ When bootstrap creates the initial vars files, it seeds:
 - `paths.plan = ".pi/plans/active.md"` unless the project file is being created and a global `paths.plan` already exists
 - `paths.design = ".pi/designs/active.md"` unless the project file is being created and a global `paths.design` already exists
 - `subagents.dispatch.defaultContext = "fresh"`
+- `automode.enabled = false`
 
 Allowed dispatch defaults:
 - `fresh`
@@ -239,6 +240,7 @@ Examples of useful stored keys:
 - `release.owner`
 - `paths.design`
 - `subagents.dispatch.defaultContext`
+- `automode.enabled`
 - `footer.colors.subagentStatus.running`
 - `footer.colors.subagentStatus.queued`
 - `footer.colors.subagentStatus.complete`
@@ -248,6 +250,11 @@ Examples of useful stored keys:
 
 Recommended default for subagent dispatch:
 - `subagents.dispatch.defaultContext = "fresh"`
+
+Automode default:
+- `automode.enabled = false`
+
+Builder should clear `automode.enabled=false` with the `vars` tool when automode stops. Setting `automode.enabled=true` is intentionally blocked through generic vars mutation; start automode with `/automode` from Designer.
 
 Use `fork` only as an exception when delegated work truly needs prior session context.
 Use `continue` when you want direct user `~subagent` follow-ups to reuse the same delegated conversation for the current parent session.

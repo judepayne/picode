@@ -24,6 +24,8 @@ A mode can change:
 - optional direct `banned_subagents`
 - the footer color/status
 
+`agent-mode` also exposes the agent-facing `switch_agent_mode` tool for automode handoffs while `automode.enabled=true`. For manual mode switching, use `/agents`.
+
 The built-in package ships modes for:
 
 - Builder
@@ -41,6 +43,10 @@ The built-in package ships modes for:
 /agents next
 /agents prev
 /agents <name>
+/automode
+/automode on
+/automode off
+/automode status
 ```
 
 Examples:
@@ -60,6 +66,14 @@ Shipped defaults:
 
 - `Ctrl+.` → next mode
 - `Ctrl+,` → previous mode
+
+### Automode
+
+`/automode` starts the optional Designer → Planner → Builder automation path. It can only be started explicitly by the user from Designer mode. Planner and Builder cannot start automode, and ordinary natural-language prompts do not trigger it.
+
+`/automode off` clears `automode.enabled=false` from any mode. `/automode status` reports the current flag and mode.
+
+Automode handoffs use the `switch_agent_mode` tool. That tool is available only while `automode.enabled=true`; manual switching remains `/agents`. It switches modes through the same runtime path as `/agents` and can optionally queue a system-generated follow-up handoff turn so the next response starts under the newly active mode prompt.
 
 ### Footer status
 
