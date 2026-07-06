@@ -87,10 +87,13 @@ Examples of useful stored keys:
 - `paths.design`
 - `subagents.dispatch.defaultContext`
 - `automode.enabled`
+- `gate.auto.*` for pi-gate local auto-approval configuration
 
 Recommended default:
 - `subagents.dispatch.defaultContext = "fresh"`
 - `automode.enabled = false`
+- `gate.auto.enabled = false`
+- `gate.auto.startOnSession = false`
 
 Use `fork` only as an exception when a subagent truly needs prior session context.
 
@@ -165,6 +168,14 @@ Prefer `fresh` as the default. Use `fork` only when the delegated task specifica
 
 `automode.enabled` is a stored var used by the Designer → Planner → Builder automode workflow. Generic vars mutation may clear it to `false`, but must not start automode by setting it to `true`; start automode only with `/automode` from Designer. Builder should set it to `false` with the `vars` tool whenever automode completes, blocks, or stops for user input.
 
+## Gate auto-approval vars
+
+`gate.auto.enabled` is protected. Generic vars mutation may clear it to `false`, but must not set it to `true`; use `/gate auto on` for explicit user activation and `/gate auto off` to disable it. A global `gate.auto.enabled=true` does not activate a project by itself.
+
+`gate.auto.startOnSession` defaults to `false`. Users may set it to `true` when they explicitly want gate auto to start after each fresh Pi start for the project.
+
+Agents may configure supporting values such as `gate.auto.llama.serverPath`, `gate.auto.llama.modelPath`, `gate.auto.llama.endpoint`, `gate.auto.startOnSession`, and `gate.auto.timeoutMs` when asked, but should not try to bypass `/gate auto on`.
+
 ## Guidelines
 
 - If the workspace is missing the expected agent-mode vars files, use `vars({ action: "bootstrap" })` instead of manually creating them.
@@ -174,6 +185,7 @@ Prefer `fresh` as the default. Use `fork` only when the delegated task specifica
 - Prefer scalar vars when you need a path or boolean fact.
 - Prefer `${plan}` or `${design}` when you want a ready-made status sentence.
 - Use `paths.plan` and `paths.design` when you need to change where the active plan or design file lives.
+- Do not set `gate.auto.enabled=true` with vars; use `/gate auto on`.
 - Do not try to set the derived built-in facts `plan`, `plan.path`, `plan.exists`, `plan.active`, `design`, `design.path`, `design.exists`, or `design.active`.
 - Do not hardcode the active plan/design paths in prompts when the built-in vars already exist.
 - Remember that interpolation is a runtime capability. A prompt file only gets `${...}` expansion when it is loaded by a runtime that includes the prompt-vars extension.

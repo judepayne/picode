@@ -26,6 +26,7 @@
   ],
   "scripts": {
     "test": "node --test \"extensions/**/*.test.ts\"",
+    "smoke:gate-auto": "node scripts/smoke-gate-auto-soft-block.mjs",
     "build:npm": "node scripts/build-npm-package.mjs",
     "publish:npm:dry-run": "npm run build:npm && npm publish ./dist --dry-run --access public",
     "publish:npm": "npm run build:npm && npm publish ./dist --access public"
@@ -38,6 +39,9 @@
     "skills",
     "examples",
     "img",
+    "scripts/setup-gate-auto-approver.mjs",
+    "scripts/eval-gate-auto-approver.mjs",
+    "scripts/smoke-gate-auto-soft-block.mjs",
     "README.md",
     "CHANGELOG.md",
     "package.json"

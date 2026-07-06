@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
@@ -106,6 +107,9 @@ describe("buildChildEnv", () => {
 				GATE_PROFILE_LOCK: "0",
 				PI_GATE_PROFILE_LINEAGE: "worker",
 				PI_SUBAGENT_DEPTH: "99",
+				PI_GATE_AUTO_ENDPOINT: "http://spoofed",
+				PI_GATE_SUBAGENT_AGENT: "spoofed",
+				PI_GATE_SUBAGENT_TASK_SHA256: "spoofed",
 				MCP_DIRECT_TOOLS: "1",
 			},
 		});
@@ -113,7 +117,19 @@ describe("buildChildEnv", () => {
 		assert.equal(env.GATE_PROFILE_LOCK, "1");
 		assert.equal(env.PI_GATE_PROFILE_LINEAGE, "planner,scout");
 		assert.equal(env.PI_SUBAGENT_DEPTH, "1");
+		assert.equal(env.PI_GATE_AUTO_ENDPOINT, undefined);
+		assert.equal(env.PI_GATE_SUBAGENT_AGENT, "scout");
+		assert.notEqual(env.PI_GATE_SUBAGENT_TASK_SHA256, "spoofed");
 		assert.equal(env.MCP_DIRECT_TOOLS, "1");
 		restoreEnv();
+	});
+
+	test("adds trusted bounded gate subagent metadata", () => {
+		const task = "x".repeat(1200);
+		const env = buildChildEnv({ agent: "worker", task, maxDepth: 2, topLevelRunId: "run", parentChildId: "child" });
+		assert.equal(env.PI_GATE_SUBAGENT_AGENT, "worker");
+		assert.equal(env.PI_GATE_SUBAGENT_TASK_SHA256, crypto.createHash("sha256").update(task).digest("hex"));
+		assert.ok(env.PI_GATE_SUBAGENT_TASK_PREVIEW.length <= 1010);
+		assert.match(env.PI_GATE_SUBAGENT_TASK_PREVIEW, /truncated/);
 	});
 });

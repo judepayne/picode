@@ -6,7 +6,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const distDir = path.join(rootDir, "dist");
 
 const directoriesToStage = ["extensions", "skills", "examples", "img"];
-const filesToStage = ["package.json", "LICENSE", "CHANGELOG.md"];
+const filesToStage = ["package.json", "LICENSE", "CHANGELOG.md", "scripts/setup-gate-auto-approver.mjs", "scripts/eval-gate-auto-approver.mjs", "scripts/smoke-gate-auto-soft-block.mjs"];
 const npmReadmePath = path.join(rootDir, "README.npm.md");
 
 function removeDistPath(relativePath) {
@@ -24,7 +24,9 @@ function copyDirectory(relativePath) {
 }
 
 function copyFile(sourceRelativePath, targetRelativePath = sourceRelativePath) {
-	fs.copyFileSync(path.join(rootDir, sourceRelativePath), path.join(distDir, targetRelativePath));
+	const target = path.join(distDir, targetRelativePath);
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.copyFileSync(path.join(rootDir, sourceRelativePath), target);
 }
 
 if (!fs.existsSync(npmReadmePath)) {

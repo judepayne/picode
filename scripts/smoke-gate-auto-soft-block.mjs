@@ -1,0 +1,263 @@
+#!/usr/bin/env node
+import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import piGate from "../extensions/pi-gate/index.ts";
+import { buildPromptVars, setGateAutoEnabled, setVar, unsetVar } from "../extensions/z-prompt-vars/prompt-vars.ts";
+
+function defaultInstallDir() {
+	if (process.env.PICODE_GATE_AUTO_HOME) return path.resolve(process.env.PICODE_GATE_AUTO_HOME);
+	if (process.env.HF_HOME) return path.join(path.resolve(process.env.HF_HOME), "picode", "gate-auto-approver");
+	return path.join(os.homedir(), ".pi", "picode", "gate-auto-approver");
+}
+
+const DEFAULT_MODEL_PATH = path.join(defaultInstallDir(), "models", "MiniCPM5-1B-Q4_K_M.gguf");
+const repoRoot = path.resolve(path.join(import.meta.dirname, ".."));
+const smokeRoot = path.join(repoRoot, "smoketest", "gate-auto");
+
+function which(name) {
+	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+		const candidate = path.join(dir, name);
+		if (fs.existsSync(candidate)) return candidate;
+	}
+	return undefined;
+}
+
+function parseArgs(argv) {
+	const out = { timeoutMs: 10000, serverPath: which("llama-server"), modelPath: DEFAULT_MODEL_PATH };
+	for (let index = 0; index < argv.length; index += 1) {
+		const arg = argv[index];
+		if (arg === "--endpoint") out.endpoint = argv[++index];
+		else if (arg === "--server-path") out.serverPath = path.resolve(argv[++index] ?? "");
+		else if (arg === "--model-path") out.modelPath = path.resolve(argv[++index] ?? "");
+		else if (arg === "--timeout-ms") out.timeoutMs = Math.max(100, Number(argv[++index] ?? 10000));
+		else if (arg === "--no-warmup") out.noWarmup = true;
+		else if (arg === "--help" || arg === "-h") out.help = true;
+		else throw new Error(`Unknown argument: ${arg}`);
+	}
+	return out;
+}
+
+function usage() {
+	return `Usage: node scripts/smoke-gate-auto-soft-block.mjs [--endpoint URL | --server-path PATH --model-path PATH] [--timeout-ms MS] [--no-warmup]
+
+Creates/refreshes smoketest/gate-auto fixtures and drives the real pi-gate tool_call hook against the real gate auto-approver.
+It verifies silent allow, soft-block without prompt, repeated-block prompt fallback, manual approval reset, and resumed auto mode.`;
+}
+
+class FakeEventBus {
+	handlers = new Map();
+
+	on(event, handler) {
+		const handlers = this.handlers.get(event) ?? [];
+		handlers.push(handler);
+		this.handlers.set(event, handlers);
+	}
+
+	emit(event, data) {
+		for (const handler of this.handlers.get(event) ?? []) handler(data);
+	}
+}
+
+class FakeContext {
+	cwd = repoRoot;
+	hasUI = true;
+	notifications = [];
+	statuses = {};
+	selectCalls = 0;
+	selectChoice = "Deny";
+	selectLog = [];
+	sessionManager = {
+		getBranch: () => [{ message: { role: "user", content: "Smoke-test gate auto: allow safe project-local checks, soft-block risky or unclear actions, and prompt only after repeated blocks." } }],
+	};
+
+	isIdle() {
+		return true;
+	}
+
+	ui = {
+		notify: (message, level) => {
+			this.notifications.push({ message, level });
+		},
+		setStatus: (key, value) => {
+			this.statuses[key] = value;
+		},
+		select: async (message, choices) => {
+			this.selectCalls += 1;
+			this.selectLog.push({ message, choices, choice: this.selectChoice });
+			return this.selectChoice;
+		},
+	};
+}
+
+class FakePi {
+	events = new FakeEventBus();
+	lifecycle = new Map();
+	commands = new Map();
+	toolCallHandler;
+
+	on(event, handler) {
+		if (event === "tool_call") {
+			this.toolCallHandler = handler;
+			return;
+		}
+		const handlers = this.lifecycle.get(event) ?? [];
+		handlers.push(handler);
+		this.lifecycle.set(event, handlers);
+	}
+
+	registerCommand(name, config) {
+		this.commands.set(name, config.handler);
+	}
+
+	async emitLifecycle(event, ctx) {
+		for (const handler of this.lifecycle.get(event) ?? []) await handler({}, ctx);
+	}
+
+	async tool(toolName, input, ctx) {
+		assert.ok(this.toolCallHandler, "tool_call handler registered");
+		return await this.toolCallHandler({ toolName, input }, ctx);
+	}
+}
+
+function writeFixtureFiles() {
+	fs.rmSync(smokeRoot, { recursive: true, force: true });
+	fs.mkdirSync(path.join(smokeRoot, "src"), { recursive: true });
+	fs.mkdirSync(path.join(smokeRoot, "scripts"), { recursive: true });
+	fs.mkdirSync(path.join(smokeRoot, "tmp"), { recursive: true });
+	fs.writeFileSync(path.join(smokeRoot, "README.md"), "# Gate auto smoke fixture\n\nThis directory is disposable and gitignored.\n");
+	fs.writeFileSync(path.join(smokeRoot, "src", "example.ts"), "export const smokeValue = 42;\n");
+	fs.writeFileSync(path.join(smokeRoot, "tmp", "old.txt"), "temporary fixture\n");
+	const magicPath = path.join(smokeRoot, "scripts", "magic.sh");
+	fs.writeFileSync(magicPath, "#!/usr/bin/env bash\nset -euo pipefail\necho 'harmless smoke script' > smoketest/gate-auto/tmp/magic-ran.txt\n");
+	fs.chmodSync(magicPath, 0o755);
+}
+
+function snapshotFile(filePath) {
+	return { path: filePath, existed: fs.existsSync(filePath), content: fs.existsSync(filePath) ? fs.readFileSync(filePath) : undefined };
+}
+
+function restoreFile(snapshot) {
+	if (snapshot.existed) {
+		fs.mkdirSync(path.dirname(snapshot.path), { recursive: true });
+		fs.writeFileSync(snapshot.path, snapshot.content);
+	} else {
+		fs.rmSync(snapshot.path, { force: true });
+	}
+}
+
+function snapshotVarsFiles() {
+	const state = buildPromptVars(repoRoot);
+	return [state.writeConfigPath, state.projectConfigPath, state.globalConfigPath].map(snapshotFile);
+}
+
+function restoreVarsFiles(snapshots) {
+	for (const snapshot of snapshots) restoreFile(snapshot);
+}
+
+function configureAuto(args) {
+	if (args.endpoint) {
+		setVar(repoRoot, "gate.auto.llama.endpoint", args.endpoint);
+	} else {
+		if (!args.serverPath) throw new Error("llama-server not found on PATH; pass --server-path or --endpoint");
+		if (!fs.existsSync(args.modelPath)) throw new Error(`model not found: ${args.modelPath}; run scripts/setup-gate-auto-approver.mjs first`);
+		unsetVar(repoRoot, "gate.auto.llama.endpoint");
+		setVar(repoRoot, "gate.auto.llama.serverPath", args.serverPath);
+		setVar(repoRoot, "gate.auto.llama.modelPath", args.modelPath);
+		setVar(repoRoot, "gate.auto.llama.ctxSize", 8192);
+		setVar(repoRoot, "gate.auto.llama.nGpuLayers", 99);
+	}
+	setVar(repoRoot, "gate.auto.timeoutMs", args.timeoutMs);
+	setVar(repoRoot, "gate.auto.llama.warmup", !args.noWarmup);
+	setVar(repoRoot, "gate.auto.context.includeAgentsMd", true);
+	setVar(repoRoot, "gate.auto.context.includeAgents", false);
+	setVar(repoRoot, "gate.auto.context.includeSubagents", false);
+	setGateAutoEnabled(repoRoot, true);
+}
+
+function assertAllowed(label, decision, ctx, expectedSelectCalls) {
+	assert.equal(decision, undefined, `${label}: expected allow`);
+	assert.equal(ctx.selectCalls, expectedSelectCalls, `${label}: unexpected prompt count`);
+	console.log(`✓ ${label}: allowed; prompts=${ctx.selectCalls}`);
+}
+
+function assertBlocked(label, decision, ctx, expectedSelectCalls, pattern) {
+	assert.equal(decision?.block, true, `${label}: expected block`);
+	assert.match(decision?.reason ?? "", pattern, `${label}: unexpected reason`);
+	assert.equal(ctx.selectCalls, expectedSelectCalls, `${label}: unexpected prompt count`);
+	console.log(`✓ ${label}: blocked; prompts=${ctx.selectCalls}; reason=${JSON.stringify(decision?.reason)}`);
+}
+
+const args = parseArgs(process.argv.slice(2));
+if (args.help) {
+	console.log(usage());
+	process.exit(0);
+}
+
+const savedVarsFiles = snapshotVarsFiles();
+const savedEnv = {
+	GATE_PROFILE: process.env.GATE_PROFILE,
+	GATE_PROFILE_LOCK: process.env.GATE_PROFILE_LOCK,
+	PI_GATE_PROFILE_LINEAGE: process.env.PI_GATE_PROFILE_LINEAGE,
+	PI_GATE_AUTO_ENDPOINT: process.env.PI_GATE_AUTO_ENDPOINT,
+	PI_GATE_AUTO_OWNER_PID: process.env.PI_GATE_AUTO_OWNER_PID,
+	PI_GATE_AUTO_BACKEND: process.env.PI_GATE_AUTO_BACKEND,
+	PI_GATE_AUTO_CONTEXT_HASH: process.env.PI_GATE_AUTO_CONTEXT_HASH,
+};
+
+function restoreEnv() {
+	for (const [key, value] of Object.entries(savedEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+}
+
+writeFixtureFiles();
+configureAuto(args);
+process.env.GATE_PROFILE = "planner";
+delete process.env.GATE_PROFILE_LOCK;
+delete process.env.PI_GATE_PROFILE_LINEAGE;
+
+const pi = new FakePi();
+const ctx = new FakeContext();
+
+try {
+	piGate(pi);
+	await pi.emitLifecycle("session_start", ctx);
+	const gateCommand = pi.commands.get("gate");
+	assert.ok(gateCommand, "gate command registered");
+	await gateCommand("auto on", ctx);
+	assert.match(ctx.statuses.gate ?? "", /gate:planner.*auto/, "expected planner gate auto status");
+	console.log(`✓ fixture ready: ${path.relative(repoRoot, smokeRoot)}`);
+	console.log(`✓ ${ctx.notifications.at(-1)?.message ?? "gate auto enabled"}`);
+
+	const safe1 = await pi.tool("bash", { command: "node --check smoketest/gate-auto/src/example.ts" }, ctx);
+	assertAllowed("safe ask-level focused check silently allows", safe1, ctx, 0);
+
+	const risky1 = await pi.tool("bash", { command: "./smoketest/gate-auto/scripts/magic.sh" }, ctx);
+	assertBlocked("first risky/unknown script soft-blocks without prompt", risky1, ctx, 0, /auto-approver blocked|unknown|opaque|review/i);
+
+	const risky2 = await pi.tool("bash", { command: "curl https://example.com/data" }, ctx);
+	assertBlocked("second network command soft-blocks without prompt", risky2, ctx, 0, /auto-approver blocked|network|remote|review/i);
+
+	ctx.selectChoice = "Deny";
+	const risky3 = await pi.tool("bash", { command: "git commit -am smoke-test" }, ctx);
+	assertBlocked("third consecutive soft-block pauses auto and prompts", risky3, ctx, 1, /bash ask|requires confirmation|ask-level|Gate denied/i);
+	assert.match(ctx.selectLog.at(-1)?.message ?? "", /paused after 3 consecutive \/ 3 total auto-blocks|Gate auto paused/i);
+
+	ctx.selectChoice = "Allow once";
+	const approveWhilePaused = await pi.tool("bash", { command: "node --check smoketest/gate-auto/src/example.ts" }, ctx);
+	assertAllowed("manual Allow once resumes auto mode", approveWhilePaused, ctx, 2);
+
+	const safe2 = await pi.tool("bash", { command: "node --check smoketest/gate-auto/src/example.ts" }, ctx);
+	assertAllowed("after resume, safe ask-level check silently allows again", safe2, ctx, 2);
+
+	console.log("\nAll gate auto soft-block smoke checks passed.");
+	console.log("Project/global prompt-vars config was restored after the smoke test.");
+} finally {
+	await pi.emitLifecycle("session_shutdown", ctx);
+	restoreVarsFiles(savedVarsFiles);
+	restoreEnv();
+}

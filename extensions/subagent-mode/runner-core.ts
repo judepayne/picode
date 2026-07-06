@@ -127,6 +127,7 @@ export async function runChildInProcess(
 		...process.env,
 		...buildChildEnv({
 			agent: request.agent,
+			task: request.task,
 			maxDepth: request.maxSubagentDepth,
 			topLevelRunId: request.topLevelRunId,
 			// Env sent to the spawned child is its OWN childId — so that if the

@@ -15,6 +15,7 @@
  * direct-tool env override beyond pass-through.
  */
 
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
@@ -274,6 +275,8 @@ export function cleanupChildTempDir(tempDir: string | null | undefined): void {
 
 export interface BuildChildEnvInput extends ChildDepthEnvInput {
 	agent: string;
+	/** Delegated task text, summarized into trusted PI_GATE_SUBAGENT_* metadata. */
+	task?: string;
 	/** Additional env to layer on top (request-specific). Reserved runtime env vars are ignored. */
 	extra?: Record<string, string | undefined>;
 }
@@ -299,7 +302,24 @@ function isReservedChildEnvKey(key: string): boolean {
 	return key === GATE_PROFILE_ENV
 		|| key === GATE_PROFILE_LOCK_ENV
 		|| key === PI_GATE_PROFILE_LINEAGE_ENV
-		|| key.startsWith("PI_SUBAGENT_");
+		|| key.startsWith("PI_SUBAGENT_")
+		|| key.startsWith("PI_GATE_AUTO_")
+		|| key.startsWith("PI_GATE_SUBAGENT_");
+}
+
+function truncateEnvPreview(value: string, maxChars = 1000): string {
+	if (value.length <= maxChars) return value;
+	const keep = Math.max(0, maxChars - 32);
+	return `${value.slice(0, keep)}\n[truncated ${value.length - keep} chars]`;
+}
+
+function buildGateSubagentEnv(agent: string, task: string | undefined): Record<string, string> {
+	const taskText = task ?? "";
+	return {
+		PI_GATE_SUBAGENT_AGENT: agent,
+		PI_GATE_SUBAGENT_TASK_PREVIEW: truncateEnvPreview(taskText),
+		PI_GATE_SUBAGENT_TASK_SHA256: crypto.createHash("sha256").update(taskText).digest("hex"),
+	};
 }
 
 /**
@@ -328,5 +348,6 @@ export function buildChildEnv(input: BuildChildEnvInput): Record<string, string>
 		[GATE_PROFILE_LOCK_ENV]: "1",
 		[PI_GATE_PROFILE_LINEAGE_ENV]: buildGateProfileLineage(input.agent),
 		...buildChildDepthEnv(input),
+		...buildGateSubagentEnv(input.agent, input.task),
 	};
 }

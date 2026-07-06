@@ -18,6 +18,7 @@ import {
 	getWriteLocationConfigPath,
 	interpolatePrompt,
 	setAutomodeEnabled,
+	setGateAutoEnabled,
 	setVar,
 	setWriteLocation,
 	unsetVar,
@@ -191,6 +192,7 @@ describe("prompt-vars", () => {
 
 		assert.strictEqual(vars["project.name"], "Prompt Vars");
 		assert.strictEqual(vars["automode.enabled"], "false");
+		assert.strictEqual(vars["gate.auto.startOnSession"], "false");
 		assert.strictEqual(vars["plan.path"], path.join(cwd, ".pi", "plans", "active.md"));
 		assert.strictEqual(vars["plan.active"], "true");
 		assert.ok(vars.plan.includes("Plan file:"));
@@ -278,6 +280,64 @@ describe("prompt-vars", () => {
 		state = unsetVar(cwd, "automode.enabled");
 		assert.strictEqual(getRawStoredVarValue(state, "automode.enabled"), undefined);
 		assert.strictEqual(getVarValue(state, "automode.enabled"), "false");
+	});
+
+	test("gate.auto.enabled is project-scoped and only enabled through the gate helper", () => {
+		const cwd = makeWorkspace();
+		assert.strictEqual(getVarValue(buildPromptVars(cwd), "gate.auto.enabled"), "false");
+		assert.throws(
+			() => setVar(cwd, "gate.auto.enabled", true),
+			/Use \/gate auto on/i,
+		);
+		assert.throws(
+			() => setVar(cwd, "gate.auto.enabled", "true"),
+			/must be a boolean/i,
+		);
+		assert.throws(
+			() => setVar(cwd, "gate.auto", { enabled: true }),
+			/Cannot set "gate\.auto" directly/i,
+		);
+
+		setWriteLocation(cwd, "global");
+		let state = setGateAutoEnabled(cwd, true);
+		assert.strictEqual(state.writeLocation, "global");
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.enabled"), true);
+		assert.strictEqual(getVarValue(state, "gate.auto.enabled"), "true");
+		assert.strictEqual(state.projectConfig.gate && typeof state.projectConfig.gate === "object" && !Array.isArray(state.projectConfig.gate)
+			? (((state.projectConfig.gate as { auto?: unknown }).auto as { enabled?: unknown } | undefined)?.enabled)
+			: undefined, true);
+
+		state = setVar(cwd, "gate.auto.enabled", false);
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.enabled"), false);
+		assert.strictEqual(getVarValue(state, "gate.auto.enabled"), "false");
+
+		state = unsetVar(cwd, "gate.auto.enabled");
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.enabled"), false);
+		assert.strictEqual(getVarValue(state, "gate.auto.enabled"), "false");
+	});
+
+	test("gate.auto.startOnSession is user-configurable and defaults off", () => {
+		const cwd = makeWorkspace();
+		assert.strictEqual(getRawStoredVarValue(buildPromptVars(cwd), "gate.auto.startOnSession"), undefined);
+		assert.strictEqual(getVarValue(buildPromptVars(cwd), "gate.auto.startOnSession"), "false");
+		assert.throws(
+			() => setVar(cwd, "gate.auto.startOnSession", "true"),
+			/must be a boolean/i,
+		);
+		const state = setVar(cwd, "gate.auto.startOnSession", true);
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.startOnSession"), true);
+		assert.strictEqual(getVarValue(state, "gate.auto.startOnSession"), "true");
+	});
+
+	test("global gate.auto.enabled=true does not activate a project without explicit project opt-in", () => {
+		const cwd = makeWorkspace();
+		fs.mkdirSync(path.dirname(getGlobalVarsConfigPath()), { recursive: true });
+		fs.writeFileSync(getGlobalVarsConfigPath(), JSON.stringify({ gate: { auto: { enabled: true, timeoutMs: 900 } } }, null, 2));
+
+		const state = buildPromptVars(cwd);
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.enabled"), false);
+		assert.strictEqual(getVarValue(state, "gate.auto.enabled"), "false");
+		assert.strictEqual(getRawStoredVarValue(state, "gate.auto.timeoutMs"), 900);
 	});
 
 	test("derived vars cannot be set directly", () => {

@@ -46,6 +46,9 @@ Start pi, or if pi is already running, reload:
 - `/gate status` — show status
 - `/gate switch` — picker for available profiles
 - `/gate clear` — clear cached session approvals
+- `/gate auto status` — show local auto-approver status
+- `/gate auto on` — explicitly enable local auto-approval for ask decisions
+- `/gate auto off` — disable auto-approval and stop the managed runtime
 
 ## Policy format
 
@@ -162,6 +165,49 @@ More complete example with a base policy plus two profiles:
   }
 }
 ```
+
+## Local auto-approval
+
+`pi-gate` can optionally mediate `ask` decisions through a local llama.cpp approver. Hard `allow` and hard `deny` are unchanged; hard deny is never model-overridable. A model `allow` approves one concrete tool call only and never creates an `Allow for session` entry.
+
+Enablement is explicit and project-scoped:
+
+```text
+/gate auto on
+/gate auto off
+/gate auto status
+```
+
+`/gate auto on` writes `gate.auto.enabled=true` through the protected z-prompt-vars helper and starts auto approval for the current Pi session. Generic `/vars set gate.auto.enabled true` is rejected. `/gate auto off` writes project `false` and stops any managed `llama-server` owned by this process.
+
+Auto approval does not start by default after a fresh Pi start, even when the project has previously been enabled. Users who want opt-in autostart for a project can set `gate.auto.startOnSession=true`.
+
+Config keys:
+
+```text
+gate.auto.startOnSession=false                 # true to auto-start after Pi restart
+gate.auto.llama.endpoint=http://127.0.0.1:8080 # optional external server
+gate.auto.llama.serverPath=/path/to/llama-server # managed mode
+gate.auto.llama.modelPath=/path/to/MiniCPM5-1B-Q4_K_M.gguf
+gate.auto.timeoutMs=1500
+gate.auto.llama.warmup=true
+gate.auto.audit.enabled=true
+```
+
+If no endpoint is configured, the top-level process can launch a managed `llama-server` when `serverPath` and `modelPath` are set. Delegated subagents inherit the top-level endpoint through reserved `PI_GATE_AUTO_*` environment metadata and do not spawn their own server by default.
+
+Fallback matrix:
+
+- model `allow` → allow this call once, unless deterministic risk flags downgrade it
+- model `deny` or guarded `escalate` → soft-block the call and return the reason to the agent so it can try a safer alternative
+- after 3 consecutive or 20 total auto-blocks, top-level interactive sessions pause auto mode and prompt the user; approving a prompted action resumes auto mode
+- timeout, malformed output, or unavailable endpoint → human prompt when interactive, otherwise block
+
+The model receives compact stable context plus a per-call `riskAssessment`. Deterministic guards keep secrets, broad destructive actions, package-manager changes, network/remote access, privilege escalation, opaque/unknown commands, and unclassified non-readonly bash from being silently auto-allowed even if the model is too permissive.
+
+When enabled, the footer shows `gate:<profile> auto`, with `auto` in golden yellow. Successful auto approvals are quiet. Decisions are logged to `.pi/state/pi-gate/auto-approvals.jsonl` with bounded summaries and hashes.
+
+The package does not bundle llama.cpp or the GGUF model. Users own those local dependencies: install/provide `llama-server`, choose where model artifacts live, and pass `/vars set gate.auto.llama.*` paths. `node scripts/setup-gate-auto-approver.mjs` is only a helper: it downloads/verifies the default MiniCPM5-1B Q4 GGUF model, locates `llama-server`, and prints the `/vars set ...` commands. Its default artifact root is `$PICODE_GATE_AUTO_HOME`, else `$HF_HOME/picode/gate-auto-approver`, else `~/.pi/picode/gate-auto-approver`; `--install-dir` overrides it. The helper configures paths but does not make auto approval start automatically after every Pi restart; set `gate.auto.startOnSession=true` if you want that. Run `node scripts/eval-gate-auto-approver.mjs --repeat 3` to start the local model and exercise a fixed real-model decision suite, or `npm run smoke:gate-auto` for the full pi-gate soft-block harness.
 
 ## Actions
 

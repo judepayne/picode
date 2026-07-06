@@ -14,6 +14,8 @@ const DEFAULT_PLAN_PATH = ".pi/plans/active.md";
 const DEFAULT_DESIGN_PATH = ".pi/designs/active.md";
 const DEFAULT_PROMPT_VARS: PromptVarMap = {
 	"automode.enabled": "false",
+	"gate.auto.enabled": "false",
+	"gate.auto.startOnSession": "false",
 };
 
 const RESERVED_DERIVED_VAR_KEYS = new Set([
@@ -330,6 +332,25 @@ function defaultBootstrapVarsConfig(): VarsConfig {
 		automode: {
 			enabled: false,
 		},
+		gate: {
+			auto: {
+				enabled: false,
+				backend: "llama.cpp",
+				timeoutMs: 1500,
+				llama: {
+					host: "127.0.0.1",
+					port: 0,
+				},
+				context: {
+					includeAgentsMd: true,
+					includeAgents: true,
+					includeSubagents: true,
+				},
+				audit: {
+					enabled: true,
+				},
+			},
+		},
 	};
 }
 
@@ -398,6 +419,12 @@ function validateMutableVarKey(key: string): string {
 	if (trimmed === "automode") {
 		throw new Error('Cannot set "automode" directly. Use "automode.enabled" to clear automode, or /automode from Designer to start it.');
 	}
+	if (trimmed === "gate" || trimmed === "gate.auto") {
+		throw new Error('Cannot set "gate.auto" directly. Use individual gate.auto.* keys, and /gate auto on to enable auto-approval.');
+	}
+	if (trimmed.startsWith("gate.auto.enabled.")) {
+		throw new Error("Cannot set nested keys under gate.auto.enabled; it is a scalar boolean value.");
+	}
 	if (trimmed.startsWith("paths.plan.") || trimmed.startsWith("paths.design.")) {
 		throw new Error(`Cannot set nested keys under ${trimmed.startsWith("paths.plan.") ? "paths.plan" : "paths.design"}; those keys are scalar path values.`);
 	}
@@ -415,14 +442,16 @@ export function buildPromptVars(cwd: string, modeId?: string): VarsState {
 	const project = readScopeConfig(cwd, "project", varsFileName);
 	const global = readScopeConfig(cwd, "global", varsFileName);
 	const mergedConfig = deepMergeConfig(global.config, project.config);
-	const storedVars = flattenConfigVars(mergedConfig);
-	const builtInPromptVars = getBuiltInPromptVars(cwd, modeId, mergedConfig);
+	const gateAutoEnabled = getNestedValue(project.config, "gate.auto.enabled") === true;
+	const effectiveConfig = setNestedValue(mergedConfig, "gate.auto.enabled", gateAutoEnabled);
+	const storedVars = flattenConfigVars(effectiveConfig);
+	const builtInPromptVars = getBuiltInPromptVars(cwd, modeId, effectiveConfig);
 	return {
 		configPath: writeLocation.value === "project"
 			? getProjectVarsConfigPath(cwd, varsFileName)
 			: getGlobalVarsConfigPath(varsFileName),
 		configError: mergeErrors(project.error, global.error, writeLocation.error),
-		config: mergedConfig,
+		config: effectiveConfig,
 		globalConfig: global.config,
 		projectConfig: project.config,
 		storedVars,
@@ -567,7 +596,7 @@ export function setWriteLocation(cwd: string, location: PiLocation, modeId?: str
 	return buildPromptVars(cwd, modeId);
 }
 
-function setVarInternal(cwd: string, key: string, value: unknown, modeId: string | undefined, options?: { allowAutomodeEnable?: boolean; writeLocationOverride?: PiLocation }): VarsState {
+function setVarInternal(cwd: string, key: string, value: unknown, modeId: string | undefined, options?: { allowAutomodeEnable?: boolean; allowGateAutoEnable?: boolean; writeLocationOverride?: PiLocation }): VarsState {
 	const normalizedKey = validateMutableVarKey(key);
 	if ((normalizedKey === "paths.plan" || normalizedKey === "paths.design") && typeof value !== "string") {
 		throw new Error(`${normalizedKey} must be a string path.`);
@@ -581,10 +610,16 @@ function setVarInternal(cwd: string, key: string, value: unknown, modeId: string
 	if (normalizedKey === "automode.enabled" && value === true && options?.allowAutomodeEnable !== true) {
 		throw new Error('Cannot set automode.enabled=true directly. Start automode with /automode from Designer mode.');
 	}
+	if ((normalizedKey === "gate.auto.enabled" || normalizedKey === "gate.auto.startOnSession") && typeof value !== "boolean") {
+		throw new Error(`${normalizedKey} must be a boolean.`);
+	}
+	if (normalizedKey === "gate.auto.enabled" && value === true && options?.allowGateAutoEnable !== true) {
+		throw new Error("Cannot set gate.auto.enabled=true directly. Use /gate auto on.");
+	}
 
 	const currentWriteLocation = ensureWriteLocationConfig(cwd);
 	const writeLocation = {
-		value: normalizedKey === "automode.enabled" ? "project" : options?.writeLocationOverride ?? currentWriteLocation.value,
+		value: normalizedKey === "automode.enabled" || normalizedKey === "gate.auto.enabled" ? "project" : options?.writeLocationOverride ?? currentWriteLocation.value,
 		varsFileName: currentWriteLocation.varsFileName,
 	};
 	const { config } = readScopeConfig(cwd, writeLocation.value, writeLocation.varsFileName, true);
@@ -601,15 +636,21 @@ export function setAutomodeEnabled(cwd: string, enabled: boolean, modeId?: strin
 	return setVarInternal(cwd, "automode.enabled", enabled, modeId, { allowAutomodeEnable: enabled, writeLocationOverride: "project" });
 }
 
+export function setGateAutoEnabled(cwd: string, enabled: boolean, modeId?: string): VarsState {
+	return setVarInternal(cwd, "gate.auto.enabled", enabled, modeId, { allowGateAutoEnable: enabled, writeLocationOverride: "project" });
+}
+
 export function unsetVar(cwd: string, key: string, modeId?: string): VarsState {
 	const normalizedKey = validateMutableVarKey(key);
 	const currentWriteLocation = ensureWriteLocationConfig(cwd);
 	const writeLocation = {
-		value: normalizedKey === "automode.enabled" ? "project" : currentWriteLocation.value,
+		value: normalizedKey === "automode.enabled" || normalizedKey === "gate.auto.enabled" ? "project" : currentWriteLocation.value,
 		varsFileName: currentWriteLocation.varsFileName,
 	};
 	const { config } = readScopeConfig(cwd, writeLocation.value, writeLocation.varsFileName, true);
-	const nextConfig = unsetNestedValue(config, normalizedKey);
+	const nextConfig = normalizedKey === "gate.auto.enabled"
+		? setNestedValue(config, normalizedKey, false)
+		: unsetNestedValue(config, normalizedKey);
 	writeVarsConfig(cwd, nextConfig, writeLocation.value, writeLocation.varsFileName);
 	return buildPromptVars(cwd, modeId);
 }

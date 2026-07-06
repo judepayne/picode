@@ -1,9 +1,15 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+
+import { loadGateAutoConfig } from "./auto-approver/config.ts";
+import { GateAutoApproverManager } from "./auto-approver/manager.ts";
+import type { GateAutoApprovalRequest, GateAutoApprovalResult } from "./auto-approver/types.ts";
+import { setGateAutoEnabled } from "../z-prompt-vars/prompt-vars.ts";
 
 type PermissionAction = "allow" | "ask" | "deny";
 
@@ -107,8 +113,9 @@ const POLICY_SCHEMA_FILE = "policy.schema.json";
 const BASE_PROFILE_NAME = "$base";
 const GATE_ERROR_STATUS = "gate:error";
 const MAX_SESSION_ALLOWS = 100;
-const SHELL_COMPLEXITY_PATTERN = /(^|[^\\])(\|\||&&|[;`]|\$\()/;
-const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "then", "do", "else", "elif", "fi"]);
+const AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD = 3;
+const AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD = 20;
+const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "&", "then", "do", "else", "elif", "fi"]);
 const PATH_SUBJECTS = new Set(["read", "edit", "list", "external_directory"]);
 const ACTION_PRIORITY: Record<PermissionAction, number> = { allow: 0, ask: 1, deny: 2 };
 const BUILTIN_PERMISSION: PermissionConfig = {
@@ -338,11 +345,6 @@ function validatePolicySemantics(policy: RawPolicy): string | undefined {
 
 	for (const profileName of Object.keys(profiles)) {
 		const error = visit(profileName);
-		if (error) return error;
-	}
-
-	for (const profileName of Object.keys(profiles)) {
-		const error = validateUnattendedProfile(policy, profileName);
 		if (error) return error;
 	}
 
@@ -757,8 +759,23 @@ function tokenizeShell(command: string): string[] | undefined {
 			current += command[++i] ?? "";
 			continue;
 		}
+		if (ch === "\n" || ch === "\r") {
+			flush();
+			tokens.push(";");
+			continue;
+		}
 		if (/\s/.test(ch)) {
 			flush();
+			continue;
+		}
+		if (ch === "<") {
+			flush();
+			if (command[i + 1] === "<") {
+				tokens.push("<<");
+				i++;
+			} else {
+				tokens.push("<");
+			}
 			continue;
 		}
 		if (ch === ">") {
@@ -776,10 +793,14 @@ function tokenizeShell(command: string): string[] | undefined {
 			tokens.push(";");
 			continue;
 		}
-		if (ch === "&" && command[i + 1] === "&") {
+		if (ch === "&") {
 			flush();
-			tokens.push("&&");
-			i++;
+			if (command[i + 1] === "&") {
+				tokens.push("&&");
+				i++;
+			} else {
+				tokens.push("&");
+			}
 			continue;
 		}
 		if (ch === "|") {
@@ -798,6 +819,34 @@ function tokenizeShell(command: string): string[] | undefined {
 	if (quote) return undefined;
 	flush();
 	return tokens;
+}
+
+function hasShellSubstitution(command: string): boolean {
+	let quote: "single" | "double" | undefined;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote === "single") {
+			if (ch === "'") quote = undefined;
+			continue;
+		}
+		if (quote === "double") {
+			if (ch === '"') quote = undefined;
+			else if (ch === "\\") i++;
+			else if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+			continue;
+		}
+		if (ch === "'") quote = "single";
+		else if (ch === '"') quote = "double";
+		else if (ch === "\\") i++;
+		else if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+	}
+	return false;
+}
+
+function isComplexShellCommand(command: string, tokens: string[] | undefined): boolean {
+	if (!tokens) return true;
+	if (hasShellSubstitution(command)) return true;
+	return tokens.some((token) => isShellSeparator(token) || token === ">" || token === ">>" || token === "<" || token === "<<");
 }
 
 function normalizeShellToken(token: string): string {
@@ -923,7 +972,7 @@ export function extractMutationTargets(command: string, cwd: string): MutationAn
 	const mutating = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\btee\b|\bln\b|\binstall\b|\bchmod\b|\bchown\b|\bfind\b[^\n]*\s-delete\b|\bgit\s+clean\b|>|\bsed\b[^\n]*\s-i|\bperl\b[^\n]*\s-pi/.test(lower)
 		|| tokenizedFindDelete
 		|| hasMutatingAwkPattern(command);
-	const complex = SHELL_COMPLEXITY_PATTERN.test(command);
+	const complex = isComplexShellCommand(command, tokens);
 	if (!mutating) {
 		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: "read-only command" };
 	}
@@ -1036,6 +1085,7 @@ function updateStatus(
 	sessionAllows: Set<string>,
 	yolo = false,
 	locked = false,
+	autoEnabled = false,
 ): void {
 	if (!ctx.hasUI) return;
 	if (yolo) {
@@ -1043,8 +1093,9 @@ function updateStatus(
 		return;
 	}
 	const lockSuffix = locked ? "🔒" : "";
+	const autoSuffix = autoEnabled ? " \u001b[1;38;2;247;207;5mauto\u001b[0m" : "";
 	const sessionSuffix = sessionAllows.size > 0 ? ` +${sessionAllows.size}` : "";
-	ctx.ui.setStatus(SESSION_STATUS_KEY, `gate:${profileName ?? "base"}${lockSuffix}${sessionSuffix}`);
+	ctx.ui.setStatus(SESSION_STATUS_KEY, `gate:${profileName ?? "base"}${lockSuffix}${autoSuffix}${sessionSuffix}`);
 }
 
 async function confirmDecision(
@@ -1055,6 +1106,7 @@ async function confirmDecision(
 	sessionAllows: Set<string>,
 	profileName: string,
 	locked = false,
+	autoEnabled = false,
 ): Promise<{ allow: boolean; sessionStored: boolean }> {
 	if (!ctx.hasUI) return { allow: false, sessionStored: false };
 	const choice = await ctx.ui.select(`${title}\n\n${message}`, ["Allow once", "Allow for session", "Deny"]);
@@ -1063,7 +1115,7 @@ async function confirmDecision(
 		// Cap at MAX_SESSION_ALLOWS to prevent unbounded memory growth.
 		if (sessionAllows.size >= MAX_SESSION_ALLOWS) sessionAllows.clear();
 		sessionAllows.add(sessionKey);
-		updateStatus(ctx, profileName, sessionAllows, false, locked);
+		updateStatus(ctx, profileName, sessionAllows, false, locked, autoEnabled);
 		return { allow: true, sessionStored: true };
 	}
 	return { allow: false, sessionStored: false };
@@ -1073,11 +1125,168 @@ function pickReason(reasons: string[], action: PermissionAction, fallback: strin
 	return reasons.find((reason) => reason.includes(` ${action}:`)) ?? reasons[0] ?? fallback;
 }
 
+function hashSessionKey(value: string): string {
+	return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function boundedJson(value: unknown, maxChars = 2000): unknown {
+	try {
+		const text = JSON.stringify(value);
+		if (text.length <= maxChars) return value;
+		return `${text.slice(0, maxChars)}…[truncated ${text.length - maxChars} chars]`;
+	} catch {
+		return "<unserializable>";
+	}
+}
+
+interface GateAskDecisionInput {
+	ctx: ExtensionContext;
+	effective: EffectiveGatePolicy;
+	event: { toolName: string; input: unknown };
+	title: string;
+	message: string;
+	sessionKey: string;
+	reasons: string[];
+	fallbackDenyReason: string;
+	subject: string;
+	pathCandidates?: string[];
+	bash?: {
+		command: string;
+		normalizedCommand: string;
+		analysis: MutationAnalysis;
+	};
+}
+
+function buildAutoApprovalRequest(input: GateAskDecisionInput): GateAutoApprovalRequest {
+	return {
+		requestId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+		profileName: input.effective.profileName,
+		lineageNames: input.effective.lineageNames,
+		cwd: input.ctx.cwd,
+		unattended: input.effective.unattended,
+		toolName: input.event.toolName,
+		subject: input.subject,
+		sessionKeyHash: hashSessionKey(input.sessionKey),
+		reasons: input.reasons,
+		inputSummary: boundedJson(input.event.input),
+		pathCandidates: input.pathCandidates,
+		bash: input.bash,
+	};
+}
+
+interface GateAutoBlockState {
+	consecutive: number;
+	total: number;
+	paused: boolean;
+}
+
+function resetAutoBlockState(state: GateAutoBlockState): void {
+	state.consecutive = 0;
+	state.total = 0;
+	state.paused = false;
+}
+
+function formatAutoFallbackReason(result: GateAutoApprovalResult | undefined): string | undefined {
+	if (!result) return undefined;
+	if (result.outcome === "blocked") return `Auto-approver blocked: ${result.reason}`;
+	if (result.outcome === "escalated") return `Auto-approver blocked for review: ${result.reason}`;
+	if (["timeout", "malformed", "unavailable", "error"].includes(result.outcome)) return `Auto-approver unavailable: ${result.reason}`;
+	return undefined;
+}
+
+function isAutoSoftBlock(result: GateAutoApprovalResult): boolean {
+	return result.outcome === "blocked" || result.outcome === "escalated";
+}
+
+async function promptForAskDecision(
+	input: GateAskDecisionInput,
+	sessionAllows: Set<string>,
+	profileLocked: boolean,
+	autoEnabled: boolean,
+	fallbackReason?: string,
+): Promise<{ block?: boolean; reason?: string; allowed?: boolean }> {
+	if (input.effective.unattended) {
+		return {
+			block: true,
+			reason: `${fallbackReason ? `${fallbackReason}. ` : ""}${pickReason(input.reasons, "ask", input.fallbackDenyReason)}. Profile ${input.effective.profileName} is unattended and cannot prompt for approval.`,
+		};
+	}
+	if (!input.ctx.hasUI) {
+		return {
+			block: true,
+			reason: `${fallbackReason ? `${fallbackReason}. ` : ""}${pickReason(input.reasons, "ask", `${input.fallbackDenyReason} but no UI is available`)}`,
+		};
+	}
+	const result = await confirmDecision(
+		input.ctx,
+		input.title,
+		[fallbackReason, input.message].filter(Boolean).join("\n\n"),
+		input.sessionKey,
+		sessionAllows,
+		input.effective.profileName,
+		profileLocked,
+		autoEnabled,
+	);
+	if (result.allow) return { allowed: true };
+	return { block: true, reason: pickReason(input.reasons, "ask", input.fallbackDenyReason) };
+}
+
+async function resolveAskDecision(
+	input: GateAskDecisionInput,
+	sessionAllows: Set<string>,
+	profileLocked: boolean,
+	autoManager: GateAutoApproverManager,
+	autoBlockState: GateAutoBlockState,
+	autoRuntimeEnabled: boolean,
+): Promise<{ block?: boolean; reason?: string } | undefined> {
+	let autoFallback: GateAutoApprovalResult | undefined;
+	if (autoRuntimeEnabled) await autoManager.refresh(input.ctx);
+	if (autoRuntimeEnabled && autoManager.isEnabled()) {
+		if (autoBlockState.paused) {
+			const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, "Gate auto is paused after repeated auto-blocks; approving resumes auto mode");
+			if (prompted.allowed) {
+				resetAutoBlockState(autoBlockState);
+				return undefined;
+			}
+			return prompted;
+		}
+		const autoResult = await autoManager.decide(input.ctx, buildAutoApprovalRequest(input));
+		if (autoResult.decision === "allow" && autoResult.outcome === "allowed") {
+			autoBlockState.consecutive = 0;
+			return undefined;
+		}
+		if (isAutoSoftBlock(autoResult)) {
+			autoBlockState.consecutive += 1;
+			autoBlockState.total += 1;
+			const fallbackReason = formatAutoFallbackReason(autoResult);
+			if (autoBlockState.consecutive >= AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD || autoBlockState.total >= AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD) {
+				autoBlockState.paused = true;
+				const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, `${fallbackReason}. Gate auto paused after ${autoBlockState.consecutive} consecutive / ${autoBlockState.total} total auto-blocks; approving resumes auto mode`);
+				if (prompted.allowed) {
+					resetAutoBlockState(autoBlockState);
+					return undefined;
+				}
+				return prompted;
+			}
+			return { block: true, reason: `Gate auto-approver blocked ${input.event.toolName}: ${autoResult.reason}` };
+		}
+		autoFallback = autoResult;
+	}
+
+	const fallbackReason = formatAutoFallbackReason(autoFallback);
+	const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, autoRuntimeEnabled && autoManager.isEnabled(), fallbackReason);
+	if (prompted.allowed) return undefined;
+	return prompted;
+}
+
 export default function piGate(pi: ExtensionAPI) {
 	const extensionDir = path.dirname(fileURLToPath(import.meta.url));
 	const policyPath = path.join(extensionDir, "policy.json");
 	const schemaPath = path.join(extensionDir, POLICY_SCHEMA_FILE);
 	const loaded = loadPolicy(policyPath, schemaPath);
+	const autoManager = new GateAutoApproverManager(pi);
+	const autoBlockState: GateAutoBlockState = { consecutive: 0, total: 0, paused: false };
+	let autoRuntimeEnabled = false;
 	const sessionAllows = new Set<string>();
 	const profileLocked = isEnvEnabled(process.env[GATE_PROFILE_LOCK_ENV]);
 	let policyErrorShown = false;
@@ -1152,7 +1361,7 @@ export default function piGate(pi: ExtensionAPI) {
 		sessionAllows.clear();
 		try {
 			const compiled = compilePolicy(loaded.policy, ctx.cwd, normalizedProfile);
-			updateStatus(ctx, compiled.profileName, sessionAllows, false, profileLocked);
+			updateStatus(ctx, compiled.profileName, sessionAllows, false, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 			if (options?.notify ?? true) {
 				ctx.ui.notify(`Gate profile switched to ${compiled.profileName}`, "info");
 			}
@@ -1204,9 +1413,13 @@ export default function piGate(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
+		const autoConfig = loadGateAutoConfig(ctx.cwd);
+		autoRuntimeEnabled = autoConfig.enabled && (autoConfig.startOnSession || (autoConfig.processKind === "subagent" && Boolean(autoConfig.inheritedEndpoint)));
+		if (autoRuntimeEnabled) await autoManager.refresh(ctx);
+		else await autoManager.disable(ctx);
 		const result = getEffectivePolicy(ctx.cwd);
-		if (result.compiled) updateStatus(ctx, result.compiled.profileName, sessionAllows, false, profileLocked);
-		else updateStatus(ctx, undefined, sessionAllows, true, profileLocked);
+		if (result.compiled) updateStatus(ctx, result.compiled.profileName, sessionAllows, false, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
+		else updateStatus(ctx, undefined, sessionAllows, true, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 		if (result.error && ctx.hasUI && !policyErrorShown) {
 			policyErrorShown = true;
 			ctx.ui.notify(result.error, "warning");
@@ -1217,9 +1430,12 @@ export default function piGate(pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => {
 		currentCtx = ctx;
 		flushPendingProfileSwitch(ctx);
+		const result = getEffectivePolicy(ctx.cwd);
+		if (result.compiled) updateStatus(ctx, result.compiled.profileName, sessionAllows, false, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 	});
 
 	pi.on("session_shutdown", async () => {
+		await autoManager.shutdown();
 		currentCtx = undefined;
 		pendingProfileSwitch = undefined;
 	});
@@ -1251,6 +1467,57 @@ export default function piGate(pi: ExtensionAPI) {
 
 	const commandHandler = async (args: string, ctx: ExtensionContext) => {
 		const trimmed = args.trim();
+		const autoArgs = trimmed.split(/\s+/);
+		if (autoArgs[0] === "auto") {
+			const action = autoArgs[1] ?? "status";
+			if (action === "on") {
+				setGateAutoEnabled(ctx.cwd, true);
+				autoRuntimeEnabled = true;
+				resetAutoBlockState(autoBlockState);
+				const status = await autoManager.enable(ctx);
+				const resolved = getEffectivePolicy(ctx.cwd);
+				updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
+				ctx.ui.notify(
+					status.mode === "managed" || status.mode === "external" || status.mode === "inherited"
+						? `Gate auto enabled (${status.mode}${status.endpoint ? ` ${status.endpoint}` : ""})`
+						: `Gate auto enabled but not ready: ${status.lastError ?? status.mode}`,
+					status.mode === "managed" || status.mode === "external" || status.mode === "inherited" ? "info" : "warning",
+				);
+				return;
+			}
+			if (action === "off") {
+				setGateAutoEnabled(ctx.cwd, false);
+				autoRuntimeEnabled = false;
+				await autoManager.disable(ctx);
+				resetAutoBlockState(autoBlockState);
+				const resolved = getEffectivePolicy(ctx.cwd);
+				updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked, false);
+				ctx.ui.notify("Gate auto disabled", "info");
+				return;
+			}
+			if (action === "status") {
+				if (autoRuntimeEnabled) await autoManager.refresh(ctx);
+				else await autoManager.disable(ctx);
+				const status = autoManager.status(ctx);
+				const autoConfig = loadGateAutoConfig(ctx.cwd);
+				ctx.ui.notify([
+					`Gate auto enabled=${status.enabled}`,
+					`runtime=${autoRuntimeEnabled && autoManager.isEnabled()}`,
+					`startOnSession=${autoConfig.startOnSession}`,
+					`mode=${status.mode}`,
+					`process=${status.processKind}`,
+					status.endpoint ? `endpoint=${status.endpoint}` : undefined,
+					status.pid ? `pid=${status.pid}` : undefined,
+					status.modelPath ? `model=${status.modelPath}` : undefined,
+					status.serverPath ? `server=${status.serverPath}` : undefined,
+					status.lastError ? `lastError=${status.lastError}` : undefined,
+					status.auditPath ? `audit=${status.auditPath}` : undefined,
+				].filter(Boolean).join(" | "), status.lastError ? "warning" : "info");
+				return;
+			}
+			ctx.ui.notify("Gate: unknown auto subcommand. Use /gate auto on, /gate auto off, or /gate auto status", "warning");
+			return;
+		}
 		if (trimmed === "switch") {
 			if (profileLocked) {
 				ctx.ui.notify(`Gate profile is locked by ${GATE_PROFILE_LOCK_ENV}`, "warning");
@@ -1281,7 +1548,7 @@ export default function piGate(pi: ExtensionAPI) {
 				selectedProfileOverride = undefined;
 				const fresh = getEffectivePolicy(ctx.cwd);
 				if (fresh.compiled?.profileName !== previousProfile) sessionAllows.clear();
-				updateStatus(ctx, fresh.compiled?.profileName, sessionAllows, !fresh.compiled, profileLocked);
+				updateStatus(ctx, fresh.compiled?.profileName, sessionAllows, !fresh.compiled, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 				ctx.ui.notify(`Gate profile reset to ${fresh.compiled?.profileName ?? "error"}`, "info");
 				return;
 			}
@@ -1295,19 +1562,23 @@ export default function piGate(pi: ExtensionAPI) {
 		const resolved = getEffectivePolicy(ctx.cwd);
 		if (trimmed === "clear") {
 			sessionAllows.clear();
-			updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked);
+			updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 			ctx.ui.notify("Gate session approvals cleared", "info");
 			return;
 		}
 
 		if (trimmed !== "" && trimmed !== "status") {
 			ctx.ui.notify(
-				"Gate: unknown subcommand. Use /gate status, /gate switch, or /gate clear",
+				"Gate: unknown subcommand. Use /gate status, /gate switch, /gate clear, or /gate auto status|on|off",
 				"warning",
 			);
 			return;
 		}
 
+		if (autoRuntimeEnabled) await autoManager.refresh(ctx);
+		else await autoManager.disable(ctx);
+		const autoStatus = autoManager.status(ctx);
+		const autoConfig = loadGateAutoConfig(ctx.cwd);
 		const summary = [
 			resolved.compiled ? `Gate profile=${resolved.compiled.profileName}` : "Gate profile=error",
 			resolved.compiled && resolved.compiled.lineageNames.length > 1 ? `lineage=${resolved.compiled.lineageNames.join(">")}` : undefined,
@@ -1315,6 +1586,11 @@ export default function piGate(pi: ExtensionAPI) {
 			profileLocked ? `profile locked by=${GATE_PROFILE_LOCK_ENV}` : undefined,
 			selectedProfileOverride ? `profile override=${selectedProfileOverride === BASE_PROFILE_NAME ? "base" : selectedProfileOverride}` : undefined,
 			`session approvals=${sessionAllows.size}`,
+			`auto enabled=${autoStatus.enabled}`,
+			`auto runtime=${autoRuntimeEnabled && autoManager.isEnabled()}`,
+			`auto startOnSession=${autoConfig.startOnSession}`,
+			`auto mode=${autoStatus.mode}`,
+			autoStatus.lastError ? `auto lastError=${autoStatus.lastError}` : undefined,
 			`policy file=${loaded.policyPath}`,
 			`schema file=${loaded.schemaPath}`,
 			resolved.error ? `status=${resolved.error}` : undefined,
@@ -1325,7 +1601,7 @@ export default function piGate(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("gate", {
-		description: "status, switch (switch profiles), clear (clear cached approvals)",
+		description: "status, switch (switch profiles), clear (clear cached approvals), auto on|off|status",
 		handler: commandHandler,
 	});
 
@@ -1353,7 +1629,7 @@ export default function piGate(pi: ExtensionAPI) {
 				return { block: true, reason: pickReason(commandDecision.reasons, "deny", "Gate denied bash command") };
 			}
 
-			if (commandDecision.action === "allow" && !analysis.mutating) {
+			if (commandDecision.action === "allow" && !analysis.mutating && !analysis.complex) {
 				return undefined;
 			}
 
@@ -1377,37 +1653,41 @@ export default function piGate(pi: ExtensionAPI) {
 				finalAction = "ask";
 				reasons.push(`bash ask: ${analysis.reason}`);
 			}
+			if (analysis.complex && finalAction === "allow") {
+				finalAction = "ask";
+				reasons.push("bash ask: complex shell command requires review");
+			}
 
 			if (finalAction === "allow") return undefined;
 			if (finalAction === "deny") {
 				return { block: true, reason: pickReason(reasons, "deny", "Gate denied bash command") };
 			}
 
-			if (compiled.unattended) {
-				return {
-					block: true,
-					reason: `${pickReason(reasons, "ask", "Gate requires confirmation for bash command")}. Profile ${compiled.profileName} is unattended and cannot prompt for approval.`,
-				};
-			}
-			if (!ctx.hasUI) {
-				return { block: true, reason: pickReason(reasons, "ask", "Gate requires confirmation for bash command but no UI is available") };
-			}
-			const result = await confirmDecision(
-				ctx,
-				"Gate: confirm bash command",
-				[
-					normalizedCommand || command,
-					"",
-					...reasons,
-					`Profile: ${compiled.profileName}`,
-				].join("\n"),
-				sessionKey,
+			return await resolveAskDecision(
+				{
+					ctx,
+					effective: compiled,
+					event,
+					title: "Gate: confirm bash command",
+					message: [
+						normalizedCommand || command,
+						"",
+						...reasons,
+						`Profile: ${compiled.profileName}`,
+					].join("\n"),
+					sessionKey,
+					reasons,
+					fallbackDenyReason: "Gate denied bash command",
+					subject: "bash",
+					pathCandidates: analysis.paths.length > 0 ? analysis.paths : analysis.inferredCwdTarget ? [normalizeAbsPath(ctx.cwd)] : [],
+					bash: { command, normalizedCommand, analysis },
+				},
 				sessionAllows,
-				compiled.profileName,
 				profileLocked,
+				autoManager,
+				autoBlockState,
+				autoRuntimeEnabled,
 			);
-			if (result.allow) return undefined;
-			return { block: true, reason: pickReason(reasons, "ask", "Gate denied bash command") };
 		}
 
 		const input = event.input as Record<string, unknown>;
@@ -1436,25 +1716,24 @@ export default function piGate(pi: ExtensionAPI) {
 		if (finalAction === "deny") {
 			return { block: true, reason: pickReason(reasons, "deny", `Gate denied ${event.toolName}`) };
 		}
-		if (compiled.unattended) {
-			return {
-				block: true,
-				reason: `${pickReason(reasons, "ask", `Gate requires confirmation for ${event.toolName}`)}. Profile ${compiled.profileName} is unattended and cannot prompt for approval.`,
-			};
-		}
-		if (!ctx.hasUI) {
-			return { block: true, reason: pickReason(reasons, "ask", `Gate requires confirmation for ${event.toolName} but no UI is available`) };
-		}
-		const result = await confirmDecision(
-			ctx,
-			`Gate: confirm ${event.toolName}`,
-			[...reasons, `Profile: ${compiled.profileName}`].join("\n"),
-			sessionKey,
+		return await resolveAskDecision(
+			{
+				ctx,
+				effective: compiled,
+				event,
+				title: `Gate: confirm ${event.toolName}`,
+				message: [...reasons, `Profile: ${compiled.profileName}`].join("\n"),
+				sessionKey,
+				reasons,
+				fallbackDenyReason: `Gate denied ${event.toolName}`,
+				subject,
+				pathCandidates,
+			},
 			sessionAllows,
-			compiled.profileName,
 			profileLocked,
+			autoManager,
+			autoBlockState,
+			autoRuntimeEnabled,
 		);
-		if (result.allow) return undefined;
-		return { block: true, reason: pickReason(reasons, "ask", `Gate denied ${event.toolName}`) };
 	});
 }

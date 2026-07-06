@@ -111,6 +111,7 @@ Once that is done, a good quick smoke test is:
 | Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>` |
 | Delegate through the active agent | Just ask in plain English |
 | Check / set prompt vars | `/vars` or `/vars set <key> <value>` |
+| Local auto-approval for gate asks | `/gate auto on`, `/gate auto off`, `/gate auto status` |
 | Bootstrap missing vars files | `/vars bootstrap` |
 | Check active plan or design | Ask the agent: "Show me the active plan" |
 | Reference plan or design in prompts | `${plan.path}` or `${design.path}` |
@@ -126,6 +127,8 @@ First, the main agent runs in one of several named **agents** such as Builder, P
 Second, permissions are enforced separately from persona through **pi-gate**. That matters. The prompt and agent-card metadata tell the agent how it should behave; pi-gate is the control layer that decides what it is actually allowed to do. In practice, switching agent also switches gate profile, so Builder can be broadly mutating, Planner can be read-mostly, and Designer can be constrained to design artefacts and scratch files.
 
 Pi-gate rules resolve to `allow`, `ask`, or `deny`. For the top-level agents, that gives you a useful balance: permissive where it should be, interactive where it would be risky, and blocked where it should never happen.
+
+Optionally, `/gate auto on` can mediate `ask` decisions through a local llama.cpp approver for the current Pi session. Hard denies remain final, model allows are one-call-only, risky calls are soft-blocked first so the agent can try alternatives, and repeated auto-blocks pause into normal prompting. It does not auto-start after a Pi restart unless `gate.auto.startOnSession=true` is set. Users own the local `llama-server` and GGUF model artifacts; helpers (`scripts/setup-gate-auto-approver.mjs`, `scripts/eval-gate-auto-approver.mjs`, `scripts/smoke-gate-auto-soft-block.mjs`) only configure/verify them.
 
 Third, the main agent can delegate bounded work to **subagents** such as scout, worker, and reviewer. Those subagents are not role-play. They run from their own markdown cards with their own tools and instructions.
 
