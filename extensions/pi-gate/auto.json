@@ -1,0 +1,130 @@
+{
+  "$schema": "./auto.schema.json",
+  "hardDeny": {
+    "read": [
+      "*.env",
+      "*.env.*",
+      "~/.ssh/**",
+      "~/.gnupg/**",
+      "~/.aws/**",
+      "**/*.pem",
+      "**/*.key"
+    ],
+    "edit": [
+      "*.env",
+      "*.env.*",
+      "~/.ssh/**",
+      "~/.gnupg/**",
+      "~/.aws/**",
+      "**/.git/**",
+      "**/*.pem",
+      "**/*.key",
+      "/etc/**"
+    ],
+    "bash": [
+      "rm -rf /*",
+      "rm -rf ~*",
+      "find* -exec rm -rf*",
+      "curl*|*sh*",
+      "curl* | *sh*",
+      "wget*|*sh*",
+      "wget* | *sh*"
+    ]
+  },
+  "agents": {
+    "builder": {
+      "guidance": "Allow ordinary coding work inside the project: reading files, narrow edits, focused tests, builds, and local refactors. Block or request human approval for external filesystem changes, broad destructive edits, dependency installs, network access, publishing, credential access, privilege escalation, or unclear user intent.",
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "bash": [
+          "pwd",
+          "ls*",
+          "git status*",
+          "git diff*",
+          "git log*",
+          "node --check*",
+          "node --test*",
+          "npm test*",
+          "npm run test*",
+          "npm run build*",
+          "npm run lint*"
+        ]
+      }
+    },
+    "planner": {
+      "guidance": "Allow project inspection and writing implementation plans. Do not allow source-code edits.",
+      "hardDeny": {
+        "edit": [
+          "${cwd}/src/**",
+          "${cwd}/extensions/**",
+          "${cwd}/scripts/**",
+          "${cwd}/package.json",
+          "${cwd}/package-lock.json",
+          "${cwd}/tsconfig*.json",
+          "${cwd}/**/*.ts",
+          "${cwd}/**/*.tsx",
+          "${cwd}/**/*.js",
+          "${cwd}/**/*.jsx",
+          "${cwd}/**/*.mjs",
+          "${cwd}/**/*.cjs",
+          "${cwd}/**/*.json"
+        ]
+      },
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "edit": ["${cwd}/.pi/plans/**"],
+        "bash": ["pwd", "ls*", "git status*", "git diff*", "rg*", "grep*", "find*"]
+      }
+    },
+    "designer": {
+      "guidance": "Allow project inspection and writing design notes. Do not allow source-code edits.",
+      "hardDeny": {
+        "edit": [
+          "${cwd}/src/**",
+          "${cwd}/extensions/**",
+          "${cwd}/scripts/**",
+          "${cwd}/package.json",
+          "${cwd}/package-lock.json",
+          "${cwd}/tsconfig*.json",
+          "${cwd}/**/*.ts",
+          "${cwd}/**/*.tsx",
+          "${cwd}/**/*.js",
+          "${cwd}/**/*.jsx",
+          "${cwd}/**/*.mjs",
+          "${cwd}/**/*.cjs",
+          "${cwd}/**/*.json"
+        ]
+      },
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "edit": ["${cwd}/.pi/designs/**", "${cwd}/**/*.md", "${cwd}/**/*.txt"],
+        "bash": ["pwd", "ls*", "git status*", "git diff*", "rg*", "grep*", "find*"]
+      }
+    }
+  },
+  "subagents": {
+    "scout": {
+      "guidance": "Allow read-only project reconnaissance. Do not allow edits or mutating commands.",
+      "hardDeny": {
+        "edit": ["*"]
+      },
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "bash": ["pwd", "ls*", "cat*", "head*", "tail*", "rg*", "grep*", "find*", "git status*", "git diff*"]
+      }
+    },
+    "worker": {
+      "guidance": "Allow focused implementation inside the project for the delegated task. Block external, broad, unrelated, destructive, credential, network, publishing, or privilege-related actions."
+    },
+    "reviewer": {
+      "guidance": "Allow read-only review and validation. Do not allow edits.",
+      "hardDeny": {
+        "edit": ["*"]
+      },
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "bash": ["pwd", "ls*", "cat*", "head*", "tail*", "rg*", "grep*", "find*", "git status*", "git diff*", "node --test*", "npm test*"]
+      }
+    }
+  }
+}

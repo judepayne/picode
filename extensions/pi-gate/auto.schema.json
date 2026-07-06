@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "./auto.schema.json",
+  "title": "Pi Gate Auto Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "hardDeny": {
+      "$ref": "#/$defs/rules"
+    },
+    "alwaysAllow": {
+      "$ref": "#/$defs/rules"
+    },
+    "agents": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/roleConfig"
+      }
+    },
+    "subagents": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/roleConfig"
+      }
+    }
+  },
+  "$defs": {
+    "subject": {
+      "type": "string",
+      "enum": ["read", "edit", "bash", "list", "glob", "grep", "external_directory"]
+    },
+    "patternList": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "read": { "$ref": "#/$defs/patternList" },
+        "edit": { "$ref": "#/$defs/patternList" },
+        "bash": { "$ref": "#/$defs/patternList" },
+        "list": { "$ref": "#/$defs/patternList" },
+        "glob": { "$ref": "#/$defs/patternList" },
+        "grep": { "$ref": "#/$defs/patternList" },
+        "external_directory": { "$ref": "#/$defs/patternList" }
+      }
+    },
+    "roleConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guidance"],
+      "properties": {
+        "guidance": {
+          "type": "string"
+        },
+        "hardDeny": {
+          "$ref": "#/$defs/rules"
+        },
+        "alwaysAllow": {
+          "$ref": "#/$defs/rules"
+        }
+      }
+    }
+  }
+}

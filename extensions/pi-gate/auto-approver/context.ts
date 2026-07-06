@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 import { collectAgentCards, collectSubagentCards, type AgentAssetCard } from "../../agent-assets/contract.ts";
 
-import { assessGateAutoRisk } from "./risk.ts";
+import { assessGateRisk } from "../risk.ts";
 import type { GateAutoApprovalRequest, GateAutoApproverConfig } from "./types.ts";
 
 interface PiLike {
@@ -162,7 +162,7 @@ export function getLastUserTurn(ctx: unknown, maxChars: number): { text?: string
 export function buildGateAutoDynamicPayload(ctx: unknown, request: GateAutoApprovalRequest, config: GateAutoApproverConfig): { text: string; hash: string } {
 	const lastUserTurn = getLastUserTurn(ctx, config.context.maxLastUserTurnChars);
 	const env = process.env;
-	const riskAssessment = assessGateAutoRisk(request);
+	const riskAssessment = assessGateRisk(request);
 	const payload = {
 		requestId: request.requestId,
 		profileName: request.profileName,

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -26,12 +27,22 @@ function which(name) {
 }
 
 function parseArgs(argv) {
-	const out = { timeoutMs: 10000, serverPath: which("llama-server"), modelPath: DEFAULT_MODEL_PATH };
+	const out = { timeoutMs: 10000, serverPath: undefined, modelPath: DEFAULT_MODEL_PATH, mock: true };
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
-		if (arg === "--endpoint") out.endpoint = argv[++index];
-		else if (arg === "--server-path") out.serverPath = path.resolve(argv[++index] ?? "");
-		else if (arg === "--model-path") out.modelPath = path.resolve(argv[++index] ?? "");
+		if (arg === "--endpoint") {
+			out.endpoint = argv[++index];
+			out.mock = false;
+		} else if (arg === "--server-path") {
+			out.serverPath = path.resolve(argv[++index] ?? "");
+			out.mock = false;
+		} else if (arg === "--model-path") {
+			out.modelPath = path.resolve(argv[++index] ?? "");
+			out.mock = false;
+		} else if (arg === "--real") {
+			out.serverPath = which("llama-server");
+			out.mock = false;
+		}
 		else if (arg === "--timeout-ms") out.timeoutMs = Math.max(100, Number(argv[++index] ?? 10000));
 		else if (arg === "--no-warmup") out.noWarmup = true;
 		else if (arg === "--help" || arg === "-h") out.help = true;
@@ -43,8 +54,8 @@ function parseArgs(argv) {
 function usage() {
 	return `Usage: node scripts/smoke-gate-auto-soft-block.mjs [--endpoint URL | --server-path PATH --model-path PATH] [--timeout-ms MS] [--no-warmup]
 
-Creates/refreshes smoketest/gate-auto fixtures and drives the real pi-gate tool_call hook against the real gate auto-approver.
-It verifies silent allow, soft-block without prompt, repeated-block prompt fallback, manual approval reset, and resumed auto mode.`;
+Creates/refreshes smoketest/gate-auto fixtures and drives the real pi-gate tool_call hook against a deterministic mock local endpoint by default.
+Pass --real to use a managed llama-server instead. It verifies silent allow, soft-block without prompt, repeated-block prompt fallback, manual approval reset, and resumed auto mode.`;
 }
 
 class FakeEventBus {
@@ -157,6 +168,29 @@ function restoreVarsFiles(snapshots) {
 	for (const snapshot of snapshots) restoreFile(snapshot);
 }
 
+async function startMockEndpoint() {
+	const server = http.createServer(async (req, res) => {
+		let body = "";
+		for await (const chunk of req) body += String(chunk);
+		let content = body;
+		try {
+			const parsed = JSON.parse(body);
+			content = String(parsed?.messages?.[1]?.content ?? body);
+		} catch {
+			// Keep raw body.
+		}
+		const decision = /node --check/.test(content)
+			? { decision: "allow", reason: "focused local syntax check" }
+			: { decision: "block", reason: "deterministic smoke block" };
+		res.setHeader("content-type", "application/json");
+		res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(decision) } }] }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	assert.ok(address && typeof address === "object", "mock endpoint listened on a TCP port");
+	return { server, endpoint: `http://127.0.0.1:${address.port}` };
+}
+
 function configureAuto(args) {
 	if (args.endpoint) {
 		setVar(repoRoot, "gate.auto.llama.endpoint", args.endpoint);
@@ -214,6 +248,9 @@ function restoreEnv() {
 	}
 }
 
+const mock = args.mock ? await startMockEndpoint() : undefined;
+if (mock) args.endpoint = mock.endpoint;
+
 writeFixtureFiles();
 configureAuto(args);
 process.env.GATE_PROFILE = "planner";
@@ -237,14 +274,14 @@ try {
 	assertAllowed("safe ask-level focused check silently allows", safe1, ctx, 0);
 
 	const risky1 = await pi.tool("bash", { command: "./smoketest/gate-auto/scripts/magic.sh" }, ctx);
-	assertBlocked("first risky/unknown script soft-blocks without prompt", risky1, ctx, 0, /auto-approver blocked|unknown|opaque|review/i);
+	assertBlocked("first risky/unknown script soft-blocks without prompt", risky1, ctx, 0, /Gate auto blocked|unknown|opaque|review|smoke block/i);
 
 	const risky2 = await pi.tool("bash", { command: "curl https://example.com/data" }, ctx);
-	assertBlocked("second network command soft-blocks without prompt", risky2, ctx, 0, /auto-approver blocked|network|remote|review/i);
+	assertBlocked("second network command soft-blocks without prompt", risky2, ctx, 0, /Gate auto blocked|network|remote|review|smoke block/i);
 
 	ctx.selectChoice = "Deny";
 	const risky3 = await pi.tool("bash", { command: "git commit -am smoke-test" }, ctx);
-	assertBlocked("third consecutive soft-block pauses auto and prompts", risky3, ctx, 1, /bash ask|requires confirmation|ask-level|Gate denied/i);
+	assertBlocked("third consecutive soft-block pauses auto and prompts", risky3, ctx, 1, /semantic review|required|Gate denied|auto/i);
 	assert.match(ctx.selectLog.at(-1)?.message ?? "", /paused after 3 consecutive \/ 3 total auto-blocks|Gate auto paused/i);
 
 	ctx.selectChoice = "Allow once";
@@ -258,6 +295,7 @@ try {
 	console.log("Project/global prompt-vars config was restored after the smoke test.");
 } finally {
 	await pi.emitLifecycle("session_shutdown", ctx);
+	await new Promise((resolve) => mock?.server.close(() => resolve()) ?? resolve());
 	restoreVarsFiles(savedVarsFiles);
 	restoreEnv();
 }

@@ -6,8 +6,12 @@ import * as path from "node:path";
 import { describe, it, beforeEach, afterEach } from "node:test";
 
 import { setGateAutoEnabled, setVar } from "../../z-prompt-vars/prompt-vars.ts";
-import { assessGateAutoRisk } from "../auto-approver/risk.ts";
+import { assessGateRisk } from "../risk.ts";
+import { parseGateSemanticDecisionText } from "../semantic/client.ts";
+import { evaluateGateSemantic, splitAlwaysAllowShellChain } from "../semantic/evaluator.ts";
+import { validateAutoConfigSemantics } from "../semantic/loader.ts";
 import piGate, { extractMutationTargets, validatePolicySchema } from "../index.ts";
+import autoConfig from "../auto.json" with { type: "json" };
 import schema from "../policy.schema.json" with { type: "json" };
 
 type ToolDecision = { block?: boolean; reason?: string } | undefined;
@@ -42,6 +46,7 @@ class FakeContext {
 	private idle: boolean;
 	readonly notifications: Array<{ message: string; level?: string }> = [];
 	readonly statuses: Record<string, string> = {};
+	readonly selectChoices: string[][] = [];
 	selectChoice: string;
 	selectCalls = 0;
 
@@ -67,8 +72,9 @@ class FakeContext {
 		setStatus: (key: string, value: string): void => {
 			this.statuses[key] = value;
 		},
-		select: async (): Promise<string> => {
+		select: async (_message: string, choices: string[]): Promise<string> => {
 			this.selectCalls += 1;
+			this.selectChoices.push(choices);
 			return this.selectChoice;
 		},
 	};
@@ -115,6 +121,7 @@ let savedGateAutoEndpoint: string | undefined;
 let savedGateAutoOwnerPid: string | undefined;
 let savedGateAutoBackend: string | undefined;
 let savedGateAutoContextHash: string | undefined;
+let savedGateSubagentAgent: string | undefined;
 const tempDirs: string[] = [];
 
 beforeEach(() => {
@@ -125,6 +132,7 @@ beforeEach(() => {
 	savedGateAutoOwnerPid = process.env.PI_GATE_AUTO_OWNER_PID;
 	savedGateAutoBackend = process.env.PI_GATE_AUTO_BACKEND;
 	savedGateAutoContextHash = process.env.PI_GATE_AUTO_CONTEXT_HASH;
+	savedGateSubagentAgent = process.env.PI_GATE_SUBAGENT_AGENT;
 	delete process.env.GATE_PROFILE;
 	delete process.env.GATE_PROFILE_LOCK;
 	delete process.env.PI_GATE_PROFILE_LINEAGE;
@@ -132,6 +140,7 @@ beforeEach(() => {
 	delete process.env.PI_GATE_AUTO_OWNER_PID;
 	delete process.env.PI_GATE_AUTO_BACKEND;
 	delete process.env.PI_GATE_AUTO_CONTEXT_HASH;
+	delete process.env.PI_GATE_SUBAGENT_AGENT;
 });
 
 afterEach(() => {
@@ -149,6 +158,8 @@ afterEach(() => {
 	else process.env.PI_GATE_AUTO_BACKEND = savedGateAutoBackend;
 	if (savedGateAutoContextHash === undefined) delete process.env.PI_GATE_AUTO_CONTEXT_HASH;
 	else process.env.PI_GATE_AUTO_CONTEXT_HASH = savedGateAutoContextHash;
+	if (savedGateSubagentAgent === undefined) delete process.env.PI_GATE_SUBAGENT_AGENT;
+	else process.env.PI_GATE_SUBAGENT_AGENT = savedGateSubagentAgent;
 	while (tempDirs.length > 0) {
 		const dir = tempDirs.pop();
 		if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -217,7 +228,7 @@ describe("pi-gate bash mutation analysis", () => {
 	});
 });
 
-describe("pi-gate auto risk assessment", () => {
+describe("pi-gate risk assessment", () => {
 	it("flags edits through workspace symlinks that escape the workspace", () => {
 		const cwd = makeWorkspace();
 		const external = fs.mkdtempSync(path.join(os.tmpdir(), "pi-gate-risk-external-"));
@@ -228,7 +239,7 @@ describe("pi-gate auto risk assessment", () => {
 			if ((error as NodeJS.ErrnoException).code === "EPERM") return;
 			throw error;
 		}
-		const result = assessGateAutoRisk({
+		const result = assessGateRisk({
 			requestId: "risk-symlink",
 			toolName: "edit",
 			subject: "edit:out/file.txt",
@@ -245,7 +256,7 @@ describe("pi-gate auto risk assessment", () => {
 
 	it("treats read-only shell chains as low-risk model candidates", () => {
 		const cwd = makeWorkspace();
-		const result = assessGateAutoRisk({
+		const result = assessGateRisk({
 			requestId: "risk-readonly-chain",
 			toolName: "bash",
 			subject: "bash:git diff --stat && git status --short",
@@ -264,7 +275,7 @@ describe("pi-gate auto risk assessment", () => {
 
 	it("keeps pipes and mixed mutating chains out of silent auto-allow", () => {
 		const cwd = makeWorkspace();
-		const pipe = assessGateAutoRisk({
+		const pipe = assessGateRisk({
 			requestId: "risk-pipe-shell",
 			toolName: "bash",
 			subject: "bash:cat script.sh | sh",
@@ -279,7 +290,7 @@ describe("pi-gate auto risk assessment", () => {
 		assert.equal(pipe.recommendedDecision, "escalate");
 		assert.ok(pipe.flags.includes("opaque_or_unknown"));
 
-		const mixed = assessGateAutoRisk({
+		const mixed = assessGateRisk({
 			requestId: "risk-mixed-chain",
 			toolName: "bash",
 			subject: "bash:git diff --stat && touch smoketest/gate-auto/tmp/x",
@@ -297,7 +308,7 @@ describe("pi-gate auto risk assessment", () => {
 
 	it("treats node --check as a low-risk allow candidate", () => {
 		const cwd = makeWorkspace();
-		const result = assessGateAutoRisk({
+		const result = assessGateRisk({
 			requestId: "risk-node-check",
 			toolName: "bash",
 			subject: "bash:node --check smoketest/gate-auto/src/example.ts",
@@ -315,7 +326,7 @@ describe("pi-gate auto risk assessment", () => {
 
 	it("does not classify external read-only tools as external mutations", () => {
 		const cwd = makeWorkspace();
-		const result = assessGateAutoRisk({
+		const result = assessGateRisk({
 			requestId: "risk-ls",
 			toolName: "ls",
 			subject: "list:/tmp",
@@ -342,6 +353,103 @@ describe("pi-gate policy schema validation", () => {
 		});
 
 		assert.match(error ?? "", /unattended must be a boolean/);
+	});
+});
+
+describe("pi-gate auto config and evaluator", () => {
+	it("accepts the built-in auto config", () => {
+		assert.equal(validateAutoConfigSemantics(autoConfig), undefined);
+	});
+
+	it("parses auto model decisions", () => {
+		assert.deepEqual(parseGateSemanticDecisionText('{"decision":"allow","reason":"ok"}'), { decision: "allow", reason: "ok" });
+		assert.deepEqual(parseGateSemanticDecisionText('prefix {"decision":"block","reason":"no"}'), { decision: "block", reason: "no" });
+		assert.match("error" in parseGateSemanticDecisionText('{"decision":"deny","reason":"no"}') ? parseGateSemanticDecisionText('{"decision":"deny","reason":"no"}').error : "", /allow, block, or prompt/);
+	});
+
+	it("enforces hardDeny before role alwaysAllow", () => {
+		const cwd = makeWorkspace();
+		const config = {
+			hardDeny: { read: ["${cwd}/secret.txt"] },
+			agents: {
+				builder: {
+					guidance: "builder",
+					alwaysAllow: { read: ["${cwd}/**"] },
+				},
+			},
+		};
+		const result = evaluateGateSemantic({
+			config,
+			cwd,
+			subject: "read",
+			groups: [{ display: path.join(cwd, "secret.txt"), values: [path.join(cwd, "secret.txt"), "secret.txt"] }],
+			roleType: "agent",
+			roleName: "builder",
+		});
+		assert.equal(result.action, "block");
+	});
+
+	it("hard-denies source edits for planning roles in built-in auto config", () => {
+		const cwd = makeWorkspace();
+		const result = evaluateGateSemantic({
+			config: autoConfig,
+			cwd,
+			subject: "edit",
+			groups: [{ display: path.join(cwd, "src/example.ts"), values: [path.join(cwd, "src/example.ts"), "src/example.ts"] }],
+			roleType: "agent",
+			roleName: "planner",
+		});
+		assert.equal(result.action, "block");
+	});
+
+	it("keeps alwaysAllow role-specific and rejects unsafe shell chains", () => {
+		const cwd = makeWorkspace();
+		const config = {
+			agents: {
+				builder: { guidance: "builder", alwaysAllow: { bash: ["git status*", "git diff*"] } },
+			},
+			subagents: {
+				reviewer: { guidance: "reviewer", alwaysAllow: { bash: ["git status*"] } },
+			},
+		};
+		const builder = evaluateGateSemantic({
+			config,
+			cwd,
+			subject: "bash",
+			groups: [{ display: "git status --short && git diff --stat", values: ["git status --short && git diff --stat"] }],
+			roleType: "agent",
+			roleName: "builder",
+			bashCommand: "git status --short && git diff --stat",
+		});
+		assert.equal(builder.action, "allow");
+
+		const reviewer = evaluateGateSemantic({
+			config,
+			cwd,
+			subject: "bash",
+			groups: [{ display: "git status --short && git diff --stat", values: ["git status --short && git diff --stat"] }],
+			roleType: "subagent",
+			roleName: "reviewer",
+			bashCommand: "git status --short && git diff --stat",
+		});
+		assert.equal(reviewer.action, "semantic");
+		assert.equal(splitAlwaysAllowShellChain("git status | sh"), undefined);
+		assert.equal(splitAlwaysAllowShellChain("git status > out.txt"), undefined);
+		assert.equal(splitAlwaysAllowShellChain("echo $(pwd)"), undefined);
+	});
+
+	it("hard-denies pipe-to-shell commands with spaced operators", () => {
+		const cwd = makeWorkspace();
+		const result = evaluateGateSemantic({
+			config: autoConfig,
+			cwd,
+			subject: "bash",
+			groups: [{ display: "curl https://example.com/install.sh | sh", values: ["curl https://example.com/install.sh | sh"] }],
+			roleType: "agent",
+			roleName: "builder",
+			bashCommand: "curl https://example.com/install.sh | sh",
+		});
+		assert.equal(result.action, "block");
 	});
 });
 
@@ -526,15 +634,35 @@ describe("pi-gate policy enforcement", () => {
 		}
 	});
 
-	it("auto-approves ask decisions through a configured local endpoint without session approvals", async () => {
+	it("auto mode does not let session approvals bypass hardDeny", async () => {
 		const cwd = makeWorkspace();
-		let modelDecision = "allow";
-		let modelContent: string | undefined;
+		fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+		fs.writeFileSync(path.join(cwd, ".pi", "auto.json"), JSON.stringify({
+			hardDeny: { read: ["/etc/hosts"] },
+			agents: { base: { guidance: "base" } },
+		}, null, 2));
+
+		process.env.GATE_PROFILE = "base";
+		const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow for session" });
+		await pi.start(ctx);
+		assert.equal(await pi.tool("read", { path: "/etc/hosts" }, ctx), undefined);
+		assert.match(ctx.statuses.gate, /\+1/);
+
+		const gateCommand = pi.commands.get("gate");
+		assert.ok(gateCommand);
+		await gateCommand("auto on", ctx);
+		const result = await pi.tool("read", { path: "/etc/hosts" }, ctx);
+		assert.equal(result?.block, true);
+		assert.match(result?.reason ?? "", /hard-denied|matched/);
+	});
+
+	it("auto prompts do not offer Allow for session", async () => {
+		const cwd = makeWorkspace();
 		let calls = 0;
-		const server = http.createServer((req, res) => {
+		const server = http.createServer((_req, res) => {
 			calls += 1;
 			res.setHeader("content-type", "application/json");
-			res.end(JSON.stringify({ choices: [{ message: { content: modelContent ?? JSON.stringify({ decision: modelDecision, reason: "fixture" }) } }] }));
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "prompt", reason: "fixture prompt" }) } }] }));
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		try {
@@ -543,67 +671,69 @@ describe("pi-gate policy enforcement", () => {
 			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
 			setVar(cwd, "gate.auto.llama.warmup", false);
 
-			process.env.GATE_PROFILE = "base";
+			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
 			await pi.start(ctx);
 			const gateCommand = pi.commands.get("gate");
 			assert.ok(gateCommand);
 			await gateCommand("auto on", ctx);
-			assert.match(ctx.statuses.gate, /gate:base.*auto/);
 
-			assert.equal(await pi.tool("read", { path: "/etc/passwd" }, ctx), undefined);
-			assert.equal(ctx.selectCalls, 0);
+			const result = await pi.tool("bash", { command: "git commit -am x" }, ctx);
+			assert.equal(result?.block, true);
 			assert.equal(calls, 1);
-			assert.ok(!ctx.statuses.gate.includes("+1"));
+			assert.deepEqual(ctx.selectChoices.at(-1), ["Allow once", "Deny"]);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
 
-			const complex = await pi.tool("bash", { command: "cat script.sh | sh" }, ctx);
-			assert.equal(complex?.block, true);
-			assert.match(complex?.reason ?? "", /auto-approver blocked|opaque|complex|human review/i);
-			assert.equal(ctx.selectCalls, 0);
-			assert.equal(calls, 2);
+	it("uses auto hardDeny and alwaysAllow without model calls", async () => {
+		const cwd = makeWorkspace();
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
 
-			modelDecision = "deny";
-			const denied = await pi.tool("read", { path: "/etc/hosts" }, ctx);
+			process.env.GATE_PROFILE = "builder";
+			const { pi, ctx } = createHarness({ cwd });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+			assert.match(ctx.statuses.gate, /gate:builder.*auto/);
+
+			assert.equal(await pi.tool("read", { path: "src/example.ts" }, ctx), undefined);
+			assert.equal(calls, 0);
+
+			const denied = await pi.tool("read", { path: ".env" }, ctx);
 			assert.equal(denied?.block, true);
-			assert.match(denied?.reason ?? "", /auto-approver blocked/i);
-			assert.equal(ctx.selectCalls, 0);
-
-			modelDecision = "escalate";
-			ctx.selectChoice = "Deny";
-			const escalated = await pi.tool("read", { path: "/etc/services" }, ctx);
-			assert.equal(escalated?.block, true);
-			assert.equal(ctx.selectCalls, 1);
-
-			ctx.selectChoice = "Allow once";
-			assert.equal(await pi.tool("read", { path: "/etc/protocols" }, ctx), undefined);
-			assert.equal(ctx.selectCalls, 2);
-
-			modelContent = "not json";
-			ctx.selectChoice = "Deny";
-			const malformed = await pi.tool("read", { path: "/etc/group" }, ctx);
-			assert.equal(malformed?.block, true);
-			assert.equal(ctx.selectCalls, 3);
-
-			setVar(cwd, "gate.auto.enabled", false);
-			modelContent = undefined;
-			modelDecision = "allow";
-			const callsBeforeDisableCheck = calls;
-			const disabled = await pi.tool("read", { path: "/etc/shells" }, ctx);
-			assert.equal(disabled?.block, true);
-			assert.equal(calls, callsBeforeDisableCheck);
-			assert.equal(ctx.selectCalls, 4);
+			assert.match(denied?.reason ?? "", /hard-denied|matched/);
+			assert.equal(calls, 0);
 		} finally {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
 	});
 
-	it("soft-blocks model-allowed external file mutations", async () => {
+	it("applies auto external_directory hard denies to path tools", async () => {
 		const cwd = makeWorkspace();
+		fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+		fs.writeFileSync(path.join(cwd, ".pi", "auto.json"), JSON.stringify({
+			hardDeny: { external_directory: ["*"] },
+			agents: { builder: { guidance: "builder" } },
+		}, null, 2));
 		let calls = 0;
 		const server = http.createServer((_req, res) => {
 			calls += 1;
 			res.setHeader("content-type", "application/json");
-			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture allow" }) } }] }));
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		try {
@@ -612,31 +742,30 @@ describe("pi-gate policy enforcement", () => {
 			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
 			setVar(cwd, "gate.auto.llama.warmup", false);
 
-			process.env.GATE_PROFILE = "base";
-			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
+			process.env.GATE_PROFILE = "builder";
+			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
 			await pi.start(ctx);
 			const gateCommand = pi.commands.get("gate");
 			assert.ok(gateCommand);
 			await gateCommand("auto on", ctx);
 
-			const externalPath = path.join(os.tmpdir(), `pi-gate-external-${Date.now()}`);
-			const decision = await pi.tool("edit", { path: externalPath }, ctx);
-			assert.equal(decision?.block, true);
-			assert.match(decision?.reason ?? "", /auto-approver blocked|external file mutation|human review/i);
-			assert.equal(calls, 1);
+			const result = await pi.tool("read", { path: "/etc/passwd" }, ctx);
+			assert.equal(result?.block, true);
+			assert.match(result?.reason ?? "", /hard-denied|matched|external path/);
+			assert.equal(calls, 0);
 			assert.equal(ctx.selectCalls, 0);
 		} finally {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
 	});
 
-	it("downgrades risky model allows to human review", async () => {
+	it("hard-denies auto-mode bash mutations that target planner source files", async () => {
 		const cwd = makeWorkspace();
 		let calls = 0;
 		const server = http.createServer((_req, res) => {
 			calls += 1;
 			res.setHeader("content-type", "application/json");
-			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture allow" }) } }] }));
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
 		});
 		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 		try {
@@ -646,33 +775,184 @@ describe("pi-gate policy enforcement", () => {
 			setVar(cwd, "gate.auto.llama.warmup", false);
 
 			process.env.GATE_PROFILE = "planner";
+			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+
+			const result = await pi.tool("bash", { command: "touch src/a.ts" }, ctx);
+			assert.equal(result?.block, true);
+			assert.match(result?.reason ?? "", /hard-denied|matched/);
+			assert.equal(calls, 0);
+			assert.equal(ctx.selectCalls, 0);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it("applies risk guard before auto deterministic alwaysAllow", async () => {
+		const cwd = makeWorkspace();
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
+			process.env.GATE_PROFILE = "builder";
+			process.env.PI_GATE_SUBAGENT_AGENT = "reviewer";
+
+			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+
+			const result = await pi.tool("bash", { command: "cat .env" }, ctx);
+			assert.equal(result?.block, true);
+			assert.match(result?.reason ?? "", /secret|credential|blocked/i);
+			assert.equal(calls, 0);
+			assert.equal(ctx.selectCalls, 0);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it("forces auto risk-deny classifications to block instead of prompting", async () => {
+		const cwd = makeWorkspace();
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "prompt", reason: "fixture prompt" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
+
+			process.env.GATE_PROFILE = "builder";
+			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+
+			const result = await pi.tool("bash", { command: "echo secret" }, ctx);
+			assert.equal(result?.block, true);
+			assert.match(result?.reason ?? "", /credential|secret|blocked/i);
+			assert.equal(calls, 0);
+			assert.equal(ctx.selectCalls, 0);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it("sends auto grey-area calls to the model and treats prompt as human fallback", async () => {
+		const cwd = makeWorkspace();
+		let decision = "allow";
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision, reason: "fixture" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
+
+			process.env.GATE_PROFILE = "builder";
+			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+
+			assert.equal(await pi.tool("edit", { path: "src/example.ts" }, ctx), undefined);
+			assert.equal(calls, 1);
+			assert.equal(ctx.selectCalls, 0);
+
+			decision = "prompt";
+			assert.equal(await pi.tool("edit", { path: "src/other.ts" }, ctx), undefined);
+			assert.equal(calls, 2);
+			assert.equal(ctx.selectCalls, 1);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it("auto mode preserves policy lineage deny ceilings before model fallback", async () => {
+		const cwd = makeWorkspace();
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
+
+			process.env.GATE_PROFILE = "worker";
+			process.env.PI_GATE_PROFILE_LINEAGE = "planner,worker";
+			process.env.PI_GATE_SUBAGENT_AGENT = "worker";
+			const { pi, ctx } = createHarness({ cwd });
+			await pi.start(ctx);
+			const gateCommand = pi.commands.get("gate");
+			assert.ok(gateCommand);
+			await gateCommand("auto on", ctx);
+
+			const result = await pi.tool("edit", { path: "src/example.ts" }, ctx);
+			assert.equal(result?.block, true);
+			assert.match(result?.reason ?? "", /planner|edit deny|Gate denied/i);
+			assert.equal(calls, 0);
+		} finally {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		}
+	});
+
+	it("uses subagent hard denies instead of builder alwaysAllow in auto mode", async () => {
+		const cwd = makeWorkspace();
+		let calls = 0;
+		const server = http.createServer((_req, res) => {
+			calls += 1;
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: "allow", reason: "fixture" }) } }] }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		try {
+			const address = server.address();
+			assert.ok(address && typeof address === "object");
+			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			setVar(cwd, "gate.auto.llama.warmup", false);
+			process.env.GATE_PROFILE = "builder";
+			process.env.PI_GATE_SUBAGENT_AGENT = "reviewer";
+
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
 			await pi.start(ctx);
 			const gateCommand = pi.commands.get("gate");
 			assert.ok(gateCommand);
 			await gateCommand("auto on", ctx);
 
-			const guarded = await pi.tool("bash", { command: "brew install some-new-tool" }, ctx);
-			assert.equal(guarded?.block, true);
-			assert.match(guarded?.reason ?? "", /denied|package manager|human review|bash ask/i);
-
-			const network = await pi.tool("bash", { command: "curl https://example.com/data" }, ctx);
-			assert.equal(network?.block, true);
-			assert.match(network?.reason ?? "", /denied|network|human review|bash ask/i);
-
-			const opaque = await pi.tool("bash", { command: "python -c 'open(\"src/x\",\"w\").write(\"x\")'" }, ctx);
-			assert.equal(opaque?.block, true);
-			assert.match(opaque?.reason ?? "", /denied|opaque|unclassified|human review|bash ask/i);
-
-			const unclassified = await pi.tool("bash", { command: "git commit -am x" }, ctx);
-			assert.equal(unclassified?.block, true);
-			assert.match(unclassified?.reason ?? "", /denied|opaque|unclassified|human review|bash ask/i);
-
-			const complex = await pi.tool("bash", { command: "echo ok; git commit -am x" }, ctx);
-			assert.equal(complex?.block, true);
-			assert.match(complex?.reason ?? "", /denied|opaque|unclassified|human review|bash ask/i);
-			assert.equal(calls, 3);
-			assert.equal(ctx.selectCalls, 3);
+			const decisionResult = await pi.tool("edit", { path: "src/review-notes.ts" }, ctx);
+			assert.equal(decisionResult?.block, true);
+			assert.match(decisionResult?.reason ?? "", /hard-denied|matched/);
+			assert.equal(calls, 0);
+			assert.equal(ctx.selectCalls, 0);
 		} finally {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}

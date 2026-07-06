@@ -5,8 +5,10 @@ Permission gate for pi with an OpenCode-compatible policy format, profile inheri
 ## Files
 
 - `index.ts` — extension entrypoint
-- `policy.json` — active policy
+- `policy.json` — deterministic policy-mode rules
 - `policy.schema.json` — JSON Schema for `policy.json`
+- `auto.json` — semantic auto-approval guidance, hard denies, and always-allow shortcuts
+- `auto.schema.json` — JSON Schema for `auto.json`
 - `LICENSE` — MIT license
 
 ## Install
@@ -29,10 +31,10 @@ Start pi, or if pi is already running, reload:
 
 ## What it does
 
-pi-gate has two layers:
+pi-gate has two related pieces:
 
-1. **Policy mode** — the normal permission gate. It reads `policy.json` and decides whether each tool call should be allowed, denied, or sent to you for approval.
-2. **Auto mode** — an optional local-model helper for the `ask` cases. Instead of asking you immediately, pi-gate first asks a small local model whether this one tool call is safe to allow. Safe calls can proceed quietly; risky or unclear calls are blocked so the agent can try something safer. After repeated blocks, pi-gate pauses auto mode and asks you.
+1. **Policy mode** — the normal deterministic gate. It reads `policy.json` and decides whether each tool call should be allowed, denied, or sent to you for approval.
+2. **Auto mode** — an optional semantic local-model gate. It uses `auto.json` for deterministic `hardDeny` rules, narrow role-specific `alwaysAllow` rules, and per-agent/subagent guidance for the local model.
 
 In policy mode, pi-gate:
 
@@ -49,11 +51,13 @@ In policy mode, pi-gate:
 
 In auto mode, pi-gate:
 
-- only handles calls that policy mode marked `ask`
-- never overrides hard `deny`
+- uses `auto.json`, not `policy.json` ask/allow tables, for the semantic path
+- evaluates `hardDeny`, then role/global `alwaysAllow`, then asks the local model
+- has separate guidance and `alwaysAllow` rules for agents and subagents
 - never turns one approval into an `Allow for session`
 - runs against a local llama.cpp-compatible endpoint or a managed local `llama-server`
-- logs decisions to `.pi/state/pi-gate/auto-approvals.jsonl`
+- shows `gate:<profile> auto` in the footer
+- logs model decisions to `.pi/state/pi-gate/auto-decisions.jsonl`
 
 ## Commands
 
@@ -63,7 +67,7 @@ In auto mode, pi-gate:
 - `/gate clear` — clear cached session approvals
 - `/gate auto setup` — run the bundled setup helper and save discovered local model/server paths
 - `/gate auto status` — show local auto-approver status
-- `/gate auto on` — explicitly enable local auto-approval for ask decisions
+- `/gate auto on` — explicitly enable semantic local auto-approval
 - `/gate auto off` — disable auto-approval and stop the managed runtime
 
 ## Policy mode
@@ -186,18 +190,19 @@ More complete example with a base policy plus two profiles:
 
 ## Auto mode
 
-Auto mode is optional. Normally, when policy mode resolves a tool call to `ask`, pi-gate asks you what to do. Auto mode makes those moments quieter: a small local model reviews the single tool call first.
+Auto mode is optional. Normally, policy mode resolves each tool call deterministically and asks you for unresolved `ask` cases. Auto mode replaces that prompt path with a semantic local gate for the current session: deterministic `hardDeny` rules run first, narrow `alwaysAllow` rules skip boring model calls, and a small local model classifies the grey middle.
 
 The important rules are simple:
 
-- hard `deny` still means deny; the model never overrides it
-- hard `allow` still means allow; the model is not involved
-- auto-approval only handles `ask`
+- `hardDeny` always blocks
+- `alwaysAllow` only allows after the built-in risk guard agrees the call is low risk
 - a model approval is for one concrete tool call only
-- risky or unclear calls are blocked first so the agent can try a safer approach
-- after repeated blocks, pi-gate pauses auto mode and asks you
+- no model decision creates `Allow for session`
+- risk-denied calls block before model or prompt fallback
+- unresolved calls prompt in interactive top-level sessions and block in unattended sessions
+- after repeated model blocks, pi-gate pauses auto mode and asks you
 
-When auto is active, the footer shows `gate:<profile> auto`.
+When auto mode is active, the footer shows `gate:<profile> auto`.
 
 ### Quick setup
 
@@ -253,9 +258,9 @@ If you already manage models yourself, skip the helper and set the paths directl
 Use these commands in Pi:
 
 ```text
-/gate auto on      # start auto-approval for this session
+/gate auto on      # start semantic auto-approval for this session
 /gate auto off     # stop it
-/gate auto status  # inspect status and paths
+/gate auto status  # inspect status, config, and paths
 ```
 
 `/gate auto on` is intentionally required. Generic `/vars set gate.auto.enabled true` is rejected so auto-approval cannot be switched on accidentally.
@@ -297,9 +302,32 @@ node scripts/eval-gate-auto-approver.mjs --repeat 3
 npm run smoke:gate-auto
 ```
 
-The eval script checks real model decisions. The smoke script drives the full pi-gate flow, including soft-blocks and the repeated-block fallback prompt.
+The eval script checks real model decisions. The smoke script drives the full pi-gate flow, including blocks and prompt fallback.
 
-Decisions are logged to `.pi/state/pi-gate/auto-approvals.jsonl` with bounded summaries and hashes.
+Auto decisions are logged to `.pi/state/pi-gate/auto-decisions.jsonl` with bounded summaries and hashes.
+
+### Auto config
+
+`auto.json` has three concepts:
+
+- `hardDeny` — deterministic rules that always block
+- per-agent/per-subagent `alwaysAllow` — deterministic shortcuts for boring, role-appropriate calls
+- per-agent/per-subagent `guidance` — natural-language instructions for the local model
+
+The runtime order is:
+
+```text
+hardDeny match?              -> block
+alwaysAllow + low risk?      -> allow silently
+risk-deny before model?      -> block
+otherwise                    -> ask local model
+```
+
+The local model returns `allow`, `block`, or `prompt`. `allow` approves one concrete tool call. `block` is a soft block so the agent can try a safer alternative. `prompt` asks the user in interactive top-level sessions and blocks unattended sessions.
+
+`hardDeny` always wins over `alwaysAllow`. `alwaysAllow` is also checked by pi-gate's built-in risk guard before it can silently allow a call; risky secret/credential reads, external mutations, and similar guard-denied calls block instead of falling through to a prompt or model approval. Shell chains only match `alwaysAllow` when every simple segment matches; pipes, redirects, command substitution, and backgrounding are not silently always-allowed.
+
+If the auto runtime is unavailable or returns malformed output, pi-gate fails closed: ordinary unresolved calls prompt in interactive top-level sessions and block in unattended sessions, while risk-denied calls block immediately.
 
 ## Actions
 

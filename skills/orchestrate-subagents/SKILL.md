@@ -20,7 +20,7 @@ Good reasons to delegate:
 - **Async progress**: broad or slow work can continue in the background instead of blocking the conversation.
 - **Role specialism**: a `reviewer` can provide read-only critique focused on correctness, regressions, security, and maintainability.
 
-Do the work yourself when it is small, sequential, needs clarification, depends on nuanced user intent, or is mainly synthesis and judgement. Do not delegate merely because a `scout` or `worker` could perform the same steps; without parallelism or async progress, the handoff overhead is usually not worth it.
+Do the work yourself when it is small, sequential, needs clarification, depends on nuanced user intent, or is mainly synthesis and assessment. Do not delegate merely because a `scout` or `worker` could perform the same steps; without parallelism or async progress, the handoff overhead is usually not worth it.
 
 The parent keeps final accountability. Subagents gather evidence, perform bounded parallel/background work, or review; the parent decides what it means and answers the user.
 

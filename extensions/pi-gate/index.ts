@@ -9,7 +9,25 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import { loadGateAutoConfig } from "./auto-approver/config.ts";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
-import type { GateAutoApprovalRequest, GateAutoApprovalResult } from "./auto-approver/types.ts";
+import type { GateAutoApprovalRequest } from "./auto-approver/types.ts";
+import { evaluateGateSemantic } from "./semantic/evaluator.ts";
+import { loadGateSemanticConfig } from "./semantic/loader.ts";
+import type { GateSemanticEvaluation, GateSemanticMatch, GateSemanticRequest, GateSemanticResult, GateSemanticRoleType, GateSemanticSubject } from "./semantic/types.ts";
+import {
+	buildAbsolutePathGroups,
+	buildExternalDirectoryGroups,
+	buildPathCandidateGroup,
+	expandPatternValue,
+	isPathSubject,
+	isWithinRoot,
+	normalizeAbsPath,
+	normalizeCommand,
+	normalizePathArg,
+	normalizeSlashes,
+	wildcardToRegex,
+	type CandidateGroup,
+} from "./matching.ts";
+import { assessGateRisk } from "./risk.ts";
 import { setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
 type PermissionAction = "allow" | "ask" | "deny";
@@ -95,11 +113,6 @@ interface MutationAnalysis {
 	reason: string;
 }
 
-interface CandidateGroup {
-	display: string;
-	values: string[];
-}
-
 interface Decision {
 	action: PermissionAction;
 	reasons: string[];
@@ -119,7 +132,6 @@ const AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD = 20;
 const GATE_AUTO_SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 const GATE_AUTO_SETUP_MAX_OUTPUT_CHARS = 8000;
 const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "&", "then", "do", "else", "elif", "fi"]);
-const PATH_SUBJECTS = new Set(["read", "edit", "list", "external_directory"]);
 const ACTION_PRIORITY: Record<PermissionAction, number> = { allow: 0, ask: 1, deny: 2 };
 const BUILTIN_PERMISSION: PermissionConfig = {
 	"*": "allow",
@@ -136,64 +148,6 @@ const BUILTIN_PERMISSION: PermissionConfig = {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeSlashes(value: string): string {
-	return value.replace(/\\/g, "/");
-}
-
-function normalizeAbsPath(value: string): string {
-	return normalizeSlashes(path.resolve(value));
-}
-
-function normalizePathArg(rawPath: string, cwd: string): string {
-	const trimmed = rawPath.startsWith("@") ? rawPath.slice(1) : rawPath;
-	if (trimmed === "~" || trimmed === "$HOME") return normalizeAbsPath(os.homedir());
-	if (trimmed.startsWith("~/")) return normalizeAbsPath(path.join(os.homedir(), trimmed.slice(2)));
-	if (trimmed.startsWith("$HOME/")) return normalizeAbsPath(path.join(os.homedir(), trimmed.slice(6)));
-	return normalizeAbsPath(path.resolve(cwd, trimmed));
-}
-
-function expandPatternValue(pattern: string, cwd: string): string {
-	const home = normalizeSlashes(os.homedir());
-	let expanded = normalizeSlashes(pattern).replaceAll("${cwd}", normalizeAbsPath(cwd));
-	if (expanded === "~" || expanded === "$HOME") expanded = home;
-	else if (expanded.startsWith("~/")) expanded = `${home}/${expanded.slice(2)}`;
-	else if (expanded.startsWith("$HOME/")) expanded = `${home}/${expanded.slice(6)}`;
-	return expanded;
-}
-
-function escapeRegex(value: string): string {
-	return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
-}
-
-function wildcardToRegex(pattern: string): RegExp {
-	let regex = "";
-	for (let i = 0; i < pattern.length; i++) {
-		const ch = pattern[i];
-		if (ch === "*") {
-			regex += ".*";
-			continue;
-		}
-		if (ch === "?") {
-			regex += ".";
-			continue;
-		}
-		regex += escapeRegex(ch);
-	}
-	return new RegExp(`^${regex}$`);
-}
-
-function isWithinRoot(root: string, candidate: string): boolean {
-	const normalizedRoot = normalizeAbsPath(root);
-	const normalizedCandidate = normalizeAbsPath(candidate);
-	if (normalizedCandidate === normalizedRoot) return true;
-	const relative = path.relative(normalizedRoot, normalizedCandidate);
-	return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
-function normalizeCommand(value: string): string {
-	return value.trim().replace(/\s+/g, " ");
 }
 
 function normalizeProfileName(value: string | undefined): string | undefined {
@@ -430,10 +384,6 @@ function appendPermissionConfig(
 	}
 }
 
-function isPathSubject(subject: string): boolean {
-	return PATH_SUBJECTS.has(subject);
-}
-
 function compilePattern(subject: string, rawPattern: string, cwd: string): CompiledPatternRule {
 	let expandedPattern = normalizeSlashes(rawPattern);
 	if (subject === "bash") {
@@ -584,28 +534,6 @@ function evaluateSubjectAcrossLineage(effective: EffectiveGatePolicy, subject: s
 	return { action: finalAction, reasons };
 }
 
-function buildPathCandidateGroup(rawPath: string, cwd: string): CandidateGroup {
-	const absPath = normalizePathArg(rawPath, cwd);
-	const values = new Set<string>([absPath]);
-	const normalizedRaw = normalizeSlashes(rawPath);
-	if (normalizedRaw) values.add(normalizedRaw);
-	if (isWithinRoot(cwd, absPath)) {
-		values.add(normalizeSlashes(path.relative(normalizeAbsPath(cwd), absPath) || "."));
-	}
-	return {
-		display: absPath,
-		values: Array.from(values),
-	};
-}
-
-function buildExternalDirectoryGroups(absPaths: string[], cwd: string): CandidateGroup[] {
-	const normalizedCwd = normalizeAbsPath(cwd);
-	return absPaths
-		.map((candidate) => normalizeAbsPath(candidate))
-		.filter((candidate) => !isWithinRoot(normalizedCwd, candidate))
-		.map((candidate) => ({ display: candidate, values: [candidate] }));
-}
-
 function evaluateExternalDirectory(policy: CompiledPolicy, absPaths: string[], cwd: string): Decision {
 	const groups = buildExternalDirectoryGroups(absPaths, cwd);
 	if (groups.length === 0) return { action: "allow", reasons: [] };
@@ -616,16 +544,6 @@ function evaluateExternalDirectoryAcrossLineage(effective: EffectiveGatePolicy, 
 	const groups = buildExternalDirectoryGroups(absPaths, cwd);
 	if (groups.length === 0) return { action: "allow", reasons: [] };
 	return evaluateSubjectAcrossLineage(effective, "external_directory", groups);
-}
-
-function buildAbsolutePathGroups(absPaths: string[], cwd: string): CandidateGroup[] {
-	return absPaths.map((candidate) => {
-		const values = new Set<string>([normalizeAbsPath(candidate)]);
-		if (isWithinRoot(cwd, candidate)) {
-			values.add(normalizeSlashes(path.relative(normalizeAbsPath(cwd), normalizeAbsPath(candidate)) || "."));
-		}
-		return { display: normalizeAbsPath(candidate), values: Array.from(values) };
-	});
 }
 
 function evaluateAbsolutePaths(policy: CompiledPolicy, subject: string, absPaths: string[], cwd: string): Decision {
@@ -666,6 +584,10 @@ function getToolPermissionSubject(toolName: string): string {
 		default:
 			return toolName;
 	}
+}
+
+function isGateSemanticSubject(subject: string): subject is GateSemanticSubject {
+	return subject === "read" || subject === "edit" || subject === "bash" || subject === "list" || subject === "glob" || subject === "grep" || subject === "external_directory";
 }
 
 function getToolSubjectGroups(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): CandidateGroup[] {
@@ -1094,8 +1016,10 @@ function displayStatusPath(cwd: string, value: string | undefined): string | und
 
 function formatGateAutoStatusMessage(ctx: ExtensionContext, status: ReturnType<GateAutoApproverManager["status"]>, startOnSession: boolean, runtimeEnabled: boolean): string {
 	const configured = Boolean(status.endpoint || (status.serverPath && status.modelPath));
+	const loadedSemantic = loadGateSemanticConfig(path.dirname(fileURLToPath(import.meta.url)), ctx.cwd);
 	const lines = [
 		`Gate auto: ${status.enabled ? runtimeEnabled ? "on" : "configured, not running" : "off"}`,
+		`Config: ${displayStatusPath(ctx.cwd, loadedSemantic.configPath)}`,
 	];
 	if (runtimeEnabled) {
 		lines.push(`Runtime: ${status.healthy ? "running" : "not ready"}${status.mode !== "disabled" ? ` (${status.mode}${status.pid ? `, pid ${status.pid}` : ""})` : ""}`);
@@ -1111,7 +1035,8 @@ function formatGateAutoStatusMessage(ctx: ExtensionContext, status: ReturnType<G
 		lines.push("Setup: not configured (run /gate auto setup)");
 	}
 	if (runtimeEnabled && status.auditPath) lines.push(`Audit: ${displayStatusPath(ctx.cwd, status.auditPath)}`);
-	if (status.lastError) lines.push(`Problem: ${status.lastError}`);
+	if (loadedSemantic.error) lines.push(`Problem: ${loadedSemantic.error}`);
+	if (status.lastError) lines.push(`Runtime problem: ${status.lastError}`);
 	return lines.join("\n");
 }
 
@@ -1145,9 +1070,10 @@ async function confirmDecision(
 	autoEnabled = false,
 ): Promise<{ allow: boolean; sessionStored: boolean }> {
 	if (!ctx.hasUI) return { allow: false, sessionStored: false };
-	const choice = await ctx.ui.select(`${title}\n\n${message}`, ["Allow once", "Allow for session", "Deny"]);
+	const choices = autoEnabled ? ["Allow once", "Deny"] : ["Allow once", "Allow for session", "Deny"];
+	const choice = await ctx.ui.select(`${title}\n\n${message}`, choices);
 	if (choice === "Allow once") return { allow: true, sessionStored: false };
-	if (choice === "Allow for session") {
+	if (!autoEnabled && choice === "Allow for session") {
 		// Cap at MAX_SESSION_ALLOWS to prevent unbounded memory growth.
 		if (sessionAllows.size >= MAX_SESSION_ALLOWS) sessionAllows.clear();
 		sessionAllows.add(sessionKey);
@@ -1207,6 +1133,27 @@ function buildAutoApprovalRequest(input: GateAskDecisionInput): GateAutoApproval
 		inputSummary: boundedJson(input.event.input),
 		pathCandidates: input.pathCandidates,
 		bash: input.bash,
+	};
+}
+
+function normalizeSemanticRoleName(value: string): string {
+	return value.trim().toLowerCase() || "base";
+}
+
+function getSemanticRole(effective: EffectiveGatePolicy): { roleType: GateSemanticRoleType; roleName: string } {
+	const subagentName = process.env.PI_GATE_SUBAGENT_AGENT;
+	if (subagentName?.trim()) return { roleType: "subagent", roleName: normalizeSemanticRoleName(subagentName) };
+	return { roleType: "agent", roleName: normalizeSemanticRoleName(effective.profileName) };
+}
+
+function buildGateSemanticRequest(input: GateAskDecisionInput, evaluation: GateSemanticEvaluation, match?: { hardDeny?: GateSemanticMatch; alwaysAllow?: GateSemanticMatch }): GateSemanticRequest {
+	return {
+		...buildAutoApprovalRequest(input),
+		roleType: evaluation.role.roleType,
+		roleName: evaluation.role.roleName,
+		guidance: evaluation.role.guidance,
+		matchedHardDeny: match?.hardDeny,
+		matchedAlwaysAllow: match?.alwaysAllow,
 	};
 }
 
@@ -1294,16 +1241,16 @@ function runGateAutoSetupScript(extensionDir: string, onChild?: (child: ChildPro
 	});
 }
 
-function formatAutoFallbackReason(result: GateAutoApprovalResult | undefined): string | undefined {
+function formatSemanticFallbackReason(result: GateSemanticResult | undefined): string | undefined {
 	if (!result) return undefined;
-	if (result.outcome === "blocked") return `Auto-approver blocked: ${result.reason}`;
-	if (result.outcome === "escalated") return `Auto-approver blocked for review: ${result.reason}`;
-	if (["timeout", "malformed", "unavailable", "error"].includes(result.outcome)) return `Auto-approver unavailable: ${result.reason}`;
+	if (result.outcome === "blocked") return `Gate auto blocked: ${result.reason}`;
+	if (result.outcome === "fallback_prompt") return `Gate auto requests review: ${result.reason}`;
+	if (["timeout", "malformed", "unavailable", "error"].includes(result.outcome)) return `Gate auto unavailable: ${result.reason}`;
 	return undefined;
 }
 
-function isAutoSoftBlock(result: GateAutoApprovalResult): boolean {
-	return result.outcome === "blocked" || result.outcome === "escalated";
+function isSemanticSoftBlock(result: GateSemanticResult): boolean {
+	return result.outcome === "blocked";
 }
 
 async function promptForAskDecision(
@@ -1343,45 +1290,78 @@ async function resolveAskDecision(
 	input: GateAskDecisionInput,
 	sessionAllows: Set<string>,
 	profileLocked: boolean,
+): Promise<{ block?: boolean; reason?: string } | undefined> {
+	const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, false);
+	if (prompted.allowed) return undefined;
+	return prompted;
+}
+
+async function resolveSemanticDecision(
+	input: GateAskDecisionInput,
+	evaluation: GateSemanticEvaluation,
+	sessionAllows: Set<string>,
+	profileLocked: boolean,
 	autoManager: GateAutoApproverManager,
 	autoBlockState: GateAutoBlockState,
 	autoRuntimeEnabled: boolean,
 ): Promise<{ block?: boolean; reason?: string } | undefined> {
-	let autoFallback: GateAutoApprovalResult | undefined;
+	if (evaluation.action === "block") {
+		return { block: true, reason: `Gate auto hard-denied ${input.event.toolName}: ${evaluation.match.display} matched ${JSON.stringify(evaluation.match.pattern)}` };
+	}
+	if (evaluation.action === "allow") {
+		const risk = assessGateRisk(buildAutoApprovalRequest(input));
+		if (risk.recommendedDecision === "deny") {
+			return { block: true, reason: `Gate auto blocked ${input.event.toolName}: ${risk.reason ?? "risk guard denied deterministic allow"}` };
+		}
+		if (risk.recommendedDecision === "escalate") {
+			const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, `Gate auto deterministic allow requires review: ${risk.reason ?? "risk guard requested review"}`);
+			if (prompted.allowed) return undefined;
+			return prompted;
+		}
+		autoBlockState.consecutive = 0;
+		return undefined;
+	}
+
+	const risk = assessGateRisk(buildAutoApprovalRequest(input));
+	if (risk.recommendedDecision === "deny") {
+		return { block: true, reason: `Gate auto blocked ${input.event.toolName}: ${risk.reason ?? "risk guard denied semantic review"}` };
+	}
+
+	let autoFallback: GateSemanticResult | undefined;
 	if (autoRuntimeEnabled) await autoManager.refresh(input.ctx);
 	if (autoRuntimeEnabled && autoManager.isEnabled()) {
 		if (autoBlockState.paused) {
-			const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, "Gate auto is paused after repeated auto-blocks; approving resumes auto mode");
+			const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, "Gate auto is paused after repeated blocks; approving resumes auto mode");
 			if (prompted.allowed) {
 				resetAutoBlockState(autoBlockState);
 				return undefined;
 			}
 			return prompted;
 		}
-		const autoResult = await autoManager.decide(input.ctx, buildAutoApprovalRequest(input));
+		const autoResult = await autoManager.decide(input.ctx, buildGateSemanticRequest(input, evaluation));
 		if (autoResult.decision === "allow" && autoResult.outcome === "allowed") {
 			autoBlockState.consecutive = 0;
 			return undefined;
 		}
-		if (isAutoSoftBlock(autoResult)) {
+		if (isSemanticSoftBlock(autoResult)) {
 			autoBlockState.consecutive += 1;
 			autoBlockState.total += 1;
-			const fallbackReason = formatAutoFallbackReason(autoResult);
+			const fallbackReason = formatSemanticFallbackReason(autoResult);
 			if (autoBlockState.consecutive >= AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD || autoBlockState.total >= AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD) {
 				autoBlockState.paused = true;
-				const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, `${fallbackReason}. Gate auto paused after ${autoBlockState.consecutive} consecutive / ${autoBlockState.total} total auto-blocks; approving resumes auto mode`);
+				const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, true, `${fallbackReason}. Gate auto paused after ${autoBlockState.consecutive} consecutive / ${autoBlockState.total} total blocks; approving resumes auto mode`);
 				if (prompted.allowed) {
 					resetAutoBlockState(autoBlockState);
 					return undefined;
 				}
 				return prompted;
 			}
-			return { block: true, reason: `Gate auto-approver blocked ${input.event.toolName}: ${autoResult.reason}` };
+			return { block: true, reason: `Gate auto blocked ${input.event.toolName}: ${autoResult.reason}` };
 		}
 		autoFallback = autoResult;
 	}
 
-	const fallbackReason = formatAutoFallbackReason(autoFallback);
+	const fallbackReason = formatSemanticFallbackReason(autoFallback);
 	const prompted = await promptForAskDecision(input, sessionAllows, profileLocked, autoRuntimeEnabled && autoManager.isEnabled(), fallbackReason);
 	if (prompted.allowed) return undefined;
 	return prompted;
@@ -1720,7 +1700,7 @@ export default function piGate(pi: ExtensionAPI) {
 			`auto enabled=${autoStatus.enabled}`,
 			`auto runtime=${autoRuntimeEnabled && autoManager.isEnabled()}`,
 			`auto startOnSession=${autoConfig.startOnSession}`,
-			`auto mode=${autoStatus.mode}`,
+			`auto backend=${autoStatus.mode}`,
 			autoStatus.lastError ? `auto lastError=${autoStatus.lastError}` : undefined,
 			`policy file=${loaded.policyPath}`,
 			`schema file=${loaded.schemaPath}`,
@@ -1745,6 +1725,239 @@ export default function piGate(pi: ExtensionAPI) {
 			};
 		}
 		const compiled = resolved.compiled;
+		const autoConfig = loadGateAutoConfig(ctx.cwd);
+		const autoActive = autoRuntimeEnabled && autoConfig.enabled;
+		if (autoActive) {
+			const rawInput = event.input as Record<string, unknown>;
+			const role = getSemanticRole(compiled);
+			const loadedSemantic = loadGateSemanticConfig(extensionDir, ctx.cwd);
+			if (!loadedSemantic.config) {
+				return { block: true, reason: loadedSemantic.error ?? "Gate auto config unavailable. Tool calls are blocked until auto config is fixed." };
+			}
+
+			if (event.toolName === "bash") {
+				const command = String(rawInput.command ?? "");
+				const sessionKey = scopeSessionKey(compiled, buildBashSessionKey(command));
+				const normalizedCommand = normalizeCommand(command);
+				const analysis = extractMutationTargets(command, ctx.cwd);
+				const commandDecision = evaluateSubjectAcrossLineage(compiled, "bash", [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }]);
+				if (commandDecision.action === "deny") {
+					return { block: true, reason: pickReason(commandDecision.reasons, "deny", "Gate denied bash command") };
+				}
+				const mutationCandidates = analysis.paths.length > 0 ? analysis.paths : analysis.inferredCwdTarget ? [normalizeAbsPath(ctx.cwd)] : [];
+				if (analysis.mutating) {
+					const externalDecision = evaluateExternalDirectoryAcrossLineage(compiled, mutationCandidates, ctx.cwd);
+					const pathDecision = evaluateAbsolutePathsAcrossLineage(compiled, "edit", mutationCandidates, ctx.cwd);
+					const finalAction = pickMoreRestrictive(commandDecision.action, pickMoreRestrictive(externalDecision.action, pathDecision.action));
+					if (finalAction === "deny") {
+						return { block: true, reason: pickReason([...commandDecision.reasons, ...externalDecision.reasons, ...pathDecision.reasons], "deny", "Gate denied bash command") };
+					}
+				}
+				if (analysis.mutating && mutationCandidates.length > 0) {
+					const editEvaluation = evaluateGateSemantic({
+						config: loadedSemantic.config,
+						cwd: ctx.cwd,
+						subject: "edit",
+						groups: buildAbsolutePathGroups(mutationCandidates, ctx.cwd),
+						roleType: role.roleType,
+						roleName: role.roleName,
+					});
+					if (editEvaluation.action === "block") {
+						const reasons = [`auto block: bash mutation target ${editEvaluation.match.display} matched edit hardDeny ${JSON.stringify(editEvaluation.match.pattern)}`];
+						return await resolveSemanticDecision(
+							{
+								ctx,
+								effective: compiled,
+								event,
+								title: "Gate auto: confirm bash command",
+								message: [normalizedCommand || command, "", ...reasons, `Role: ${editEvaluation.role.roleType}:${editEvaluation.role.roleName}`].join("\n"),
+								sessionKey,
+								reasons,
+								fallbackDenyReason: "Gate auto denied bash command",
+								subject: "bash",
+								pathCandidates: mutationCandidates,
+								bash: { command, normalizedCommand, analysis },
+							},
+							editEvaluation,
+							sessionAllows,
+							profileLocked,
+							autoManager,
+							autoBlockState,
+							autoRuntimeEnabled,
+						);
+					}
+					const externalEvaluation = evaluateGateSemantic({
+						config: loadedSemantic.config,
+						cwd: ctx.cwd,
+						subject: "external_directory",
+						groups: buildExternalDirectoryGroups(mutationCandidates, ctx.cwd),
+						roleType: role.roleType,
+						roleName: role.roleName,
+					});
+					if (externalEvaluation.action === "block") {
+						const reasons = [`auto block: bash external mutation target ${externalEvaluation.match.display} matched ${JSON.stringify(externalEvaluation.match.pattern)}`];
+						return await resolveSemanticDecision(
+							{
+								ctx,
+								effective: compiled,
+								event,
+								title: "Gate auto: confirm bash command",
+								message: [normalizedCommand || command, "", ...reasons, `Role: ${externalEvaluation.role.roleType}:${externalEvaluation.role.roleName}`].join("\n"),
+								sessionKey,
+								reasons,
+								fallbackDenyReason: "Gate auto denied bash command",
+								subject: "bash",
+								pathCandidates: mutationCandidates,
+								bash: { command, normalizedCommand, analysis },
+							},
+							externalEvaluation,
+							sessionAllows,
+							profileLocked,
+							autoManager,
+							autoBlockState,
+							autoRuntimeEnabled,
+						);
+					}
+				}
+				const evaluation = evaluateGateSemantic({
+					config: loadedSemantic.config,
+					cwd: ctx.cwd,
+					subject: "bash",
+					groups: [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }],
+					roleType: role.roleType,
+					roleName: role.roleName,
+					bashCommand: command,
+				});
+				const reasons = evaluation.action === "semantic"
+					? [`auto: ${evaluation.role.roleType}:${evaluation.role.roleName} semantic review required`]
+					: [`auto ${evaluation.action}: ${evaluation.match.display} matched ${JSON.stringify(evaluation.match.pattern)}`];
+				return await resolveSemanticDecision(
+					{
+						ctx,
+						effective: compiled,
+						event,
+						title: "Gate auto: confirm bash command",
+						message: [normalizedCommand || command, "", ...reasons, `Role: ${evaluation.role.roleType}:${evaluation.role.roleName}`].join("\n"),
+						sessionKey,
+						reasons,
+						fallbackDenyReason: "Gate auto denied bash command",
+						subject: "bash",
+						pathCandidates: mutationCandidates,
+						bash: { command, normalizedCommand, analysis },
+					},
+					evaluation,
+					sessionAllows,
+					profileLocked,
+					autoManager,
+					autoBlockState,
+					autoRuntimeEnabled,
+				);
+			}
+
+			const rawSubject = getToolPermissionSubject(event.toolName);
+			const subjectGroups = getToolSubjectGroups(event.toolName, rawInput, ctx);
+			const pathCandidates = getToolPathCandidates(event.toolName, rawInput, ctx);
+			const policySubjectDecision = evaluateSubjectAcrossLineage(compiled, rawSubject, subjectGroups.length > 0 ? subjectGroups : [{ display: "unknown input", values: [""] }]);
+			const policyExternalDecision = evaluateExternalDirectoryAcrossLineage(compiled, pathCandidates, ctx.cwd);
+			const policyFinalAction = pickMoreRestrictive(policySubjectDecision.action, policyExternalDecision.action);
+			if (policyFinalAction === "deny") {
+				return { block: true, reason: pickReason([...policyExternalDecision.reasons, ...policySubjectDecision.reasons], "deny", `Gate denied ${event.toolName}`) };
+			}
+			if (!isGateSemanticSubject(rawSubject)) {
+				const reasons = [`auto prompt: unsupported tool subject ${JSON.stringify(rawSubject)} requires human review`];
+				const prompted = await promptForAskDecision(
+					{
+						ctx,
+						effective: compiled,
+						event,
+						title: `Gate auto: confirm ${event.toolName}`,
+						message: [...reasons, `Role: ${role.roleType}:${role.roleName}`].join("\n"),
+						sessionKey: scopeSessionKey(compiled, `${rawSubject}:unknown`),
+						reasons,
+						fallbackDenyReason: `Gate auto denied ${event.toolName}`,
+						subject: rawSubject,
+					},
+					sessionAllows,
+					profileLocked,
+					true,
+					"Gate auto cannot classify this tool deterministically",
+				);
+				if (prompted.allowed) return undefined;
+				return prompted;
+			}
+			const subject = rawSubject;
+			if (pathCandidates.length > 0) {
+				const externalEvaluation = evaluateGateSemantic({
+					config: loadedSemantic.config,
+					cwd: ctx.cwd,
+					subject: "external_directory",
+					groups: buildExternalDirectoryGroups(pathCandidates, ctx.cwd),
+					roleType: role.roleType,
+					roleName: role.roleName,
+				});
+				if (externalEvaluation.action === "block") {
+					const reasons = [`auto block: external path ${externalEvaluation.match.display} matched ${JSON.stringify(externalEvaluation.match.pattern)}`];
+					return await resolveSemanticDecision(
+						{
+							ctx,
+							effective: compiled,
+							event,
+							title: `Gate auto: confirm ${event.toolName}`,
+							message: [...reasons, `Role: ${externalEvaluation.role.roleType}:${externalEvaluation.role.roleName}`].join("\n"),
+							sessionKey: scopeSessionKey(compiled, buildPathSessionKey(subject, pathCandidates)),
+							reasons,
+							fallbackDenyReason: `Gate auto denied ${event.toolName}`,
+							subject,
+							pathCandidates,
+						},
+						externalEvaluation,
+						sessionAllows,
+						profileLocked,
+						autoManager,
+						autoBlockState,
+						autoRuntimeEnabled,
+					);
+				}
+			}
+			const groups = subjectGroups.length > 0 ? subjectGroups : [{ display: "unknown input", values: [""] }];
+			const sessionKey = scopeSessionKey(
+				compiled,
+				subjectGroups.length > 0
+					? buildPathSessionKey(subject, subjectGroups.map((group) => group.display))
+					: `${subject}:unknown`,
+			);
+			const evaluation = evaluateGateSemantic({
+				config: loadedSemantic.config,
+				cwd: ctx.cwd,
+				subject,
+				groups,
+				roleType: role.roleType,
+				roleName: role.roleName,
+			});
+			const reasons = evaluation.action === "semantic"
+				? [`auto: ${evaluation.role.roleType}:${evaluation.role.roleName} semantic review required`]
+				: [`auto ${evaluation.action}: ${evaluation.match.display} matched ${JSON.stringify(evaluation.match.pattern)}`];
+			return await resolveSemanticDecision(
+				{
+					ctx,
+					effective: compiled,
+					event,
+					title: `Gate auto: confirm ${event.toolName}`,
+					message: [...reasons, `Role: ${evaluation.role.roleType}:${evaluation.role.roleName}`].join("\n"),
+					sessionKey,
+					reasons,
+					fallbackDenyReason: `Gate auto denied ${event.toolName}`,
+					subject,
+					pathCandidates,
+				},
+				evaluation,
+				sessionAllows,
+				profileLocked,
+				autoManager,
+				autoBlockState,
+				autoRuntimeEnabled,
+			);
+		}
 
 		if (event.toolName === "bash") {
 			const command = String((event.input as Record<string, unknown>).command ?? "");
@@ -1815,9 +2028,6 @@ export default function piGate(pi: ExtensionAPI) {
 				},
 				sessionAllows,
 				profileLocked,
-				autoManager,
-				autoBlockState,
-				autoRuntimeEnabled,
 			);
 		}
 
@@ -1862,9 +2072,6 @@ export default function piGate(pi: ExtensionAPI) {
 			},
 			sessionAllows,
 			profileLocked,
-			autoManager,
-			autoBlockState,
-			autoRuntimeEnabled,
 		);
 	});
 }

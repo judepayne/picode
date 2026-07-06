@@ -329,6 +329,7 @@ describe("prompt-vars", () => {
 		assert.strictEqual(getVarValue(state, "gate.auto.startOnSession"), "true");
 	});
 
+
 	test("global gate.auto.enabled=true does not activate a project without explicit project opt-in", () => {
 		const cwd = makeWorkspace();
 		fs.mkdirSync(path.dirname(getGlobalVarsConfigPath()), { recursive: true });

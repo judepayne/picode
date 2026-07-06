@@ -111,7 +111,7 @@ Once that is done, a good quick smoke test is:
 | Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>` |
 | Delegate through the active agent | Just ask in plain English |
 | Check / set prompt vars | `/vars` or `/vars set <key> <value>` |
-| Local auto-approval for gate asks | `/gate auto on`, `/gate auto off`, `/gate auto status` |
+| Local auto gate approval | `/gate auto on`, `/gate auto status` |
 | Bootstrap missing vars files | `/vars bootstrap` |
 | Check active plan or design | Ask the agent: "Show me the active plan" |
 | Reference plan or design in prompts | `${plan.path}` or `${design.path}` |
@@ -128,7 +128,7 @@ Second, permissions are enforced separately from persona through **pi-gate**. Th
 
 Pi-gate rules resolve to `allow`, `ask`, or `deny`. For the top-level agents, that gives you a useful balance: permissive where it should be, interactive where it would be risky, and blocked where it should never happen.
 
-Optionally, `/gate auto on` can mediate `ask` decisions through a local llama.cpp approver for the current Pi session. Hard denies remain final, model allows are one-call-only, risky calls are soft-blocked first so the agent can try alternatives, and repeated auto-blocks pause into normal prompting. It does not auto-start after a Pi restart unless `gate.auto.startOnSession=true` is set. Users own the local `llama-server` and GGUF model artifacts; helpers (`scripts/setup-gate-auto-approver.mjs`, `scripts/eval-gate-auto-approver.mjs`, `scripts/smoke-gate-auto-soft-block.mjs`) only configure/verify them.
+Optionally, `/gate auto on` enables semantic local auto-approval for the current Pi session. It uses `auto.json` hard-denies, role-specific always-allows, and per-agent/subagent natural-language guidance instead of policy `ask` rules. Hard denies remain final, model allows are one-call-only, risky calls are blocked before model or prompt fallback, and repeated model blocks pause into normal prompting. It does not auto-start after a Pi restart unless `gate.auto.startOnSession=true` is set. Users own the local `llama-server` and GGUF model artifacts; helpers (`scripts/setup-gate-auto-approver.mjs`, `scripts/eval-gate-auto-approver.mjs`, `scripts/smoke-gate-auto-soft-block.mjs`) only configure/verify them.
 
 Third, the main agent can delegate bounded work to **subagents** such as scout, worker, and reviewer. Those subagents are not role-play. They run from their own markdown cards with their own tools and instructions.
 
@@ -512,7 +512,7 @@ See [`CHANGELOG.md`](./CHANGELOG.md).
 ### Extensions
 
 - **Agent switching** — [`extensions/agent-mode/README.md`](./extensions/agent-mode/README.md): prompts, tools, models, thinking levels, shortcuts, and the `/agents` command.
-- **Permissions** — [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md): profiles, `allow`/`ask`/`deny`, inheritance, and how bash/file actions are gated.
+- **Permissions** — [`extensions/pi-gate/README.md`](./extensions/pi-gate/README.md): profiles, `allow`/`ask`/`deny`, inheritance, semantic auto mode, and how bash/file actions are gated.
 - **Delegation layer** — [`extensions/subagent-orchestrator/README.md`](./extensions/subagent-orchestrator/README.md): `~subagent`, sync vs async, chains, parallel fan-out, status, logs, and handbacks.
 - **Child execution** — [`extensions/subagent-mode/README.md`](./extensions/subagent-mode/README.md): child `pi` processes, normalized events, sync/async executors, and depth propagation.
 - **Prompt interpolation** — [`extensions/z-prompt-vars/README.md`](./extensions/z-prompt-vars/README.md): `${...}` expansion, var storage, and the `/vars` command.

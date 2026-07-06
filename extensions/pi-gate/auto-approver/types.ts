@@ -1,4 +1,4 @@
-export type GateAutoDecision = "allow" | "deny" | "escalate";
+export type GateAutoDecision = "allow" | "block" | "prompt";
 export type GateAutoOutcome =
 	| "allowed"
 	| "blocked"
@@ -82,54 +82,4 @@ export interface GateAutoApprovalRequest {
 		normalizedCommand: string;
 		analysis: unknown;
 	};
-}
-
-export interface GateAutoApprovalResult {
-	decision: GateAutoDecision;
-	reason: string;
-	outcome: GateAutoOutcome;
-	latencyMs: number;
-	requestId: string;
-	error?: string;
-	backendMode?: GateAutoBackendMode;
-	stableContextHash?: string;
-	dynamicPayloadHash?: string;
-	modelDecision?: GateAutoDecision;
-	modelOutcome?: GateAutoOutcome;
-	modelReason?: string;
-	guardOverride?: boolean;
-	riskFlags?: string[];
-	riskRecommendedDecision?: string;
-}
-
-export interface GateAutoAuditRecord {
-	schemaVersion: 1;
-	timestamp: string;
-	pid: number;
-	processKind: GateAutoProcessKind;
-	backendMode: GateAutoBackendMode;
-	requestId?: string;
-	profileName?: string;
-	lineageNames?: string[];
-	unattended?: boolean;
-	toolName?: string;
-	subject?: string;
-	pathCandidates?: string[];
-	reasons?: string[];
-	decision?: GateAutoDecision;
-	reason?: string;
-	outcome?: GateAutoOutcome;
-	latencyMs?: number;
-	endpoint?: string;
-	modelPath?: string;
-	stableContextHash?: string;
-	dynamicPayloadHash?: string;
-	error?: string;
-	event?: string;
-	modelDecision?: GateAutoDecision;
-	modelOutcome?: GateAutoOutcome;
-	modelReason?: string;
-	guardOverride?: boolean;
-	riskFlags?: string[];
-	riskRecommendedDecision?: string;
 }

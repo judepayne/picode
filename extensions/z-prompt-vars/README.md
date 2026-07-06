@@ -111,7 +111,7 @@ When bootstrap creates the initial vars files, it seeds:
 - `paths.design = ".pi/designs/active.md"` unless the project file is being created and a global `paths.design` already exists
 - `subagents.dispatch.defaultContext = "fresh"`
 - `automode.enabled = false`
-- `gate.auto.enabled = false` and `gate.auto.startOnSession = false` plus safe default `gate.auto.*` config for pi-gate local auto-approval
+- `gate.auto.enabled = false` and `gate.auto.startOnSession = false` plus safe default `gate.auto.*` config for pi-gate local auto approval
 
 Allowed dispatch defaults:
 - `fresh`
@@ -146,7 +146,6 @@ Some vars are protected because generic agent-driven mutation should not silentl
 - `automode.enabled=true` can only be set by the automode helper; generic vars may clear it to `false`.
 - `gate.auto.enabled=true` can only be set by `/gate auto on`; generic vars may clear it to `false`.
 - `gate.auto.startOnSession=true` is user-configurable and opts a project into starting gate auto automatically after a fresh Pi start.
-
 `gate.auto.enabled` is project-scoped for activation. A global `gate.auto.enabled=true` does not turn on auto-approval in every workspace. Other `gate.auto.*` settings, such as `gate.auto.startOnSession`, `gate.auto.llama.modelPath`, `gate.auto.llama.serverPath`, `gate.auto.llama.endpoint`, `gate.auto.llama.warmup`, and `gate.auto.timeoutMs`, still use normal global-under-project merge semantics.
 
 ## Built-in plan/design behavior

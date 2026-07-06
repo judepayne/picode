@@ -1,119 +1,84 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { appendGateAutoAuditRecord, getGateAutoAuditPath } from "./audit-log.ts";
-import { requestGateAutoDecision, warmGateAutoApprover } from "./client.ts";
-import {
-	GATE_AUTO_BACKEND_ENV,
-	GATE_AUTO_CONTEXT_HASH_ENV,
-	GATE_AUTO_ENDPOINT_ENV,
-	GATE_AUTO_OWNER_PID_ENV,
-	loadGateAutoConfig,
-} from "./config.ts";
-import { buildGateAutoDynamicPayload, buildGateAutoStableContext } from "./context.ts";
-import { ManagedLlamaServer } from "./llama-server.ts";
-import { assessGateAutoRisk, type GateAutoRiskAssessment } from "./risk.ts";
-import type { GateAutoApprovalRequest, GateAutoApprovalResult, GateAutoApproverConfig, GateAutoAuditRecord, GateAutoBackendMode, GateAutoRuntimeStatus } from "./types.ts";
+import { loadGateAutoConfig } from "./config.ts";
+import { GateAutoRuntime, type GateAutoRuntimeHooks } from "./runtime.ts";
+import type { GateAutoApproverConfig, GateAutoBackendMode, GateAutoRuntimeStatus } from "./types.ts";
+import { appendGateAutoDecisionAuditRecord, getGateAutoDecisionAuditPath } from "../semantic/audit-log.ts";
+import { requestGateSemanticDecision } from "../semantic/client.ts";
+import { buildGateSemanticDynamicPayload, buildGateSemanticStableContext } from "../semantic/context.ts";
+import type { GateSemanticAuditRecord, GateSemanticRequest, GateSemanticResult } from "../semantic/types.ts";
+import { assessGateRisk, type GateRiskAssessment } from "../risk.ts";
 
 interface PiLike {
 	events: { emit(event: string, data: unknown): void };
 }
 
-const ENV_KEYS = [GATE_AUTO_ENDPOINT_ENV, GATE_AUTO_OWNER_PID_ENV, GATE_AUTO_BACKEND_ENV, GATE_AUTO_CONTEXT_HASH_ENV];
-
-function applyRiskGuidance(result: GateAutoApprovalResult, risk: GateAutoRiskAssessment): GateAutoApprovalResult {
-	if (risk.recommendedDecision !== "deny" && risk.recommendedDecision !== "escalate") return result;
-	if (result.decision === "allow") {
-		return { ...result, decision: risk.recommendedDecision, outcome: risk.recommendedDecision === "deny" ? "blocked" : "escalated", reason: risk.reason ?? result.reason };
+function applyRiskGuidance(result: GateSemanticResult, risk: GateRiskAssessment): GateSemanticResult {
+	if (risk.recommendedDecision === "deny") {
+		return { ...result, decision: "block", outcome: "blocked", reason: risk.reason ?? result.reason };
 	}
-	return { ...result, reason: risk.reason ?? result.reason };
+	if (risk.recommendedDecision === "escalate") {
+		if (result.decision === "allow") return { ...result, decision: "prompt", outcome: "fallback_prompt", reason: risk.reason ?? result.reason };
+		return { ...result, reason: risk.reason ?? result.reason };
+	}
+	return result;
 }
 
 export class GateAutoApproverManager {
 	private readonly pi: PiLike;
-	private config?: GateAutoApproverConfig;
-	private server = new ManagedLlamaServer();
-	private endpoint?: string;
-	private mode: GateAutoBackendMode = "disabled";
-	private lastError?: string;
+	private readonly runtime = new GateAutoRuntime();
 	private stable?: { text: string; hash: string };
-	private runtimeKey?: string;
-	private warmedKey?: string;
-	private originalEnv?: Record<string, string | undefined>;
-	private cleanupRegistered = false;
 
 	constructor(pi: PiLike) {
 		this.pi = pi;
 	}
 
 	isEnabled(): boolean {
-		return this.config?.enabled === true;
+		return this.runtime.isEnabled();
 	}
 
 	async refresh(ctx: ExtensionContext): Promise<GateAutoRuntimeStatus> {
-		this.config = loadGateAutoConfig(ctx.cwd);
-		if (!this.config.enabled) {
-			await this.disableRuntimeOnly();
-			this.mode = "disabled";
-			return this.status(ctx);
-		}
-		return await this.ensureReady(ctx);
+		return this.withAuditPath(ctx, await this.runtime.refresh(ctx, this.runtimeHooks()));
 	}
 
 	async enable(ctx: ExtensionContext): Promise<GateAutoRuntimeStatus> {
-		this.config = loadGateAutoConfig(ctx.cwd);
-		return await this.ensureReady(ctx);
+		return this.withAuditPath(ctx, await this.runtime.enable(ctx, this.runtimeHooks()));
 	}
 
 	async disable(ctx?: ExtensionContext): Promise<GateAutoRuntimeStatus> {
-		await this.disableRuntimeOnly();
-		this.mode = "disabled";
-		if (ctx) this.config = loadGateAutoConfig(ctx.cwd);
-		return this.status(ctx);
+		return this.withAuditPath(ctx, await this.runtime.disable(ctx));
 	}
 
 	async shutdown(): Promise<void> {
-		await this.disableRuntimeOnly();
+		await this.runtime.shutdown();
 	}
 
 	status(ctx?: ExtensionContext): GateAutoRuntimeStatus {
-		const cwd = ctx?.cwd ?? process.cwd();
-		const config = this.config ?? loadGateAutoConfig(cwd);
-		const serverStatus = this.server.status();
-		return {
-			enabled: config.enabled,
-			mode: config.enabled ? this.mode : "disabled",
-			processKind: config.processKind,
-			endpoint: this.endpoint ?? serverStatus.endpoint ?? config.llama.endpoint ?? config.inheritedEndpoint,
-			pid: serverStatus.pid,
-			modelPath: config.llama.modelPath,
-			serverPath: config.llama.serverPath,
-			healthy: this.mode === "external" || this.mode === "inherited" || serverStatus.healthy,
-			lastError: this.lastError ?? serverStatus.lastError,
-			auditPath: getGateAutoAuditPath(cwd),
-		};
+		return this.withAuditPath(ctx, this.runtime.status(ctx));
 	}
 
-	async decide(ctx: ExtensionContext, request: GateAutoApprovalRequest): Promise<GateAutoApprovalResult> {
+	async decide(ctx: ExtensionContext, request: GateSemanticRequest): Promise<GateSemanticResult> {
 		const started = Date.now();
-		const status = await this.ensureReady(ctx);
-		const config = this.config ?? loadGateAutoConfig(ctx.cwd);
+		const risk = assessGateRisk(request);
+		const status = await this.runtime.refresh(ctx, this.runtimeHooks());
+		const config = loadGateAutoConfig(ctx.cwd);
 		if (!config.enabled || !status.endpoint || status.mode === "disabled" || status.mode === "unconfigured" || status.mode === "failed") {
-			const result: GateAutoApprovalResult = {
-				decision: "escalate",
-				reason: status.lastError ?? "Gate auto-approver is unavailable",
+			const result: GateSemanticResult = applyRiskGuidance({
+				decision: "prompt",
+				reason: status.lastError ?? "Gate auto is unavailable",
 				outcome: "unavailable",
 				latencyMs: Date.now() - started,
 				requestId: request.requestId,
 				backendMode: status.mode,
-			};
-			this.audit(ctx.cwd, request, result, status.mode);
+			}, risk);
+			this.audit(ctx.cwd, request, result, status.mode, undefined, undefined, risk);
 			return result;
 		}
 
-		const risk = assessGateAutoRisk(request);
-		const stable = this.getStableContext(ctx, config);
-		const dynamic = buildGateAutoDynamicPayload(ctx, request, config);
-		const result = await requestGateAutoDecision({
+		const stable = buildGateSemanticStableContext(request, config);
+		this.stable = stable;
+		const dynamic = buildGateSemanticDynamicPayload(ctx, request, config);
+		const result = await requestGateSemanticDecision({
 			endpoint: status.endpoint,
 			stablePrefix: stable.text,
 			dynamicPayload: dynamic.text,
@@ -123,7 +88,7 @@ export class GateAutoApproverManager {
 			config,
 		});
 		const guardedResult = applyRiskGuidance({ ...result, backendMode: status.mode }, risk);
-		const annotatedResult: GateAutoApprovalResult = {
+		const annotatedResult: GateSemanticResult = {
 			...guardedResult,
 			modelDecision: result.decision,
 			modelOutcome: result.outcome,
@@ -136,151 +101,42 @@ export class GateAutoApproverManager {
 		return annotatedResult;
 	}
 
-	private async ensureReady(ctx: ExtensionContext): Promise<GateAutoRuntimeStatus> {
-		const config = this.config ?? loadGateAutoConfig(ctx.cwd);
-		this.config = config;
-		if (!config.enabled) {
-			this.mode = "disabled";
-			return this.status(ctx);
-		}
-
-		if (config.llama.endpointError) {
-			await this.disableRuntimeOnly();
-			this.mode = "unconfigured";
-			this.lastError = config.llama.endpointError;
-			return this.status(ctx);
-		}
-
-		if (config.llama.endpoint) {
-			if (this.mode === "managed") await this.disableRuntimeOnly();
-			this.endpoint = config.llama.endpoint;
-			this.runtimeKey = `external:${this.endpoint}`;
-			this.mode = "external";
-			this.lastError = undefined;
-			const stable = this.getStableContext(ctx, config);
-			this.setChildEnv(this.endpoint, stable.hash);
-			await this.warmIfNeeded(ctx, config, stable);
-			return this.status(ctx);
-		}
-
-		if (config.inheritedEndpoint) {
-			if (this.mode === "managed") await this.disableRuntimeOnly();
-			this.endpoint = config.inheritedEndpoint;
-			this.runtimeKey = `inherited:${this.endpoint}`;
-			this.mode = "inherited";
-			this.lastError = undefined;
-			return this.status(ctx);
-		}
-
-		if (config.processKind === "subagent") {
-			await this.disableRuntimeOnly();
-			this.mode = "unconfigured";
-			this.lastError = "No inherited or configured gate auto endpoint is available in this subagent";
-			return this.status(ctx);
-		}
-
-		if (!config.llama.serverPath || !config.llama.modelPath) {
-			await this.disableRuntimeOnly();
-			this.mode = "unconfigured";
-			this.lastError = "Configure gate.auto.llama.serverPath and gate.auto.llama.modelPath or gate.auto.llama.endpoint";
-			return this.status(ctx);
-		}
-
-		this.registerCleanupOnce();
-		const runtimeKey = this.buildManagedRuntimeKey(config);
-		if (this.mode === "managed" && this.runtimeKey !== runtimeKey) await this.disableRuntimeOnly();
-		const serverStatus = await this.server.start(config);
-		if (!serverStatus.endpoint || !serverStatus.healthy) {
-			await this.disableRuntimeOnly();
-			this.mode = "failed";
-			this.lastError = serverStatus.lastError ?? "Managed llama-server failed to start";
-			return this.status(ctx);
-		}
-		this.endpoint = serverStatus.endpoint;
-		this.runtimeKey = runtimeKey;
-		this.mode = "managed";
-		this.lastError = undefined;
-		const stable = this.getStableContext(ctx, config);
-		this.setChildEnv(this.endpoint, stable.hash);
-		await this.warmIfNeeded(ctx, config, stable);
-		this.audit(ctx.cwd, undefined, undefined, this.mode, "runtime_started");
-		return this.status(ctx);
+	private runtimeHooks(): GateAutoRuntimeHooks {
+		return {
+			stableContext: (_ctx, config) => this.getWarmupStableContext(config),
+			auditRuntimeEvent: (ctx, mode, event, detail) => {
+				if (event === "runtime_started") this.audit(ctx.cwd, undefined, undefined, mode, event);
+				else this.audit(ctx.cwd, undefined, { decision: "prompt", reason: "Gate auto warmup failed", outcome: "unavailable", latencyMs: detail?.latencyMs ?? 0, requestId: "warmup", error: detail?.error }, mode, event);
+			},
+		};
 	}
 
-	private buildManagedRuntimeKey(config: GateAutoApproverConfig): string {
-		return JSON.stringify({
-			serverPath: config.llama.serverPath,
-			modelPath: config.llama.modelPath,
-			host: config.llama.host,
-			port: config.llama.port,
-			ctxSize: config.llama.ctxSize,
-			threads: config.llama.threads,
-			threadsBatch: config.llama.threadsBatch,
-			nGpuLayers: config.llama.nGpuLayers,
-			parallel: config.llama.parallel,
-			cachePrompt: config.llama.cachePrompt,
-			cacheReuse: config.llama.cacheReuse,
-		});
+	private withAuditPath(ctx: ExtensionContext | undefined, status: GateAutoRuntimeStatus): GateAutoRuntimeStatus {
+		return { ...status, auditPath: getGateAutoDecisionAuditPath(ctx?.cwd ?? process.cwd()) };
 	}
 
-	private async warmIfNeeded(ctx: ExtensionContext, config: GateAutoApproverConfig, stable: { text: string; hash: string }): Promise<void> {
-		if (!config.llama.warmup || config.processKind !== "top-level" || !this.endpoint) return;
-		const key = `${this.runtimeKey ?? this.endpoint}:${stable.hash}`;
-		if (this.warmedKey === key) return;
-		this.warmedKey = key;
-		const result = await warmGateAutoApprover({ endpoint: this.endpoint, stablePrefix: stable.text, stableContextHash: stable.hash, config });
-		if (!result.ok) {
-			this.audit(ctx.cwd, undefined, { decision: "escalate", reason: "Gate auto warmup failed", outcome: "unavailable", latencyMs: result.latencyMs, requestId: "warmup", error: result.error }, this.mode, "warmup_failed");
-		}
-	}
-
-	private getStableContext(ctx: ExtensionContext, config: GateAutoApproverConfig): { text: string; hash: string } {
-		this.stable = buildGateAutoStableContext(this.pi, ctx.cwd, config);
+	private getWarmupStableContext(config: GateAutoApproverConfig): { text: string; hash: string } {
+		const request: GateSemanticRequest = {
+			requestId: "warmup",
+			profileName: "builder",
+			lineageNames: ["builder"],
+			unattended: false,
+			toolName: "bash",
+			subject: "bash:warmup",
+			sessionKeyHash: "warmup",
+			reasons: ["runtime warmup"],
+			roleType: "agent",
+			roleName: "builder",
+			guidance: "Warmup request only. Return prompt unless the action is clearly harmless.",
+		};
+		this.stable = buildGateSemanticStableContext(request, config);
 		return this.stable;
 	}
 
-	private setChildEnv(endpoint: string, contextHash: string | undefined): void {
-		if (!this.originalEnv) {
-			this.originalEnv = {};
-			for (const key of ENV_KEYS) this.originalEnv[key] = process.env[key];
-		}
-		process.env[GATE_AUTO_ENDPOINT_ENV] = endpoint;
-		process.env[GATE_AUTO_OWNER_PID_ENV] = String(process.pid);
-		process.env[GATE_AUTO_BACKEND_ENV] = "llama.cpp";
-		if (contextHash) process.env[GATE_AUTO_CONTEXT_HASH_ENV] = contextHash;
-	}
-
-	private restoreChildEnv(): void {
-		if (!this.originalEnv) return;
-		for (const key of ENV_KEYS) {
-			const value = this.originalEnv[key];
-			if (value === undefined) delete process.env[key];
-			else process.env[key] = value;
-		}
-		this.originalEnv = undefined;
-	}
-
-	private killRuntimeNow(): void {
-		this.server.killNow();
-		this.endpoint = undefined;
-		this.runtimeKey = undefined;
-		this.warmedKey = undefined;
-		this.stable = undefined;
-		this.restoreChildEnv();
-	}
-
-	private async disableRuntimeOnly(): Promise<void> {
-		await this.server.stop();
-		this.endpoint = undefined;
-		this.runtimeKey = undefined;
-		this.warmedKey = undefined;
-		this.stable = undefined;
-		this.restoreChildEnv();
-	}
-
-	private audit(cwd: string, request: GateAutoApprovalRequest | undefined, result: GateAutoApprovalResult | undefined, mode: GateAutoBackendMode, event?: string, modelResult?: GateAutoApprovalResult, risk?: GateAutoRiskAssessment): void {
-		const config = this.config ?? loadGateAutoConfig(cwd);
-		const record: GateAutoAuditRecord = {
+	private audit(cwd: string, request: GateSemanticRequest | undefined, result: GateSemanticResult | undefined, mode: GateAutoBackendMode, event?: string, modelResult?: GateSemanticResult, risk?: GateRiskAssessment): void {
+		const config = loadGateAutoConfig(cwd);
+		const status = this.runtime.status({ cwd } as ExtensionContext);
+		const record: GateSemanticAuditRecord = {
 			schemaVersion: 1,
 			timestamp: new Date().toISOString(),
 			pid: process.pid,
@@ -294,16 +150,20 @@ export class GateAutoApproverManager {
 			subject: request?.subject,
 			pathCandidates: request?.pathCandidates,
 			reasons: request?.reasons,
+			roleType: request?.roleType,
+			roleName: request?.roleName,
 			decision: result?.decision,
 			reason: result?.reason,
 			outcome: result?.outcome,
 			latencyMs: result?.latencyMs,
-			endpoint: this.endpoint,
+			endpoint: status.endpoint,
 			modelPath: config.llama.modelPath,
 			stableContextHash: result?.stableContextHash ?? this.stable?.hash,
 			dynamicPayloadHash: result?.dynamicPayloadHash,
 			error: result?.error,
 			event,
+			matchedHardDeny: request?.matchedHardDeny,
+			matchedAlwaysAllow: request?.matchedAlwaysAllow,
 			modelDecision: modelResult?.decision,
 			modelOutcome: modelResult?.outcome,
 			modelReason: modelResult?.reason,
@@ -311,22 +171,6 @@ export class GateAutoApproverManager {
 			riskFlags: risk?.flags,
 			riskRecommendedDecision: risk?.recommendedDecision,
 		};
-		appendGateAutoAuditRecord(cwd, record, config.auditEnabled);
-	}
-
-	private registerCleanupOnce(): void {
-		if (this.cleanupRegistered) return;
-		this.cleanupRegistered = true;
-		process.once("exit", () => {
-			this.killRuntimeNow();
-		});
-		process.once("SIGINT", async () => {
-			await this.shutdown();
-			process.kill(process.pid, "SIGINT");
-		});
-		process.once("SIGTERM", async () => {
-			await this.shutdown();
-			process.kill(process.pid, "SIGTERM");
-		});
+		appendGateAutoDecisionAuditRecord(cwd, record, config.auditEnabled);
 	}
 }
