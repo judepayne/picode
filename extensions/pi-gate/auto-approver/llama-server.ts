@@ -15,6 +15,7 @@ export class ManagedLlamaServer {
 	private proc?: ChildProcessWithoutNullStreams;
 	private endpoint?: string;
 	private lastError?: string;
+	private stopping = false;
 
 	status(): ManagedLlamaServerStatus {
 		return { endpoint: this.endpoint, pid: this.proc?.pid, healthy: Boolean(this.proc && this.endpoint && !this.proc.killed), lastError: this.lastError };
@@ -30,14 +31,18 @@ export class ManagedLlamaServer {
 		const port = config.llama.port || await pickPort(config.llama.host);
 		const args = buildArgs(config, port);
 		try {
+			this.stopping = false;
 			this.proc = spawn(config.llama.serverPath, args, { stdio: ["ignore", "pipe", "pipe"] });
 			this.proc.stdout.resume();
 			this.proc.stderr.resume();
 			this.endpoint = `http://${config.llama.host}:${port}`;
 			this.lastError = undefined;
 			this.proc.once("exit", (code, signal) => {
-				this.lastError = `llama-server exited code=${code ?? "null"} signal=${signal ?? "null"}`;
 				this.proc = undefined;
+				this.endpoint = undefined;
+				if (this.stopping || code === 0) this.lastError = undefined;
+				else this.lastError = `llama-server exited code=${code ?? "null"} signal=${signal ?? "null"}`;
+				this.stopping = false;
 			});
 			this.proc.once("error", (error) => {
 				this.lastError = error.message;
@@ -45,8 +50,9 @@ export class ManagedLlamaServer {
 			await waitForHealth(this.endpoint, config.llama.startupTimeoutMs);
 			return this.status();
 		} catch (error) {
-			this.lastError = error instanceof Error ? error.message : String(error);
+			const startupError = error instanceof Error ? error.message : String(error);
 			await this.stop();
+			this.lastError = startupError;
 			return this.status();
 		}
 	}
@@ -55,6 +61,8 @@ export class ManagedLlamaServer {
 		const proc = this.proc;
 		this.proc = undefined;
 		this.endpoint = undefined;
+		this.stopping = true;
+		this.lastError = undefined;
 		if (!proc || proc.killed) return;
 		try {
 			proc.kill("SIGTERM");
@@ -67,7 +75,12 @@ export class ManagedLlamaServer {
 		const proc = this.proc;
 		this.proc = undefined;
 		this.endpoint = undefined;
-		if (!proc || proc.killed) return;
+		this.stopping = true;
+		this.lastError = undefined;
+		if (!proc || proc.killed) {
+			this.stopping = false;
+			return;
+		}
 		await new Promise<void>((resolve) => {
 			const killTimer = setTimeout(() => {
 				try {
