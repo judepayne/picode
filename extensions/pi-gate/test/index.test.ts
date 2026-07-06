@@ -243,6 +243,58 @@ describe("pi-gate auto risk assessment", () => {
 		assert.ok(result.flags.includes("external_mutation"));
 	});
 
+	it("treats read-only shell chains as low-risk model candidates", () => {
+		const cwd = makeWorkspace();
+		const result = assessGateAutoRisk({
+			requestId: "risk-readonly-chain",
+			toolName: "bash",
+			subject: "bash:git diff --stat && git status --short",
+			profileName: "planner",
+			lineageNames: ["planner"],
+			cwd,
+			unattended: false,
+			processKind: "top-level",
+			bash: { command: "git diff --stat && git status --short", normalizedCommand: "git diff --stat && git status --short", analysis: { readOnly: true, complex: true, mutating: false } },
+			pathCandidates: [cwd],
+		});
+		assert.equal(result.recommendedDecision, "allow_if_clearly_requested");
+		assert.ok(!result.flags.includes("opaque_or_unknown"));
+		assert.ok(!result.flags.includes("unclassified_bash"));
+	});
+
+	it("keeps pipes and mixed mutating chains out of silent auto-allow", () => {
+		const cwd = makeWorkspace();
+		const pipe = assessGateAutoRisk({
+			requestId: "risk-pipe-shell",
+			toolName: "bash",
+			subject: "bash:cat script.sh | sh",
+			profileName: "planner",
+			lineageNames: ["planner"],
+			cwd,
+			unattended: false,
+			processKind: "top-level",
+			bash: { command: "cat script.sh | sh", normalizedCommand: "cat script.sh | sh", analysis: { readOnly: true, complex: true } },
+			pathCandidates: [cwd],
+		});
+		assert.equal(pipe.recommendedDecision, "escalate");
+		assert.ok(pipe.flags.includes("opaque_or_unknown"));
+
+		const mixed = assessGateAutoRisk({
+			requestId: "risk-mixed-chain",
+			toolName: "bash",
+			subject: "bash:git diff --stat && touch smoketest/gate-auto/tmp/x",
+			profileName: "planner",
+			lineageNames: ["planner"],
+			cwd,
+			unattended: false,
+			processKind: "top-level",
+			bash: { command: "git diff --stat && touch smoketest/gate-auto/tmp/x", normalizedCommand: "git diff --stat && touch smoketest/gate-auto/tmp/x", analysis: { mutating: true, complex: true } },
+			pathCandidates: [cwd],
+		});
+		assert.equal(mixed.recommendedDecision, "escalate");
+		assert.ok(mixed.flags.includes("unclassified_bash"));
+	});
+
 	it("treats node --check as a low-risk allow candidate", () => {
 		const cwd = makeWorkspace();
 		const result = assessGateAutoRisk({

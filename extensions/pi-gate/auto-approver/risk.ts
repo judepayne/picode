@@ -72,33 +72,73 @@ function isReadOnlyTool(toolName: string): boolean {
 	return toolName === "read" || toolName === "ls" || toolName === "list" || toolName === "find" || toolName === "grep";
 }
 
-function hasShellControl(command: string): boolean {
+function splitSimpleCommandChain(command: string): string[] | undefined {
+	const segments: string[] = [];
+	let current = "";
 	let quote: "single" | "double" | undefined;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
+		const next = command[i + 1];
 		if (quote === "single") {
+			current += ch;
 			if (ch === "'") quote = undefined;
 			continue;
 		}
 		if (quote === "double") {
+			current += ch;
 			if (ch === '"') quote = undefined;
-			else if (ch === "\\") i++;
-			else if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+			else if (ch === "\\") current += command[++i] ?? "";
+			else if (ch === "`" || (ch === "$" && next === "(")) return undefined;
 			continue;
 		}
-		if (ch === "'") quote = "single";
-		else if (ch === '"') quote = "double";
-		else if (ch === "\\") i++;
-		else if (/[;&|<>\n]/.test(ch) || ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
+		if (ch === "'") {
+			quote = "single";
+			current += ch;
+		} else if (ch === '"') {
+			quote = "double";
+			current += ch;
+		} else if (ch === "\\") {
+			current += ch + (command[++i] ?? "");
+		} else if (ch === "|" && next === "|") {
+			const segment = current.trim();
+			if (segment) segments.push(segment);
+			current = "";
+			i++;
+		} else if (ch === "`" || (ch === "$" && next === "(") || ch === "|" || ch === "<" || ch === ">") {
+			return undefined;
+		} else if (ch === "&") {
+			if (next !== "&") return undefined;
+			const segment = current.trim();
+			if (segment) segments.push(segment);
+			current = "";
+			i++;
+		} else if (ch === ";" || ch === "\n") {
+			const segment = current.trim();
+			if (segment) segments.push(segment);
+			current = "";
+		} else {
+			current += ch;
+		}
 	}
-	return false;
+	const finalSegment = current.trim();
+	if (finalSegment) segments.push(finalSegment);
+	return segments;
+}
+
+function hasDangerousShellControl(command: string): boolean {
+	return splitSimpleCommandChain(command) === undefined;
+}
+
+function isLowRiskSimpleCommand(command: string): boolean {
+	return /^(true|echo\b|cat\b|head\b|tail\b|wc\b|du\b|git status\b|git diff\b|git log\b|git show\b|npm pkg get\b|npm test\b|npm run (test|build|lint)\b|node --test\b|node --check\b|grep\b|rg\b|find\b(?!.*\s-(delete|exec|execdir|ok|okdir)\b)|ls\b|pwd\b)/.test(command);
 }
 
 function isLowRiskAllowCandidate(request: GateAutoApprovalRequest): boolean {
 	const command = request.bash?.command.trim() ?? "";
 	if (request.toolName === "read") return true;
-	if (hasShellControl(command)) return false;
-	return request.toolName === "bash" && /^(true|echo\b|cat\b|head\b|tail\b|wc\b|du\b|git status\b|git diff\b|git log\b|git show\b|npm pkg get\b|npm test\b|npm run (test|build|lint)\b|node --test\b|node --check\b|grep\b|rg\b|find\b(?!.*\s-(delete|exec|execdir|ok|okdir)\b)|ls\b|pwd\b)/.test(command);
+	if (request.toolName !== "bash") return false;
+	const segments = splitSimpleCommandChain(command);
+	return Boolean(segments?.length) && segments.every(isLowRiskSimpleCommand);
 }
 
 export function assessGateAutoRisk(request: GateAutoApprovalRequest): GateAutoRiskAssessment {
@@ -126,7 +166,7 @@ export function assessGateAutoRisk(request: GateAutoApprovalRequest): GateAutoRi
 	if (!request.bash && request.cwd && !isReadOnlyTool(request.toolName) && (request.pathCandidates ?? []).some((candidate) => !isInsidePath(request.cwd!, candidate))) {
 		addFlag(flags, "external_mutation");
 	}
-	if (/opaque|unknown|"complex"\s*:\s*true/.test(combined) || hasShellControl(request.bash?.command ?? "") || /^\.\/[^\s]+/.test(request.bash?.command.trim() ?? "") || /\bfind\b[\s\S]*\s-(exec|execdir|ok|okdir)\b|\b(bash|sh|zsh|python|python3|node|ruby|perl|php)\s+-[ec]\b|\bsed\s+-i\b|\bawk\b.*>/.test(request.bash?.command ?? "")) {
+	if (/opaque|unknown/.test(combined) || hasDangerousShellControl(request.bash?.command ?? "") || (splitSimpleCommandChain(request.bash?.command.trim() ?? "") ?? []).some((segment) => /^\.\/[^\s]+/.test(segment)) || /\bfind\b[\s\S]*\s-(exec|execdir|ok|okdir)\b|\b(bash|sh|zsh|python|python3|node|ruby|perl|php)\s+-[ec]\b|\bsed\s+-i\b|\bawk\b.*>/.test(request.bash?.command ?? "")) {
 		addFlag(flags, "opaque_or_unknown");
 	}
 	const lowRiskAllowCandidate = isLowRiskAllowCandidate(request);

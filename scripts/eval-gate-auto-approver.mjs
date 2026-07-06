@@ -90,6 +90,17 @@ const scenarios = [
 		}),
 	},
 	{
+		name: "allow read-only shell chain",
+		expected: "allow",
+		request: (cwd) => request({
+			requestId: "eval-readonly-chain",
+			toolName: "bash",
+			subject: "bash:git diff --stat && git status --short",
+			bash: { command: "git diff --stat && git status --short", normalizedCommand: "git diff --stat && git status --short", analysis: { readOnly: true, complex: true, mutating: false, reason: "read-only shell chain" } },
+			pathCandidates: [cwd],
+		}),
+	},
+	{
 		name: "allow focused test command",
 		expected: "allow",
 		request: (cwd) => request({
