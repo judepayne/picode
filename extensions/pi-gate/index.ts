@@ -1,3 +1,4 @@
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -9,7 +10,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { loadGateAutoConfig } from "./auto-approver/config.ts";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import type { GateAutoApprovalRequest, GateAutoApprovalResult } from "./auto-approver/types.ts";
-import { setGateAutoEnabled } from "../z-prompt-vars/prompt-vars.ts";
+import { setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
 type PermissionAction = "allow" | "ask" | "deny";
 
@@ -115,6 +116,8 @@ const GATE_ERROR_STATUS = "gate:error";
 const MAX_SESSION_ALLOWS = 100;
 const AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD = 3;
 const AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD = 20;
+const GATE_AUTO_SETUP_TIMEOUT_MS = 15 * 60 * 1000;
+const GATE_AUTO_SETUP_MAX_OUTPUT_CHARS = 8000;
 const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "&", "then", "do", "else", "elif", "fi"]);
 const PATH_SUBJECTS = new Set(["read", "edit", "list", "external_directory"]);
 const ACTION_PRIORITY: Record<PermissionAction, number> = { allow: 0, ask: 1, deny: 2 };
@@ -1186,6 +1189,78 @@ function resetAutoBlockState(state: GateAutoBlockState): void {
 	state.paused = false;
 }
 
+function truncateSetupOutput(value: string): string {
+	if (value.length <= GATE_AUTO_SETUP_MAX_OUTPUT_CHARS) return value;
+	return `${value.slice(0, GATE_AUTO_SETUP_MAX_OUTPUT_CHARS)}\n[truncated ${value.length - GATE_AUTO_SETUP_MAX_OUTPUT_CHARS} chars]`;
+}
+
+function runGateAutoSetupScript(extensionDir: string, onChild?: (child: ChildProcessWithoutNullStreams) => void): Promise<{ installDir: string; serverPath: string; modelPath: string; modelSha256?: string }> {
+	const packageRoot = path.resolve(extensionDir, "..", "..");
+	const scriptPath = path.join(packageRoot, "scripts", "setup-gate-auto-approver.mjs");
+	return new Promise((resolve, reject) => {
+		if (!fs.existsSync(scriptPath)) {
+			reject(new Error(`setup script not found: ${scriptPath}`));
+			return;
+		}
+		const child = spawn(process.execPath, [scriptPath, "--json"], { cwd: packageRoot, stdio: ["ignore", "pipe", "pipe"] });
+		onChild?.(child);
+		let stdout = "";
+		let stderr = "";
+		let timedOut = false;
+		let killTimer: NodeJS.Timeout | undefined;
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			try {
+				child.kill("SIGTERM");
+			} catch {
+				// Best effort; close/error will settle the promise.
+			}
+			killTimer = setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					// Best effort.
+				}
+			}, 3000);
+		}, GATE_AUTO_SETUP_TIMEOUT_MS);
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", (chunk) => {
+			stdout = truncateSetupOutput(stdout + chunk);
+		});
+		child.stderr.on("data", (chunk) => {
+			stderr = truncateSetupOutput(stderr + chunk);
+		});
+		child.once("error", (error) => {
+			clearTimeout(timeout);
+			if (killTimer) clearTimeout(killTimer);
+			reject(error);
+		});
+		child.once("close", (code, signal) => {
+			clearTimeout(timeout);
+			if (killTimer) clearTimeout(killTimer);
+			if (timedOut) {
+				reject(new Error(`setup timed out after ${GATE_AUTO_SETUP_TIMEOUT_MS}ms`));
+				return;
+			}
+			if (code !== 0) {
+				reject(new Error(`setup failed${signal ? ` signal=${signal}` : ` code=${code}`}\n${truncateSetupOutput([stderr, stdout].filter(Boolean).join("\n"))}`.trim()));
+				return;
+			}
+			try {
+				const parsed = JSON.parse(stdout) as { installDir?: unknown; serverPath?: unknown; modelPath?: unknown; modelSha256?: unknown };
+				if (typeof parsed.installDir !== "string" || typeof parsed.serverPath !== "string" || typeof parsed.modelPath !== "string") {
+					throw new Error("setup JSON did not include installDir, serverPath, and modelPath");
+				}
+				resolve({ installDir: parsed.installDir, serverPath: parsed.serverPath, modelPath: parsed.modelPath, modelSha256: typeof parsed.modelSha256 === "string" ? parsed.modelSha256 : undefined });
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				reject(new Error(`setup completed but returned invalid JSON: ${message}\n${truncateSetupOutput(stdout)}`));
+			}
+		});
+	});
+}
+
 function formatAutoFallbackReason(result: GateAutoApprovalResult | undefined): string | undefined {
 	if (!result) return undefined;
 	if (result.outcome === "blocked") return `Auto-approver blocked: ${result.reason}`;
@@ -1293,6 +1368,7 @@ export default function piGate(pi: ExtensionAPI) {
 	let selectedProfileOverride: string | undefined;
 	let currentCtx: ExtensionContext | undefined;
 	let pendingProfileSwitch: ProfileSwitchRequest | undefined;
+	let activeAutoSetup: ChildProcessWithoutNullStreams | undefined;
 
 	function resolveRequestedProfile(): string {
 		return (
@@ -1435,6 +1511,14 @@ export default function piGate(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		if (activeAutoSetup && !activeAutoSetup.killed) {
+			try {
+				activeAutoSetup.kill("SIGTERM");
+			} catch {
+				// Best effort cleanup for an in-progress setup helper.
+			}
+		}
+		activeAutoSetup = undefined;
 		await autoManager.shutdown();
 		currentCtx = undefined;
 		pendingProfileSwitch = undefined;
@@ -1470,6 +1554,29 @@ export default function piGate(pi: ExtensionAPI) {
 		const autoArgs = trimmed.split(/\s+/);
 		if (autoArgs[0] === "auto") {
 			const action = autoArgs[1] ?? "status";
+			if (action === "setup") {
+				if (activeAutoSetup) {
+					ctx.ui.notify("Gate auto setup is already running", "warning");
+					return;
+				}
+				ctx.ui.notify("Gate auto setup started. This may download the default model the first time; leave Pi running until it completes.", "info");
+				try {
+					const setup = await runGateAutoSetupScript(extensionDir, (child) => {
+						activeAutoSetup = child;
+					});
+					setVar(ctx.cwd, "gate.auto.backend", "llama.cpp");
+					setVar(ctx.cwd, "gate.auto.llama.serverPath", setup.serverPath);
+					setVar(ctx.cwd, "gate.auto.llama.modelPath", setup.modelPath);
+					setVar(ctx.cwd, "gate.auto.timeoutMs", 1500);
+					ctx.ui.notify(`Gate auto setup complete. server=${setup.serverPath} | model=${setup.modelPath} | run /gate auto on when ready`, "info");
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					ctx.ui.notify(`Gate auto setup failed: ${message}`, "warning");
+				} finally {
+					activeAutoSetup = undefined;
+				}
+				return;
+			}
 			if (action === "on") {
 				setGateAutoEnabled(ctx.cwd, true);
 				autoRuntimeEnabled = true;
@@ -1515,7 +1622,7 @@ export default function piGate(pi: ExtensionAPI) {
 				].filter(Boolean).join(" | "), status.lastError ? "warning" : "info");
 				return;
 			}
-			ctx.ui.notify("Gate: unknown auto subcommand. Use /gate auto on, /gate auto off, or /gate auto status", "warning");
+			ctx.ui.notify("Gate: unknown auto subcommand. Use /gate auto setup, /gate auto on, /gate auto off, or /gate auto status", "warning");
 			return;
 		}
 		if (trimmed === "switch") {
@@ -1569,7 +1676,7 @@ export default function piGate(pi: ExtensionAPI) {
 
 		if (trimmed !== "" && trimmed !== "status") {
 			ctx.ui.notify(
-				"Gate: unknown subcommand. Use /gate status, /gate switch, /gate clear, or /gate auto status|on|off",
+				"Gate: unknown subcommand. Use /gate status, /gate switch, /gate clear, or /gate auto setup|status|on|off",
 				"warning",
 			);
 			return;
@@ -1601,7 +1708,7 @@ export default function piGate(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("gate", {
-		description: "status, switch (switch profiles), clear (clear cached approvals), auto on|off|status",
+		description: "status, switch (switch profiles), clear (clear cached approvals), auto setup|on|off|status",
 		handler: commandHandler,
 	});
 

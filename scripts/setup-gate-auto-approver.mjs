@@ -27,6 +27,7 @@ function parseArgs(argv) {
 		else if (arg === "--model-sha256") out.modelSha256 = (argv[++i] ?? "").toLowerCase();
 		else if (arg === "--server-path") out.serverPath = path.resolve(argv[++i] ?? "");
 		else if (arg === "--force") out.force = true;
+		else if (arg === "--json") out.json = true;
 		else if (arg === "--help" || arg === "-h") out.help = true;
 		else throw new Error(`Unknown argument: ${arg}`);
 	}
@@ -34,7 +35,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-	return `Usage: node scripts/setup-gate-auto-approver.mjs [--install-dir DIR] [--model-url URL --model-sha256 SHA256] [--server-path PATH] [--force]
+	return `Usage: node scripts/setup-gate-auto-approver.mjs [--install-dir DIR] [--model-url URL --model-sha256 SHA256] [--server-path PATH] [--force] [--json]
 
 Downloads/verifies the MiniCPM5-1B GGUF model and locates llama-server.
 It prints /vars commands; it does not enable gate auto approval.
@@ -56,9 +57,9 @@ async function sha256File(filePath) {
 	return hash.digest("hex");
 }
 
-async function download(url, target, force) {
+async function download(url, target, force, json = false) {
 	if (!force && fs.existsSync(target) && fs.statSync(target).size > 1024 * 1024) return;
-	console.log(`Downloading ${url}`);
+	(json ? console.error : console.log)(`Downloading ${url}`);
 	const response = await fetch(url);
 	if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`);
 	fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -87,7 +88,7 @@ if (!/^[a-f0-9]{64}$/.test(expectedModelSha256)) throw new Error("--model-sha256
 
 const modelName = path.basename(new URL(args.modelUrl).pathname);
 const modelPath = path.join(args.installDir, "models", modelName);
-await download(args.modelUrl, modelPath, args.force);
+await download(args.modelUrl, modelPath, args.force, args.json);
 const modelSize = fs.statSync(modelPath).size;
 if (modelSize < 1024 * 1024) throw new Error(`model file is suspiciously small: ${modelPath}`);
 const actualModelSha256 = await sha256File(modelPath);
@@ -97,26 +98,30 @@ if (actualModelSha256 !== expectedModelSha256) {
 
 const serverPath = args.serverPath ?? which("llama-server");
 if (!serverPath) {
-	console.log(`Model ready: ${modelPath}`);
-	console.log("Could not find llama-server on PATH. Install llama.cpp (for example: brew install llama.cpp) or rerun with --server-path.");
+	(args.json ? console.error : console.log)(`Model ready: ${modelPath}`);
+	(args.json ? console.error : console.log)("Could not find llama-server on PATH. Install llama.cpp (for example: brew install llama.cpp) or rerun with --server-path.");
 	process.exit(1);
 }
 verifyServer(serverPath);
 
-console.log("Gate auto-approver files verified.");
-console.log(`install dir: ${args.installDir}`);
-console.log(`llama-server: ${serverPath}`);
-console.log(`model: ${modelPath}`);
-console.log("");
-console.log("Run these commands in Pi:");
-console.log(`/vars set gate.auto.backend ${JSON.stringify("llama.cpp")}`);
-console.log(`/vars set gate.auto.llama.serverPath ${JSON.stringify(serverPath)}`);
-console.log(`/vars set gate.auto.llama.modelPath ${JSON.stringify(modelPath)}`);
-console.log(`/vars set gate.auto.timeoutMs 1500`);
-console.log(`/gate auto on`);
-console.log("");
-console.log("Optional: start gate auto automatically after future Pi restarts for this project:");
-console.log(`/vars set gate.auto.startOnSession true`);
-console.log("");
-console.log("Optional real-model smoke test:");
-console.log(`node scripts/eval-gate-auto-approver.mjs --repeat 3`);
+if (args.json) {
+	console.log(JSON.stringify({ installDir: args.installDir, serverPath, modelPath, modelSha256: actualModelSha256 }, null, 2));
+} else {
+	console.log("Gate auto-approver files verified.");
+	console.log(`install dir: ${args.installDir}`);
+	console.log(`llama-server: ${serverPath}`);
+	console.log(`model: ${modelPath}`);
+	console.log("");
+	console.log("Run these commands in Pi:");
+	console.log(`/vars set gate.auto.backend ${JSON.stringify("llama.cpp")}`);
+	console.log(`/vars set gate.auto.llama.serverPath ${JSON.stringify(serverPath)}`);
+	console.log(`/vars set gate.auto.llama.modelPath ${JSON.stringify(modelPath)}`);
+	console.log(`/vars set gate.auto.timeoutMs 1500`);
+	console.log(`/gate auto on`);
+	console.log("");
+	console.log("Optional: start gate auto automatically after future Pi restarts for this project:");
+	console.log(`/vars set gate.auto.startOnSession true`);
+	console.log("");
+	console.log("Optional real-model smoke test:");
+	console.log(`node scripts/eval-gate-auto-approver.mjs --repeat 3`);
+}

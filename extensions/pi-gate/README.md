@@ -61,6 +61,7 @@ In auto mode, pi-gate:
 - `/gate status` — show status
 - `/gate switch` — picker for available profiles
 - `/gate clear` — clear cached session approvals
+- `/gate auto setup` — run the bundled setup helper and save discovered local model/server paths
 - `/gate auto status` — show local auto-approver status
 - `/gate auto on` — explicitly enable local auto-approval for ask decisions
 - `/gate auto off` — disable auto-approval and stop the managed runtime
@@ -202,23 +203,33 @@ When auto is active, the footer shows `gate:<profile> auto`.
 
 You need two local things:
 
-1. `llama-server` from llama.cpp
+1. `llama-server` from llama.cpp. On macOS, for example, run `brew install llama.cpp`.
 2. a GGUF model file, such as `MiniCPM5-1B-Q4_K_M.gguf` (the default model)
 
 This package does not bundle either one. You own where they are installed and cached.
 
-If you want the helper to download and verify the default model, run:
+If you want Pi to run the bundled helper for you, use:
+
+```text
+/gate auto setup
+```
+
+That command downloads/verifies the default model if needed, finds `llama-server`, and saves the discovered paths to your prompt-vars config. It does not enable auto mode; run `/gate auto on` after setup.
+
+You can also run the same helper from a terminal:
 
 ```sh
 node scripts/setup-gate-auto-approver.mjs
 ```
 
-The helper:
+The terminal helper:
 
 - downloads/verifies the default MiniCPM5-1B Q4 GGUF model
 - looks for `llama-server`
 - prints the `/vars set ...` commands to run in Pi
 - prints `/gate auto on`
+
+The terminal helper prints commands for you to run. The Pi command applies the discovered paths directly.
 
 By default, the helper stores model files under:
 
