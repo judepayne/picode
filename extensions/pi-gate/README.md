@@ -29,6 +29,13 @@ Start pi, or if pi is already running, reload:
 
 ## What it does
 
+pi-gate has two layers:
+
+1. **Policy mode** — the normal permission gate. It reads `policy.json` and decides whether each tool call should be allowed, denied, or sent to you for approval.
+2. **Auto mode** — an optional local-model helper for the `ask` cases. Instead of asking you immediately, pi-gate first asks a small local model whether this one tool call is safe to allow. Safe calls can proceed quietly; risky or unclear calls are blocked so the agent can try something safer. After repeated blocks, pi-gate pauses auto mode and asks you.
+
+In policy mode, pi-gate:
+
 - uses an OpenCode-style `permission` block
 - supports profiles with `inherits-from`
 - shows the active profile in the footer as `gate:<profile>`
@@ -40,6 +47,14 @@ Start pi, or if pi is already running, reload:
 - applies delegated subagent profile lineage ceilings from `PI_GATE_PROFILE_LINEAGE` by evaluating each concrete tool call against every profile in the lineage and choosing the strictest result (`deny > ask > allow`)
 - fails closed if policy loading or validation fails; tool calls are blocked until the policy is fixed
 
+In auto mode, pi-gate:
+
+- only handles calls that policy mode marked `ask`
+- never overrides hard `deny`
+- never turns one approval into an `Allow for session`
+- runs against a local llama.cpp-compatible endpoint or a managed local `llama-server`
+- logs decisions to `.pi/state/pi-gate/auto-approvals.jsonl`
+
 ## Commands
 
 - `/gate` — show status
@@ -50,7 +65,9 @@ Start pi, or if pi is already running, reload:
 - `/gate auto on` — explicitly enable local auto-approval for ask decisions
 - `/gate auto off` — disable auto-approval and stop the managed runtime
 
-## Policy format
+## Policy mode
+
+Policy mode is the core of pi-gate. It is always active.
 
 `policy.json` is intentionally close to OpenCode.
 
@@ -166,9 +183,9 @@ More complete example with a base policy plus two profiles:
 }
 ```
 
-## Local auto-approval
+## Auto mode
 
-Normally, when a rule resolves to `ask`, pi-gate asks you what to do. Local auto-approval is an optional way to make those moments quieter: a small local model reviews the single tool call first.
+Auto mode is optional. Normally, when policy mode resolves a tool call to `ask`, pi-gate asks you what to do. Auto mode makes those moments quieter: a small local model reviews the single tool call first.
 
 The important rules are simple:
 
@@ -186,7 +203,7 @@ When auto is active, the footer shows `gate:<profile> auto`.
 You need two local things:
 
 1. `llama-server` from llama.cpp
-2. a GGUF model file, such as `MiniCPM5-1B-Q4_K_M.gguf`
+2. a GGUF model file, such as `MiniCPM5-1B-Q4_K_M.gguf` (the default model)
 
 This package does not bundle either one. You own where they are installed and cached.
 
