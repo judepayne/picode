@@ -1082,6 +1082,39 @@ function buildPathSessionKey(subject: string, values: string[]): string {
 	return `${subject}:${[...values].sort().join("|")}`;
 }
 
+function displayStatusPath(cwd: string, value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const normalized = normalizeAbsPath(value);
+	const cwdPath = normalizeAbsPath(cwd);
+	const homePath = normalizeAbsPath(os.homedir());
+	if (isWithinRoot(cwdPath, normalized)) return normalizeSlashes(path.relative(cwdPath, normalized) || ".");
+	if (isWithinRoot(homePath, normalized)) return `~/${normalizeSlashes(path.relative(homePath, normalized))}`;
+	return value;
+}
+
+function formatGateAutoStatusMessage(ctx: ExtensionContext, status: ReturnType<GateAutoApproverManager["status"]>, startOnSession: boolean, runtimeEnabled: boolean): string {
+	const configured = Boolean(status.endpoint || (status.serverPath && status.modelPath));
+	const lines = [
+		`Gate auto: ${status.enabled ? runtimeEnabled ? "on" : "configured, not running" : "off"}`,
+	];
+	if (runtimeEnabled) {
+		lines.push(`Runtime: ${status.healthy ? "running" : "not ready"}${status.mode !== "disabled" ? ` (${status.mode}${status.pid ? `, pid ${status.pid}` : ""})` : ""}`);
+		if (status.endpoint) lines.push(`Endpoint: ${status.endpoint}`);
+	} else if (status.enabled) {
+		lines.push("Runtime: stopped (run /gate auto on to start)");
+	}
+	if (status.enabled || startOnSession) lines.push(`Starts on Pi launch: ${startOnSession ? "yes" : "no"}`);
+	if (configured) {
+		if (status.serverPath) lines.push(`Server: ${displayStatusPath(ctx.cwd, status.serverPath)}`);
+		if (status.modelPath) lines.push(`Model: ${displayStatusPath(ctx.cwd, status.modelPath)}`);
+	} else {
+		lines.push("Setup: not configured (run /gate auto setup)");
+	}
+	if (runtimeEnabled && status.auditPath) lines.push(`Audit: ${displayStatusPath(ctx.cwd, status.auditPath)}`);
+	if (status.lastError) lines.push(`Problem: ${status.lastError}`);
+	return lines.join("\n");
+}
+
 function updateStatus(
 	ctx: ExtensionContext,
 	profileName: string | undefined,
@@ -1607,19 +1640,10 @@ export default function piGate(pi: ExtensionAPI) {
 				else await autoManager.disable(ctx);
 				const status = autoManager.status(ctx);
 				const autoConfig = loadGateAutoConfig(ctx.cwd);
-				ctx.ui.notify([
-					`Gate auto enabled=${status.enabled}`,
-					`runtime=${autoRuntimeEnabled && autoManager.isEnabled()}`,
-					`startOnSession=${autoConfig.startOnSession}`,
-					`mode=${status.mode}`,
-					`process=${status.processKind}`,
-					status.endpoint ? `endpoint=${status.endpoint}` : undefined,
-					status.pid ? `pid=${status.pid}` : undefined,
-					status.modelPath ? `model=${status.modelPath}` : undefined,
-					status.serverPath ? `server=${status.serverPath}` : undefined,
-					status.lastError ? `lastError=${status.lastError}` : undefined,
-					status.auditPath ? `audit=${status.auditPath}` : undefined,
-				].filter(Boolean).join(" | "), status.lastError ? "warning" : "info");
+				ctx.ui.notify(
+					formatGateAutoStatusMessage(ctx, status, autoConfig.startOnSession, autoRuntimeEnabled && autoManager.isEnabled()),
+					status.lastError ? "warning" : "info",
+				);
 				return;
 			}
 			ctx.ui.notify("Gate: unknown auto subcommand. Use /gate auto setup, /gate auto on, /gate auto off, or /gate auto status", "warning");
