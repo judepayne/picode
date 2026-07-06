@@ -168,46 +168,110 @@ More complete example with a base policy plus two profiles:
 
 ## Local auto-approval
 
-`pi-gate` can optionally mediate `ask` decisions through a local llama.cpp approver. Hard `allow` and hard `deny` are unchanged; hard deny is never model-overridable. A model `allow` approves one concrete tool call only and never creates an `Allow for session` entry.
+Normally, when a rule resolves to `ask`, pi-gate asks you what to do. Local auto-approval is an optional way to make those moments quieter: a small local model reviews the single tool call first.
 
-Enablement is explicit and project-scoped:
+The important rules are simple:
+
+- hard `deny` still means deny; the model never overrides it
+- hard `allow` still means allow; the model is not involved
+- auto-approval only handles `ask`
+- a model approval is for one concrete tool call only
+- risky or unclear calls are blocked first so the agent can try a safer approach
+- after repeated blocks, pi-gate pauses auto mode and asks you
+
+When auto is active, the footer shows `gate:<profile> auto`.
+
+### Quick setup
+
+You need two local things:
+
+1. `llama-server` from llama.cpp
+2. a GGUF model file, such as `MiniCPM5-1B-Q4_K_M.gguf`
+
+This package does not bundle either one. You own where they are installed and cached.
+
+If you want the helper to download and verify the default model, run:
+
+```sh
+node scripts/setup-gate-auto-approver.mjs
+```
+
+The helper:
+
+- downloads/verifies the default MiniCPM5-1B Q4 GGUF model
+- looks for `llama-server`
+- prints the `/vars set ...` commands to run in Pi
+- prints `/gate auto on`
+
+By default, the helper stores model files under:
+
+1. `$PICODE_GATE_AUTO_HOME`, if set
+2. `$HF_HOME/picode/gate-auto-approver`, if `HF_HOME` is set
+3. `~/.pi/picode/gate-auto-approver` otherwise
+
+You can override that with `--install-dir`.
+
+If you already manage models yourself, skip the helper and set the paths directly:
 
 ```text
+/vars set gate.auto.llama.serverPath "/path/to/llama-server"
+/vars set gate.auto.llama.modelPath "/path/to/MiniCPM5-1B-Q4_K_M.gguf"
+/vars set gate.auto.timeoutMs 1500
 /gate auto on
-/gate auto off
-/gate auto status
 ```
 
-`/gate auto on` writes `gate.auto.enabled=true` through the protected z-prompt-vars helper and starts auto approval for the current Pi session. Generic `/vars set gate.auto.enabled true` is rejected. `/gate auto off` writes project `false` and stops any managed `llama-server` owned by this process.
+### Using it
 
-Auto approval does not start by default after a fresh Pi start, even when the project has previously been enabled. Users who want opt-in autostart for a project can set `gate.auto.startOnSession=true`.
-
-Config keys:
+Use these commands in Pi:
 
 ```text
-gate.auto.startOnSession=false                 # true to auto-start after Pi restart
-gate.auto.llama.endpoint=http://127.0.0.1:8080 # optional external server
-gate.auto.llama.serverPath=/path/to/llama-server # managed mode
-gate.auto.llama.modelPath=/path/to/MiniCPM5-1B-Q4_K_M.gguf
-gate.auto.timeoutMs=1500
-gate.auto.llama.warmup=true
-gate.auto.audit.enabled=true
+/gate auto on      # start auto-approval for this session
+/gate auto off     # stop it
+/gate auto status  # inspect status and paths
 ```
 
-If no endpoint is configured, the top-level process can launch a managed `llama-server` when `serverPath` and `modelPath` are set. Delegated subagents inherit the top-level endpoint through reserved `PI_GATE_AUTO_*` environment metadata and do not spawn their own server by default.
+`/gate auto on` is intentionally required. Generic `/vars set gate.auto.enabled true` is rejected so auto-approval cannot be switched on accidentally.
 
-Fallback matrix:
+Auto-approval does not start automatically after a fresh Pi restart. If you want this project to start it on each Pi launch, opt in explicitly:
 
-- model `allow` → allow this call once, unless deterministic risk flags downgrade it
-- model `deny` or guarded `escalate` → soft-block the call and return the reason to the agent so it can try a safer alternative
-- after 3 consecutive or 20 total auto-blocks, top-level interactive sessions pause auto mode and prompt the user; approving a prompted action resumes auto mode
-- timeout, malformed output, or unavailable endpoint → human prompt when interactive, otherwise block
+```text
+/vars set gate.auto.startOnSession true
+```
 
-The model receives compact stable context plus a per-call `riskAssessment`. Deterministic guards keep secrets, broad destructive actions, package-manager changes, network/remote access, privilege escalation, opaque/unknown commands, and unclassified non-readonly bash from being silently auto-allowed even if the model is too permissive.
+### What if setup is wrong?
 
-When enabled, the footer shows `gate:<profile> auto`, with `auto` in golden yellow. Successful auto approvals are quiet. Decisions are logged to `.pi/state/pi-gate/auto-approvals.jsonl` with bounded summaries and hashes.
+pi-gate fails safe.
 
-The package does not bundle llama.cpp or the GGUF model. Users own those local dependencies: install/provide `llama-server`, choose where model artifacts live, and pass `/vars set gate.auto.llama.*` paths. `node scripts/setup-gate-auto-approver.mjs` is only a helper: it downloads/verifies the default MiniCPM5-1B Q4 GGUF model, locates `llama-server`, and prints the `/vars set ...` commands. Its default artifact root is `$PICODE_GATE_AUTO_HOME`, else `$HF_HOME/picode/gate-auto-approver`, else `~/.pi/picode/gate-auto-approver`; `--install-dir` overrides it. The helper configures paths but does not make auto approval start automatically after every Pi restart; set `gate.auto.startOnSession=true` if you want that. Run `node scripts/eval-gate-auto-approver.mjs --repeat 3` to start the local model and exercise a fixed real-model decision suite, or `npm run smoke:gate-auto` for the full pi-gate soft-block harness.
+If the model path, server path, or local endpoint is missing or broken:
+
+- `/gate auto on` reports that auto is not ready
+- interactive top-level sessions fall back to the normal permission prompt
+- unattended subagents block instead of prompting
+- no missing-model or timeout case silently allows a tool call
+
+### External server mode
+
+Instead of letting pi-gate start `llama-server`, you can run your own local server and point pi-gate at it:
+
+```text
+/vars set gate.auto.llama.endpoint "http://127.0.0.1:8080"
+/gate auto on
+```
+
+Only local loopback HTTP endpoints are accepted.
+
+### Testing
+
+After setup, you can run:
+
+```sh
+node scripts/eval-gate-auto-approver.mjs --repeat 3
+npm run smoke:gate-auto
+```
+
+The eval script checks real model decisions. The smoke script drives the full pi-gate flow, including soft-blocks and the repeated-block fallback prompt.
+
+Decisions are logged to `.pi/state/pi-gate/auto-approvals.jsonl` with bounded summaries and hashes.
 
 ## Actions
 
