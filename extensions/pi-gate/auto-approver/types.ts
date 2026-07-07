@@ -19,6 +19,7 @@ export interface GateAutoApproverConfig {
 	backend: "llama.cpp";
 	timeoutMs: number;
 	auditEnabled: boolean;
+	auditIncludeDynamicPayloadText: boolean;
 	processKind: GateAutoProcessKind;
 	inheritedEndpoint?: string;
 	context: {

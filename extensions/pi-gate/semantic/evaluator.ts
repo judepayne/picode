@@ -22,6 +22,195 @@ function compilePattern(subject: GateSemanticSubject, rawPattern: string, cwd: s
 	return wildcardToRegex(expanded);
 }
 
+function tokenizeForPipe(command: string): string[] | undefined {
+	const tokens: string[] = [];
+	let current = "";
+	let quote: "single" | "double" | undefined;
+	const flush = () => {
+		if (current) {
+			tokens.push(current);
+			current = "";
+		}
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote === "single") {
+			if (ch === "'") quote = undefined;
+			else current += ch;
+			continue;
+		}
+		if (quote === "double") {
+			if (ch === '"') quote = undefined;
+			else if (ch === "\\" && i + 1 < command.length) current += command[++i] ?? "";
+			else current += ch;
+			continue;
+		}
+		if (ch === "'") quote = "single";
+		else if (ch === '"') quote = "double";
+		else if (ch === "\\" && i + 1 < command.length) current += command[++i] ?? "";
+		else if (/\s/.test(ch)) flush();
+		else if (ch === "|") {
+			flush();
+			if (command[i + 1] === "|") {
+				tokens.push("||");
+				i++;
+			} else if (command[i + 1] === "&") {
+				tokens.push("|&");
+				i++;
+			} else tokens.push("|");
+		} else current += ch;
+	}
+	if (quote) return undefined;
+	flush();
+	return tokens;
+}
+
+function commandBasename(value: string): string {
+	return value.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? value;
+}
+
+function envOptionConsumesNext(token: string): boolean {
+	return token === "-u" || token === "--unset" || token === "-C" || token === "--chdir" || token === "-S" || token === "--split-string" || token === "-a" || token === "--argv0" || token === "--block-signal" || token === "--default-signal" || token === "--ignore-signal";
+}
+
+function envOptionWithoutOperand(token: string): boolean {
+	return token === "-i" || token === "--ignore-environment" || token === "-0" || token === "--null" || token === "--debug" || token === "--";
+}
+
+function normalizeShellToken(value: string): string {
+	let token = value.trim().split(/[;&<>]/, 1)[0] ?? value.trim();
+	token = commandBasename(token);
+	while (token.startsWith("(") && token.endsWith(")") && token.length > 2) token = token.slice(1, -1).trim();
+	return token;
+}
+
+function shellFromEnvSplitString(token: string, shells: Set<string>): boolean {
+	const tokens = tokenizeForPipe(token) ?? token.trim().split(/\s+/).filter(Boolean);
+	const splitStringWrappers = new Set(["env", "command", "builtin", "exec", "nohup", "nice", "time", "setsid", "sudo", "doas", "stdbuf", "unbuffer", "timeout"]);
+	for (const part of tokens) {
+		if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(part)) continue;
+		if (/[`$]/.test(part)) return true;
+		const base = normalizeShellToken(part);
+		return shells.has(base) || splitStringWrappers.has(base);
+	}
+	return false;
+}
+
+const PIPE_COMMAND_WRAPPERS = new Set(["command", "builtin", "exec", "nohup", "nice", "time", "setsid", "sudo", "doas", "stdbuf", "unbuffer", "timeout"]);
+
+function wrapperOptionConsumesNext(wrapper: string, token: string): boolean {
+	if (wrapper === "exec") return token === "-a";
+	if (wrapper === "nice") return token === "-n" || token === "--adjustment";
+	if (wrapper === "sudo" || wrapper === "doas") return token === "-u" || token === "--user" || token === "-g" || token === "--group" || token === "-h" || token === "--host" || token === "-p" || token === "--prompt" || token === "-C" || token === "--close-from" || token === "-T" || token === "--command-timeout";
+	if (wrapper === "stdbuf") return token === "-o" || token === "--output" || token === "-e" || token === "--error" || token === "-i" || token === "--input";
+	if (wrapper === "timeout") return token === "-k" || token === "--kill-after" || token === "-s" || token === "--signal";
+	return false;
+}
+
+function wrapperOptionWithoutOperand(wrapper: string, token: string): boolean {
+	if (wrapper === "command" || wrapper === "builtin") return token === "-p" || token === "-v" || token === "-V";
+	if (wrapper === "exec") return token === "-c" || token === "-l";
+	if (wrapper === "time") return token === "-p";
+	if (wrapper === "setsid") return token === "-w" || token === "--wait" || token === "-f" || token === "--fork" || token === "-c" || token === "--ctty";
+	if (wrapper === "sudo" || wrapper === "doas") return token === "-E" || token === "-S" || token === "-n" || token === "-H" || token === "-b" || token === "-k" || token === "-K" || token === "-v" || token === "-l";
+	if (wrapper === "timeout") return token === "--preserve-status" || token === "--foreground" || token === "-v" || token === "--verbose";
+	return false;
+}
+
+function skipWrapperArgs(tokens: string[], commandIndex: number, wrapper: string): number | undefined {
+	let index = commandIndex + 1;
+	let skippedTimeoutDuration = false;
+	while (index < tokens.length) {
+		const token = tokens[index] ?? "";
+		if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) {
+			index++;
+			continue;
+		}
+		if (wrapperOptionConsumesNext(wrapper, token)) {
+			index += 2;
+			continue;
+		}
+		if (token.startsWith("-") && token !== "--") {
+			if (wrapperOptionWithoutOperand(wrapper, token) || token.includes("=") || /^-[A-Za-z].+/.test(token)) {
+				index++;
+				continue;
+			}
+			return undefined;
+		}
+		if (token === "--") {
+			index++;
+			continue;
+		}
+		if (wrapper === "timeout" && !skippedTimeoutDuration) {
+			skippedTimeoutDuration = true;
+			index++;
+			continue;
+		}
+		break;
+	}
+	return index;
+}
+
+function findPipeToShell(command: string | undefined): GateSemanticMatch | undefined {
+	const normalized = normalizeCommand(command ?? "");
+	const tokens = tokenizeForPipe(normalized);
+	if (!tokens) return undefined;
+	const shells = new Set(["sh", "bash", "zsh", "dash", "fish", "ksh"]);
+	for (let index = 0; index < tokens.length; index++) {
+		if (tokens[index] !== "|" && tokens[index] !== "|&") continue;
+		let commandIndex = index + 1;
+		while (commandIndex < tokens.length) {
+			const token = tokens[commandIndex] ?? "";
+			const base = normalizeShellToken(token);
+			if (token === "(" || token === ")") {
+				commandIndex++;
+				continue;
+			}
+			if (PIPE_COMMAND_WRAPPERS.has(base)) {
+				const nextIndex = skipWrapperArgs(tokens, commandIndex, base);
+				if (nextIndex === undefined) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+				commandIndex = nextIndex;
+				continue;
+			}
+			if (base === "env") {
+				commandIndex++;
+				while (commandIndex < tokens.length) {
+					const envArg = tokens[commandIndex] ?? "";
+					if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(envArg)) {
+						commandIndex++;
+						continue;
+					}
+					if (envOptionConsumesNext(envArg)) {
+						const operand = tokens[commandIndex + 1] ?? "";
+						if ((envArg === "-S" || envArg === "--split-string") && shellFromEnvSplitString(operand, shells)) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+						commandIndex += 2;
+						continue;
+					}
+					if (envArg.startsWith("--split-string=") && shellFromEnvSplitString(envArg.slice("--split-string=".length), shells)) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+					if (envArg.startsWith("-S") && envArg.length > 2 && shellFromEnvSplitString(envArg.slice(2), shells)) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+					if (envArg.startsWith("-")) {
+						if (envOptionWithoutOperand(envArg) || envArg.includes("=") || /^-[A-Za-z].+/.test(envArg)) {
+							commandIndex++;
+							continue;
+						}
+						return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+					}
+					break;
+				}
+				continue;
+			}
+			if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token)) {
+				commandIndex++;
+				continue;
+			}
+			if (/[`$]/.test(token)) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+			if (shells.has(base)) return { kind: "hardDeny", scope: "global", subject: "bash", pattern: "pipe-to-shell", display: normalized };
+			break;
+		}
+	}
+	return undefined;
+}
+
 function findRuleMatch(
 	rules: GateSemanticRuleMap | undefined,
 	subject: GateSemanticSubject,
@@ -132,6 +321,10 @@ export function resolveAutoRole(config: GateSemanticConfig, roleType: GateSemant
 
 export function evaluateGateSemantic(input: GateSemanticEvaluationInput): GateSemanticEvaluation {
 	const role = resolveAutoRole(input.config, input.roleType, input.roleName);
+	if (input.subject === "bash") {
+		const pipeToShell = findPipeToShell(input.bashCommand ?? input.groups[0]?.values[0]);
+		if (pipeToShell) return { action: "block", match: pipeToShell, role };
+	}
 	const globalHardDeny = findRuleMatch(input.config.hardDeny, input.subject, input.groups, input.cwd, "global", "hardDeny");
 	if (globalHardDeny) return { action: "block", match: globalHardDeny, role };
 	const roleHardDeny = findRuleMatch(role.roleConfig?.hardDeny, input.subject, input.groups, input.cwd, "role", "hardDeny");

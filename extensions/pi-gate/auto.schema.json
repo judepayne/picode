@@ -30,7 +30,7 @@
   "$defs": {
     "subject": {
       "type": "string",
-      "enum": ["read", "edit", "bash", "list", "glob", "grep", "external_directory"]
+      "enum": ["read", "edit", "bash", "list", "glob", "grep", "external_directory", "tool"]
     },
     "patternList": {
       "type": "array",
@@ -48,7 +48,8 @@
         "list": { "$ref": "#/$defs/patternList" },
         "glob": { "$ref": "#/$defs/patternList" },
         "grep": { "$ref": "#/$defs/patternList" },
-        "external_directory": { "$ref": "#/$defs/patternList" }
+        "external_directory": { "$ref": "#/$defs/patternList" },
+        "tool": { "$ref": "#/$defs/patternList" }
       }
     },
     "roleConfig": {

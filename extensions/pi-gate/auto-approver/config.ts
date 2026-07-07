@@ -72,6 +72,7 @@ export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process
 		backend: backend === "llama.cpp" ? "llama.cpp" : "llama.cpp",
 		timeoutMs: numberValue(get("gate.auto.timeoutMs"), 1500, { min: 100, max: 60000 }),
 		auditEnabled: boolValue(get("gate.auto.audit.enabled"), true),
+		auditIncludeDynamicPayloadText: boolValue(get("gate.auto.audit.includeDynamicPayloadText"), false),
 		processKind,
 		inheritedEndpoint,
 		context: {

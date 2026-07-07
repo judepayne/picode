@@ -52,8 +52,8 @@ In policy mode, pi-gate:
 In auto mode, pi-gate:
 
 - uses `auto.json`, not `policy.json` ask/allow tables, for the semantic path
-- evaluates `hardDeny`, then role/global `alwaysAllow`, then asks the local model
-- has separate guidance and `alwaysAllow` rules for agents and subagents
+- enforces policy/lineage denies, evaluates `hardDeny`, then optional role/global `alwaysAllow`, then asks the local model
+- has separate guidance and optional `alwaysAllow` shortcuts for agents and subagents
 - never turns one approval into an `Allow for session`
 - runs against a local llama.cpp-compatible endpoint or a managed local `llama-server`
 - shows `gate:<profile> auto` in the footer
@@ -190,15 +190,16 @@ More complete example with a base policy plus two profiles:
 
 ## Auto mode
 
-Auto mode is optional. Normally, policy mode resolves each tool call deterministically and asks you for unresolved `ask` cases. Auto mode replaces that prompt path with a semantic local gate for the current session: deterministic `hardDeny` rules run first, narrow `alwaysAllow` rules skip boring model calls, and a small local model classifies the grey middle.
+Auto mode is optional. Normally, policy mode resolves each tool call deterministically and asks you for unresolved `ask` cases. Auto mode replaces that prompt path with a semantic local gate for the current session: deterministic policy/lineage denies and `hardDeny` rules run first, narrow `alwaysAllow` rules can skip boring model calls, and a small local model classifies the grey middle.
 
 The important rules are simple:
 
+- policy/lineage `deny` ceilings always block before auto approval
 - `hardDeny` always blocks
-- `alwaysAllow` only allows after the built-in risk guard agrees the call is low risk
+- `alwaysAllow` is optional and only allows after the built-in risk guard agrees the call is low risk
+- everything else goes to the semantic approver with trusted sequential context, except catastrophic sensitive-data/broad-destructive safety floors
 - a model approval is for one concrete tool call only
 - no model decision creates `Allow for session`
-- risk-denied calls block before model or prompt fallback
 - unresolved calls prompt in interactive top-level sessions and block in unattended sessions
 - after repeated model blocks, pi-gate pauses auto mode and asks you
 
@@ -311,23 +312,27 @@ Auto decisions are logged to `.pi/state/pi-gate/auto-decisions.jsonl` with bound
 `auto.json` has three concepts:
 
 - `hardDeny` — deterministic rules that always block
-- per-agent/per-subagent `alwaysAllow` — deterministic shortcuts for boring, role-appropriate calls
+- per-agent/per-subagent `alwaysAllow` — optional deterministic shortcuts for boring, role-appropriate calls
 - per-agent/per-subagent `guidance` — natural-language instructions for the local model
 
 The runtime order is:
 
 ```text
+policy/lineage deny?         -> block
 hardDeny match?              -> block
 alwaysAllow + low risk?      -> allow silently
-risk-deny before model?      -> block
-otherwise                    -> ask local model
+otherwise                    -> ask local model with trusted story context
 ```
 
 The local model returns `allow`, `block`, or `prompt`. `allow` approves one concrete tool call. `block` is a soft block so the agent can try a safer alternative. `prompt` asks the user in interactive top-level sessions and blocks unattended sessions.
 
-`hardDeny` always wins over `alwaysAllow`. `alwaysAllow` is also checked by pi-gate's built-in risk guard before it can silently allow a call; risky secret/credential reads, external mutations, and similar guard-denied calls block instead of falling through to a prompt or model approval. Shell chains only match `alwaysAllow` when every simple segment matches; pipes, redirects, command substitution, and backgrounding are not silently always-allowed.
+`hardDeny` always wins over `alwaysAllow`. `alwaysAllow` is also checked by pi-gate's built-in risk guard before it can silently allow a call; risky secret/credential reads, external mutations, and similar guard-denied calls block instead of becoming silent deterministic allows. Shell chains only match `alwaysAllow` when every simple segment matches; pipes, redirects, command substitution, and backgrounding are not silently always-allowed.
 
-If the auto runtime is unavailable or returns malformed output, pi-gate fails closed: ordinary unresolved calls prompt in interactive top-level sessions and block in unattended sessions, while risk-denied calls block immediately.
+Risk signals are still computed, included in the model context, and written to the audit log. For grey-area semantic review they are advisory rather than a separate user-facing policy layer, except sensitive-data and broad-destructive classifications, which remain deterministic safety floors. You can omit `alwaysAllow` entirely to send nearly all non-denied calls to the semantic approver; this is the recommended way to test the full auto flow.
+
+For debugging, set `gate.auto.audit.includeDynamicPayloadText=true` to include the exact dynamic story sent to the approver in `.pi/state/pi-gate/auto-decisions.jsonl`. Leave this off by default because the story can include user text and bounded tool-input summaries.
+
+If the auto runtime is unavailable or returns malformed output, pi-gate fails closed: ordinary unresolved calls prompt in interactive top-level sessions and block in unattended sessions.
 
 ## Actions
 

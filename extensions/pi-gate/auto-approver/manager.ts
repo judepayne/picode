@@ -13,17 +13,6 @@ interface PiLike {
 	events: { emit(event: string, data: unknown): void };
 }
 
-function applyRiskGuidance(result: GateSemanticResult, risk: GateRiskAssessment): GateSemanticResult {
-	if (risk.recommendedDecision === "deny") {
-		return { ...result, decision: "block", outcome: "blocked", reason: risk.reason ?? result.reason };
-	}
-	if (risk.recommendedDecision === "escalate") {
-		if (result.decision === "allow") return { ...result, decision: "prompt", outcome: "fallback_prompt", reason: risk.reason ?? result.reason };
-		return { ...result, reason: risk.reason ?? result.reason };
-	}
-	return result;
-}
-
 export class GateAutoApproverManager {
 	private readonly pi: PiLike;
 	private readonly runtime = new GateAutoRuntime();
@@ -63,14 +52,16 @@ export class GateAutoApproverManager {
 		const status = await this.runtime.refresh(ctx, this.runtimeHooks());
 		const config = loadGateAutoConfig(ctx.cwd);
 		if (!config.enabled || !status.endpoint || status.mode === "disabled" || status.mode === "unconfigured" || status.mode === "failed") {
-			const result: GateSemanticResult = applyRiskGuidance({
+			const result: GateSemanticResult = {
 				decision: "prompt",
 				reason: status.lastError ?? "Gate auto is unavailable",
 				outcome: "unavailable",
 				latencyMs: Date.now() - started,
 				requestId: request.requestId,
 				backendMode: status.mode,
-			}, risk);
+				riskFlags: risk.flags,
+				riskRecommendedDecision: risk.recommendedDecision,
+			};
 			this.audit(ctx.cwd, request, result, status.mode, undefined, undefined, risk);
 			return result;
 		}
@@ -87,15 +78,16 @@ export class GateAutoApproverManager {
 			requestId: request.requestId,
 			config,
 		});
-		const guardedResult = applyRiskGuidance({ ...result, backendMode: status.mode }, risk);
 		const annotatedResult: GateSemanticResult = {
-			...guardedResult,
+			...result,
+			backendMode: status.mode,
 			modelDecision: result.decision,
 			modelOutcome: result.outcome,
 			modelReason: result.reason,
-			guardOverride: result.decision !== guardedResult.decision || result.outcome !== guardedResult.outcome,
+			guardOverride: false,
 			riskFlags: risk.flags,
 			riskRecommendedDecision: risk.recommendedDecision,
+			dynamicPayloadText: config.auditIncludeDynamicPayloadText ? dynamic.text : undefined,
 		};
 		this.audit(ctx.cwd, request, annotatedResult, status.mode, undefined, result, risk);
 		return annotatedResult;
@@ -160,6 +152,7 @@ export class GateAutoApproverManager {
 			modelPath: config.llama.modelPath,
 			stableContextHash: result?.stableContextHash ?? this.stable?.hash,
 			dynamicPayloadHash: result?.dynamicPayloadHash,
+			dynamicPayloadText: config.auditIncludeDynamicPayloadText ? result?.dynamicPayloadText : undefined,
 			error: result?.error,
 			event,
 			matchedHardDeny: request?.matchedHardDeny,

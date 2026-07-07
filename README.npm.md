@@ -32,7 +32,7 @@ Bootstrap prompt-vars files in your project:
 
 - **Builder, Planner, and Designer** runtime modes with their own prompts, tools, permission profiles, and style.
 - **Scout, worker, and reviewer** subagents for delegated reconnaissance, implementation, and review.
-- **An OpenCode inspired permission system** for each agent/subagent, with optional local `/gate auto on` semantic approval through `auto.json` hard-denies, always-allows, and role guidance. Auto approval starts only when explicitly enabled for the session unless the project opts into `gate.auto.startOnSession=true`; users own the local `llama-server` and GGUF model artifacts.
+- **An OpenCode inspired permission system** for each agent/subagent, with optional local `/gate auto on` semantic approval through `auto.json` hard-denies, optional always-allows, trusted sequential context, and role guidance. Auto approval starts only when explicitly enabled for the session unless the project opts into `gate.auto.startOnSession=true`; users own the local `llama-server` and GGUF model artifacts.
 - **Prompt vars** such as `${plan.path}` and `${design.path}` for project-aware agent instructions.
 - **Custom markdown cards** so you can override or add your own agents and subagents.
 

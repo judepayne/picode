@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { isGateSemanticSubject } from "./types.ts";
 import type { GateSemanticConfig, GateSemanticRuleMap, LoadedGateSemanticConfig } from "./types.ts";
 
 const AUTO_CONFIG_FILE = "auto.json";
 const AUTO_SCHEMA_FILE = "auto.schema.json";
-const SUBJECTS = new Set(["read", "edit", "bash", "list", "glob", "grep", "external_directory"]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -15,7 +15,7 @@ function validateRuleMap(value: unknown, scope: string): string | undefined {
 	if (value === undefined) return undefined;
 	if (!isPlainObject(value)) return `${scope} must be an object`;
 	for (const [subject, patterns] of Object.entries(value)) {
-		if (!SUBJECTS.has(subject)) return `${scope}.${subject} is not a supported auto subject`;
+		if (!isGateSemanticSubject(subject)) return `${scope}.${subject} is not a supported auto subject`;
 		if (!Array.isArray(patterns)) return `${scope}.${subject} must be an array of strings`;
 		for (const [index, pattern] of patterns.entries()) {
 			if (typeof pattern !== "string" || !pattern.trim()) return `${scope}.${subject}[${index}] must be a non-empty string`;

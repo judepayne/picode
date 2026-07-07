@@ -3,7 +3,13 @@ import type { GateAutoBackendMode, GateAutoOutcome, GateAutoProcessKind } from "
 export type GateSemanticDecision = "allow" | "block" | "prompt";
 export type GateSemanticOutcome = GateAutoOutcome;
 export type GateSemanticRoleType = "agent" | "subagent";
-export type GateSemanticSubject = "read" | "edit" | "bash" | "list" | "glob" | "grep" | "external_directory";
+
+export const GATE_SEMANTIC_SUBJECTS = ["read", "edit", "bash", "list", "glob", "grep", "external_directory", "tool"] as const;
+export type GateSemanticSubject = typeof GATE_SEMANTIC_SUBJECTS[number];
+
+export function isGateSemanticSubject(subject: string): subject is GateSemanticSubject {
+	return (GATE_SEMANTIC_SUBJECTS as readonly string[]).includes(subject);
+}
 
 export type GateSemanticRuleMap = Partial<Record<GateSemanticSubject, string[]>>;
 
@@ -93,6 +99,8 @@ export interface GateSemanticResult {
 	backendMode?: GateAutoBackendMode;
 	stableContextHash?: string;
 	dynamicPayloadHash?: string;
+	/** Opt-in audit/debug field that may contain user text and tool input summaries. */
+	dynamicPayloadText?: string;
 	modelDecision?: GateSemanticDecision;
 	modelOutcome?: GateSemanticOutcome;
 	modelReason?: string;
@@ -125,6 +133,8 @@ export interface GateSemanticAuditRecord {
 	modelPath?: string;
 	stableContextHash?: string;
 	dynamicPayloadHash?: string;
+	/** Opt-in audit/debug field that may contain user text and tool input summaries. */
+	dynamicPayloadText?: string;
 	error?: string;
 	event?: string;
 	matchedHardDeny?: GateSemanticMatch;

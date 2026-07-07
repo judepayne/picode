@@ -12,6 +12,7 @@ import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import type { GateAutoApprovalRequest } from "./auto-approver/types.ts";
 import { evaluateGateSemantic } from "./semantic/evaluator.ts";
 import { loadGateSemanticConfig } from "./semantic/loader.ts";
+import { isGateSemanticSubject } from "./semantic/types.ts";
 import type { GateSemanticEvaluation, GateSemanticMatch, GateSemanticRequest, GateSemanticResult, GateSemanticRoleType, GateSemanticSubject } from "./semantic/types.ts";
 import {
 	buildAbsolutePathGroups,
@@ -28,6 +29,7 @@ import {
 	type CandidateGroup,
 } from "./matching.ts";
 import { assessGateRisk } from "./risk.ts";
+import { hasSensitivePathCandidate, hasSensitiveSearchTarget } from "./sensitive-paths.ts";
 import { setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
 type PermissionAction = "allow" | "ask" | "deny";
@@ -586,8 +588,17 @@ function getToolPermissionSubject(toolName: string): string {
 	}
 }
 
-function isGateSemanticSubject(subject: string): subject is GateSemanticSubject {
-	return subject === "read" || subject === "edit" || subject === "bash" || subject === "list" || subject === "glob" || subject === "grep" || subject === "external_directory";
+const SEMANTIC_GENERIC_TOOL_NAMES = new Set(["vars"]);
+
+function getGenericToolSubjectGroups(toolName: string, input: Record<string, unknown>): CandidateGroup[] {
+	const values = new Set<string>([toolName]);
+	const action = input.action;
+	if (typeof action === "string" && action.trim()) values.add(`${toolName}:${action.trim()}`);
+	const key = input.key;
+	if (typeof key === "string" && key.trim()) values.add(`${toolName}:key:${key.trim()}`);
+	const pathValue = input.path;
+	if (typeof pathValue === "string" && pathValue.trim()) values.add(`${toolName}:path:${normalizeSlashes(pathValue.trim())}`);
+	return [{ display: `${toolName} ${JSON.stringify(boundedJson(input, 500))}`, values: Array.from(values) }];
 }
 
 function getToolSubjectGroups(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): CandidateGroup[] {
@@ -619,6 +630,21 @@ function getToolSubjectGroups(toolName: string, input: Record<string, unknown>, 
 	}
 }
 
+function extractGenericPathCandidates(input: Record<string, unknown>, ctx: ExtensionContext): string[] {
+	const pathLike = /(^|_)(path|file|filename|source|target|destination|backupPath)(_|$)/i;
+	const values: string[] = [];
+	for (const [key, value] of Object.entries(input)) {
+		if (!pathLike.test(key)) continue;
+		if (typeof value === "string") values.push(value);
+		else if (Array.isArray(value)) {
+			for (const item of value) {
+				if (typeof item === "string") values.push(item);
+			}
+		}
+	}
+	return values.map((value) => normalizePathArg(value, ctx.cwd));
+}
+
 function getToolPathCandidates(toolName: string, input: Record<string, unknown>, ctx: ExtensionContext): string[] {
 	switch (toolName) {
 		case "read":
@@ -638,7 +664,7 @@ function getToolPathCandidates(toolName: string, input: Record<string, unknown>,
 			return [normalizePathArg(rawPath, ctx.cwd)];
 		}
 		default:
-			return [];
+			return extractGenericPathCandidates(input, ctx);
 	}
 }
 
@@ -887,6 +913,16 @@ function hasMutatingAwkPattern(command: string): boolean {
 	return /\bsystem\s*\(/i.test(command) || /\bprint\b[\s\S]*>>?/i.test(command);
 }
 
+function getUnknownExecutableReason(tokens: string[] | undefined): string | undefined {
+	if (!tokens || tokens.length === 0) return undefined;
+	const commandIndex = firstCommandIndex(tokens);
+	const primary = normalizeShellToken(tokens[commandIndex] ?? "");
+	if (!primary) return undefined;
+	if (primary.startsWith("./") || primary.startsWith("../")) return "unknown local executable; side effects unknown";
+	if (primary.includes("/") && !primary.startsWith("/bin/") && !primary.startsWith("/usr/bin/")) return "unknown executable path; side effects unknown";
+	return undefined;
+}
+
 export function extractMutationTargets(command: string, cwd: string): MutationAnalysis {
 	const lower = command.toLowerCase();
 	const tokens = tokenizeShell(command);
@@ -899,7 +935,7 @@ export function extractMutationTargets(command: string, cwd: string): MutationAn
 		|| hasMutatingAwkPattern(command);
 	const complex = isComplexShellCommand(command, tokens);
 	if (!mutating) {
-		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: "read-only command" };
+		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: getUnknownExecutableReason(tokens) ?? "read-only command" };
 	}
 
 	if (complex && tokens && tokens.length > 0) {
@@ -1322,9 +1358,11 @@ async function resolveSemanticDecision(
 		return undefined;
 	}
 
-	const risk = assessGateRisk(buildAutoApprovalRequest(input));
-	if (risk.recommendedDecision === "deny") {
-		return { block: true, reason: `Gate auto blocked ${input.event.toolName}: ${risk.reason ?? "risk guard denied semantic review"}` };
+	const semanticRisk = assessGateRisk(buildAutoApprovalRequest(input));
+	const readOnlySearchTool = input.event.toolName === "grep" || input.event.toolName === "find";
+	const searchOnlySensitiveTerm = readOnlySearchTool && semanticRisk.flags.includes("credential_or_secret") && !hasSensitivePathCandidate(input.pathCandidates) && !hasSensitiveSearchTarget(input.event.input);
+	if ((!searchOnlySensitiveTerm && semanticRisk.flags.includes("credential_or_secret")) || semanticRisk.flags.includes("broad_destructive")) {
+		return { block: true, reason: `Gate auto blocked ${input.event.toolName}: ${semanticRisk.reason ?? "deterministic safety floor denied semantic review"}` };
 	}
 
 	let autoFallback: GateSemanticResult | undefined;
@@ -1863,7 +1901,7 @@ export default function piGate(pi: ExtensionAPI) {
 			if (policyFinalAction === "deny") {
 				return { block: true, reason: pickReason([...policyExternalDecision.reasons, ...policySubjectDecision.reasons], "deny", `Gate denied ${event.toolName}`) };
 			}
-			if (!isGateSemanticSubject(rawSubject)) {
+			if (!isGateSemanticSubject(rawSubject) && !SEMANTIC_GENERIC_TOOL_NAMES.has(event.toolName)) {
 				const reasons = [`auto prompt: unsupported tool subject ${JSON.stringify(rawSubject)} requires human review`];
 				const prompted = await promptForAskDecision(
 					{
@@ -1876,6 +1914,7 @@ export default function piGate(pi: ExtensionAPI) {
 						reasons,
 						fallbackDenyReason: `Gate auto denied ${event.toolName}`,
 						subject: rawSubject,
+						pathCandidates,
 					},
 					sessionAllows,
 					profileLocked,
@@ -1885,7 +1924,8 @@ export default function piGate(pi: ExtensionAPI) {
 				if (prompted.allowed) return undefined;
 				return prompted;
 			}
-			const subject = rawSubject;
+			const subject: GateSemanticSubject = isGateSemanticSubject(rawSubject) ? rawSubject : "tool";
+			const effectiveSubjectGroups = subject === "tool" ? getGenericToolSubjectGroups(event.toolName, rawInput) : subjectGroups;
 			if (pathCandidates.length > 0) {
 				const externalEvaluation = evaluateGateSemantic({
 					config: loadedSemantic.config,
@@ -1919,11 +1959,11 @@ export default function piGate(pi: ExtensionAPI) {
 					);
 				}
 			}
-			const groups = subjectGroups.length > 0 ? subjectGroups : [{ display: "unknown input", values: [""] }];
+			const groups = effectiveSubjectGroups.length > 0 ? effectiveSubjectGroups : [{ display: "unknown input", values: [""] }];
 			const sessionKey = scopeSessionKey(
 				compiled,
-				subjectGroups.length > 0
-					? buildPathSessionKey(subject, subjectGroups.map((group) => group.display))
+				effectiveSubjectGroups.length > 0
+					? buildPathSessionKey(subject, effectiveSubjectGroups.map((group) => group.display))
 					: `${subject}:unknown`,
 			);
 			const evaluation = evaluateGateSemantic({
