@@ -1,4 +1,4 @@
-import type { GateAutoBackendMode, GateAutoOutcome, GateAutoProcessKind } from "../auto-approver/types.ts";
+import type { GateAutoBackendMode, GateAutoBackendType, GateAutoCacheRetention, GateAutoOutcome, GateAutoProcessKind } from "../auto-approver/types.ts";
 
 export type GateSemanticDecision = "allow" | "block" | "prompt";
 export type GateSemanticOutcome = GateAutoOutcome;
@@ -115,6 +115,7 @@ export interface GateSemanticAuditRecord {
 	pid: number;
 	processKind: GateAutoProcessKind;
 	backendMode: GateAutoBackendMode;
+	backendType?: GateAutoBackendType;
 	requestId?: string;
 	profileName?: string;
 	lineageNames?: string[];
@@ -131,6 +132,9 @@ export interface GateSemanticAuditRecord {
 	latencyMs?: number;
 	endpoint?: string;
 	modelPath?: string;
+	provider?: string;
+	model?: string;
+	cacheRetention?: GateAutoCacheRetention;
 	stableContextHash?: string;
 	dynamicPayloadHash?: string;
 	/** Opt-in audit/debug field that may contain user text and tool input summaries. */

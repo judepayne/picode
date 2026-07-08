@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { loadGateAutoConfig } from "./config.ts";
+import { requestPiModelDecision } from "./backend-pi-model.ts";
 import { GateAutoRuntime, type GateAutoRuntimeHooks } from "./runtime.ts";
 import type { GateAutoApproverConfig, GateAutoBackendMode, GateAutoRuntimeStatus } from "./types.ts";
 import { appendGateAutoDecisionAuditRecord, getGateAutoDecisionAuditPath } from "../semantic/audit-log.ts";
@@ -51,7 +52,8 @@ export class GateAutoApproverManager {
 		const risk = assessGateRisk(request);
 		const status = await this.runtime.refresh(ctx, this.runtimeHooks());
 		const config = loadGateAutoConfig(ctx.cwd);
-		if (!config.enabled || !status.endpoint || status.mode === "disabled" || status.mode === "unconfigured" || status.mode === "failed") {
+		const ready = config.backend.type === "pi-model" ? status.mode === "pi-model" : Boolean(status.endpoint);
+		if (!config.enabled || !ready || status.mode === "disabled" || status.mode === "unconfigured" || status.mode === "failed") {
 			const result: GateSemanticResult = {
 				decision: "prompt",
 				reason: status.lastError ?? "Gate auto is unavailable",
@@ -69,15 +71,24 @@ export class GateAutoApproverManager {
 		const stable = buildGateSemanticStableContext(request, config);
 		this.stable = stable;
 		const dynamic = buildGateSemanticDynamicPayload(ctx, request, config);
-		const result = await requestGateSemanticDecision({
-			endpoint: status.endpoint,
-			stablePrefix: stable.text,
-			dynamicPayload: dynamic.text,
-			stableContextHash: stable.hash,
-			dynamicPayloadHash: dynamic.hash,
-			requestId: request.requestId,
-			config,
-		});
+		const result = config.backend.type === "pi-model"
+			? await requestPiModelDecision(ctx, {
+				stablePrefix: stable.text,
+				dynamicPayload: dynamic.text,
+				stableContextHash: stable.hash,
+				dynamicPayloadHash: dynamic.hash,
+				requestId: request.requestId,
+				config,
+			})
+			: await requestGateSemanticDecision({
+				endpoint: status.endpoint!,
+				stablePrefix: stable.text,
+				dynamicPayload: dynamic.text,
+				stableContextHash: stable.hash,
+				dynamicPayloadHash: dynamic.hash,
+				requestId: request.requestId,
+				config,
+			});
 		const annotatedResult: GateSemanticResult = {
 			...result,
 			backendMode: status.mode,
@@ -148,8 +159,12 @@ export class GateAutoApproverManager {
 			reason: result?.reason,
 			outcome: result?.outcome,
 			latencyMs: result?.latencyMs,
+			backendType: config.backend.type,
 			endpoint: status.endpoint,
 			modelPath: config.llama.modelPath,
+			provider: config.backend.type === "pi-model" ? config.backend.provider : undefined,
+			model: config.backend.type === "pi-model" ? config.backend.model : undefined,
+			cacheRetention: config.backend.type === "pi-model" ? config.backend.cacheRetention : undefined,
 			stableContextHash: result?.stableContextHash ?? this.stable?.hash,
 			dynamicPayloadHash: result?.dynamicPayloadHash,
 			dynamicPayloadText: config.auditIncludeDynamicPayloadText ? result?.dynamicPayloadText : undefined,

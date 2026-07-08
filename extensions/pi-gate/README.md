@@ -190,7 +190,7 @@ More complete example with a base policy plus two profiles:
 
 ## Auto mode
 
-Auto mode is optional. Normally, policy mode resolves each tool call deterministically and asks you for unresolved `ask` cases. Auto mode replaces that prompt path with a semantic local gate for the current session: deterministic policy/lineage denies and `hardDeny` rules run first, narrow `alwaysAllow` rules can skip boring model calls, and a small local model classifies the grey middle.
+Auto mode is optional. Normally, policy mode resolves each tool call deterministically and asks you for unresolved `ask` cases. Auto mode replaces that prompt path with a semantic gate for the current session. Deterministic policy/lineage denies and `hardDeny` rules run first, narrow `alwaysAllow` rules can skip boring model calls, and the configured approver backend classifies the grey middle. Backends can be a managed local llama.cpp server or a model from Pi's configured model registry.
 
 The important rules are simple:
 
@@ -207,35 +207,26 @@ When auto mode is active, the footer shows `gate:<profile> auto`.
 
 ### Quick setup
 
-You need two local things:
-
-1. `llama-server` from llama.cpp. On macOS, for example, run `brew install llama.cpp`.
-2. a GGUF model file, such as `MiniCPM5-1B-Q4_K_M.gguf` (the default model)
-
-This package does not bundle either one. You own where they are installed and cached.
-
-If you want Pi to run the bundled helper for you, use:
+Use the interactive setup command:
 
 ```text
 /gate auto setup
 ```
 
-That command downloads/verifies the default model if needed, finds `llama-server`, and saves the discovered paths to your prompt-vars config. It does not enable auto mode; run `/gate auto on` after setup.
+It asks which approver backend to use:
 
-You can also run the same helper from a terminal:
+- **Local managed llama.cpp**: finds `llama-server`, downloads/verifies the default MiniCPM5-1B Q4 GGUF model if needed, and saves a `managed-llama` backend config.
+- **Pi configured model**: lets you choose a model declared in `~/.pi/agent/models.json` and saves a `pi-model` backend config. This may send full Gate auto semantic context to that provider.
+
+Setup writes the canonical `gate.auto.backend` prompt var globally. It does not enable auto mode; run `/gate auto on` after setup.
+
+You can also run the local llama.cpp helper from a terminal:
 
 ```sh
 node scripts/setup-gate-auto-approver.mjs
 ```
 
-The terminal helper:
-
-- downloads/verifies the default MiniCPM5-1B Q4 GGUF model
-- looks for `llama-server`
-- prints the `/vars set ...` commands to run in Pi
-- prints `/gate auto on`
-
-The terminal helper prints commands for you to run. The Pi command applies the discovered paths directly.
+The terminal helper prints `/vars` commands for a canonical `managed-llama` backend plus `/gate auto on`.
 
 By default, the helper stores model files under:
 
@@ -245,12 +236,11 @@ By default, the helper stores model files under:
 
 You can override that with `--install-dir`.
 
-If you already manage models yourself, skip the helper and set the paths directly:
+If you already manage a local llama.cpp server yourself, set the backend directly:
 
 ```text
-/vars set gate.auto.llama.serverPath "/path/to/llama-server"
-/vars set gate.auto.llama.modelPath "/path/to/MiniCPM5-1B-Q4_K_M.gguf"
-/vars set gate.auto.timeoutMs 1500
+/vars set gate.auto.backend {"type":"managed-llama","serverPath":"/path/to/llama-server","modelPath":"/path/to/MiniCPM5-1B-Q4_K_M.gguf","host":"127.0.0.1","port":0,"parallel":2,"cachePrompt":true,"startupTimeoutMs":30000,"responseFormat":"auto","enableThinking":false,"warmup":true}
+/vars set gate.auto.timeoutMs 4000
 /gate auto on
 ```
 
@@ -283,16 +273,31 @@ If the model path, server path, or local endpoint is missing or broken:
 - unattended subagents block instead of prompting
 - no missing-model or timeout case silently allows a tool call
 
-### External server mode
+### Backend config
 
-Instead of letting pi-gate start `llama-server`, you can run your own local server and point pi-gate at it:
+Canonical backend config lives in `gate.auto.backend`.
 
-```text
-/vars set gate.auto.llama.endpoint "http://127.0.0.1:8080"
-/gate auto on
+Managed local llama.cpp:
+
+```json
+{"type":"managed-llama","serverPath":"/path/to/llama-server","modelPath":"/path/to/model.gguf","host":"127.0.0.1","port":0,"parallel":2,"cachePrompt":true,"startupTimeoutMs":30000,"responseFormat":"auto","enableThinking":false,"warmup":true}
 ```
 
-Only local loopback HTTP endpoints are accepted.
+External local llama.cpp endpoint:
+
+```json
+{"type":"managed-llama","endpoint":"http://127.0.0.1:8080","host":"127.0.0.1","port":0,"parallel":2,"cachePrompt":true,"startupTimeoutMs":30000,"responseFormat":"auto","enableThinking":false,"warmup":true}
+```
+
+Only local loopback HTTP endpoints are accepted for `managed-llama`.
+
+Pi model backend:
+
+```json
+{"type":"pi-model","provider":"openai","model":"gpt-4.1-mini","thinking":"off","cacheRetention":"short","temperature":0,"maxTokens":128}
+```
+
+`pi-model` uses Pi's model registry/auth from `~/.pi/agent/models.json`. Each approval call is a fresh one-shot context. Prompt caching for public providers is best-effort/provider-dependent. Legacy `gate.auto.llama.*` vars are still read for one transition window but `/gate auto setup` writes only `gate.auto.backend`.
 
 ### Testing
 

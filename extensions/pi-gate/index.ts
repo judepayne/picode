@@ -30,7 +30,7 @@ import {
 } from "./matching.ts";
 import { assessGateRisk } from "./risk.ts";
 import { hasSensitivePathCandidate, hasSensitiveSearchTarget } from "./sensitive-paths.ts";
-import { setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
+import { buildPromptVars, setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
 type PermissionAction = "allow" | "ask" | "deny";
 
@@ -560,6 +560,53 @@ function evaluateAbsolutePathsAcrossLineage(effective: EffectiveGatePolicy, subj
 	return evaluateSubjectAcrossLineage(effective, subject, groups);
 }
 
+interface ProfileBashEvaluation {
+	decision: Decision;
+	normalizedCommand: string;
+	analysis: MutationAnalysis;
+	pathCandidates: string[];
+}
+
+function evaluateProfileBashCommand(effective: EffectiveGatePolicy, command: string, cwd: string): ProfileBashEvaluation {
+	const normalizedCommand = normalizeCommand(command);
+	const commandDecision = evaluateSubjectAcrossLineage(effective, "bash", [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }]);
+	const analysis = extractMutationTargets(command, cwd);
+	const reasons = [...commandDecision.reasons];
+	let pathDecision: Decision = { action: "allow", reasons: [] };
+	let externalDecision: Decision = { action: "allow", reasons: [] };
+	let pathCandidates: string[] = [];
+
+	if (commandDecision.action !== "deny" && analysis.mutating) {
+		pathCandidates = analysis.paths.length > 0 ? analysis.paths : analysis.inferredCwdTarget ? [normalizeAbsPath(cwd)] : [];
+		if (pathCandidates.length === 0) {
+			pathDecision = { action: "ask", reasons: [`bash ask: ${analysis.reason}`] };
+		} else {
+			externalDecision = evaluateExternalDirectoryAcrossLineage(effective, pathCandidates, cwd);
+			pathDecision = evaluateAbsolutePathsAcrossLineage(effective, "edit", pathCandidates, cwd);
+		}
+	}
+
+	reasons.push(...externalDecision.reasons, ...pathDecision.reasons);
+	let finalAction = commandDecision.action;
+	finalAction = pickMoreRestrictive(finalAction, externalDecision.action);
+	finalAction = pickMoreRestrictive(finalAction, pathDecision.action);
+	if (analysis.mutating && finalAction === "allow" && analysis.paths.length === 0 && !analysis.inferredCwdTarget) {
+		finalAction = "ask";
+		reasons.push(`bash ask: ${analysis.reason}`);
+	}
+	if (analysis.complex && finalAction === "allow") {
+		finalAction = "ask";
+		reasons.push("bash ask: complex shell command requires review");
+	}
+
+	return {
+		decision: { action: finalAction, reasons },
+		normalizedCommand,
+		analysis,
+		pathCandidates,
+	};
+}
+
 function extractPathStrings(input: Record<string, unknown>, fields: string[]): string[] {
 	const paths: string[] = [];
 	for (const field of fields) {
@@ -1036,6 +1083,91 @@ function buildBashSessionKey(command: string): string {
 	return `bash:${normalizeCommand(command)}`;
 }
 
+function splitAndChainedBashCommand(command: string): string[] | undefined {
+	const segments: string[] = [];
+	let current = "";
+	let quote: "single" | "double" | undefined;
+	let sawAnd = false;
+
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		const next = command[i + 1];
+		if (quote === "single") {
+			current += ch;
+			if (ch === "'") quote = undefined;
+			continue;
+		}
+		if (quote === "double") {
+			current += ch;
+			if (ch === "\"") quote = undefined;
+			else if (ch === "\\") current += command[++i] ?? "";
+			else if (ch === "`" || (ch === "$" && next === "(")) return undefined;
+			continue;
+		}
+		if (ch === "'") {
+			quote = "single";
+			current += ch;
+			continue;
+		}
+		if (ch === "\"") {
+			quote = "double";
+			current += ch;
+			continue;
+		}
+		if (ch === "\\") {
+			current += ch + (command[++i] ?? "");
+			continue;
+		}
+		if (ch === "`" || (ch === "$" && next === "(")) return undefined;
+		if (ch === "&" && next === "&") {
+			const segment = current.trim();
+			if (!segment) return undefined;
+			segments.push(segment);
+			current = "";
+			sawAnd = true;
+			i++;
+			continue;
+		}
+		current += ch;
+	}
+
+	if (quote || !sawAnd) return undefined;
+	const finalSegment = current.trim();
+	if (!finalSegment) return undefined;
+	segments.push(finalSegment);
+	return segments.length > 1 ? segments : undefined;
+}
+
+function getChainUnsafeShellSegmentReason(command: string): string | undefined {
+	const tokens = tokenizeShell(command);
+	if (!tokens || tokens.length === 0) return "unparseable chain component requires review";
+	const commandIndex = firstCommandIndex(tokens);
+	const primary = normalizeShellToken(tokens[commandIndex] ?? "");
+	const secondary = normalizeShellToken(tokens[commandIndex + 1] ?? "");
+	if (!primary) return "shell assignment chain components require review";
+	const cwdUnsafeBuiltins = new Set(["cd", "pushd", "popd", "source", ".", "eval"]);
+	let wrapped = secondary;
+	if (primary === "builtin" || primary === "command") {
+		let wrappedIndex = commandIndex + 1;
+		while (wrappedIndex < tokens.length) {
+			const token = normalizeShellToken(tokens[wrappedIndex] ?? "");
+			if (token === "--" || token.startsWith("-")) {
+				wrappedIndex++;
+				continue;
+			}
+			wrapped = token;
+			break;
+		}
+	}
+	if (cwdUnsafeBuiltins.has(primary) || ((primary === "builtin" || primary === "command") && cwdUnsafeBuiltins.has(wrapped))) {
+		return "cwd-changing chain components require review";
+	}
+	const shellStateBuiltins = new Set(["alias", "unalias", "declare", "enable", "export", "local", "readonly", "set", "shopt", "typeset", "unset"]);
+	if (shellStateBuiltins.has(primary)) return "shell-state-changing chain components require review";
+	if (primary.startsWith("~") || primary.includes("/")) return "path-like command chain components require review";
+	return undefined;
+}
+
 function buildPathSessionKey(subject: string, values: string[]): string {
 	return `${subject}:${[...values].sort().join("|")}`;
 }
@@ -1051,25 +1183,35 @@ function displayStatusPath(cwd: string, value: string | undefined): string | und
 }
 
 function formatGateAutoStatusMessage(ctx: ExtensionContext, status: ReturnType<GateAutoApproverManager["status"]>, startOnSession: boolean, runtimeEnabled: boolean): string {
-	const configured = Boolean(status.endpoint || (status.serverPath && status.modelPath));
+	const configured = status.backendType === "pi-model" ? Boolean(status.provider && status.model) : Boolean(status.endpoint || (status.serverPath && status.modelPath));
 	const loadedSemantic = loadGateSemanticConfig(path.dirname(fileURLToPath(import.meta.url)), ctx.cwd);
 	const lines = [
 		`Gate auto: ${status.enabled ? runtimeEnabled ? "on" : "configured, not running" : "off"}`,
 		`Config: ${displayStatusPath(ctx.cwd, loadedSemantic.configPath)}`,
+		`Backend: ${status.backendType ?? "managed-llama"}`,
 	];
 	if (runtimeEnabled) {
-		lines.push(`Runtime: ${status.healthy ? "running" : "not ready"}${status.mode !== "disabled" ? ` (${status.mode}${status.pid ? `, pid ${status.pid}` : ""})` : ""}`);
+		lines.push(`Runtime: ${status.healthy ? "ready" : "not ready"}${status.mode !== "disabled" ? ` (${status.mode}${status.pid ? `, pid ${status.pid}` : ""})` : ""}`);
 		if (status.endpoint) lines.push(`Endpoint: ${status.endpoint}`);
 	} else if (status.enabled) {
-		lines.push("Runtime: stopped (run /gate auto on to start)");
+		lines.push(status.backendType === "pi-model" ? "Runtime: stopped (run /gate auto on to validate model access)" : "Runtime: stopped (run /gate auto on to start)");
 	}
 	if (status.enabled || startOnSession) lines.push(`Starts on Pi launch: ${startOnSession ? "yes" : "no"}`);
 	if (configured) {
-		if (status.serverPath) lines.push(`Server: ${displayStatusPath(ctx.cwd, status.serverPath)}`);
-		if (status.modelPath) lines.push(`Model: ${displayStatusPath(ctx.cwd, status.modelPath)}`);
+		if (status.backendType === "pi-model") {
+			lines.push(`Provider: ${status.provider}`);
+			lines.push(`Model: ${status.model}`);
+			lines.push(`Thinking: ${status.thinking ?? "off"}`);
+			lines.push(`Cache: provider-dependent`);
+			lines.push("Privacy: full Gate auto semantic context is sent to this provider.");
+		} else {
+			if (status.serverPath) lines.push(`Server: ${displayStatusPath(ctx.cwd, status.serverPath)}`);
+			if (status.modelPath) lines.push(`Model: ${displayStatusPath(ctx.cwd, status.modelPath)}`);
+		}
 	} else {
 		lines.push("Setup: not configured (run /gate auto setup)");
 	}
+	if (status.migrationNotice) lines.push(`Migration: ${status.migrationNotice}`);
 	if (runtimeEnabled && status.auditPath) lines.push(`Audit: ${displayStatusPath(ctx.cwd, status.auditPath)}`);
 	if (loadedSemantic.error) lines.push(`Problem: ${loadedSemantic.error}`);
 	if (status.lastError) lines.push(`Runtime problem: ${status.lastError}`);
@@ -1208,6 +1350,57 @@ function resetAutoBlockState(state: GateAutoBlockState): void {
 function truncateSetupOutput(value: string): string {
 	if (value.length <= GATE_AUTO_SETUP_MAX_OUTPUT_CHARS) return value;
 	return `${value.slice(0, GATE_AUTO_SETUP_MAX_OUTPUT_CHARS)}\n[truncated ${value.length - GATE_AUTO_SETUP_MAX_OUTPUT_CHARS} chars]`;
+}
+
+interface GateAutoSetupWriteResult {
+	scope: "project" | "global";
+	configPath: string;
+}
+
+export function setGateAutoBackendFromSetup(ctx: Pick<ExtensionContext, "cwd">, backend: Record<string, unknown>): GateAutoSetupWriteResult {
+	setVar(ctx.cwd, "gate.auto.backend", backend);
+	const state = setVar(ctx.cwd, "gate.auto.timeoutMs", 4000);
+	return { scope: state.writeLocation, configPath: state.configPath };
+}
+
+interface ConfiguredPiModelChoice {
+	provider: string;
+	model: string;
+	display: string;
+}
+
+function listConfiguredPiModels(): ConfiguredPiModelChoice[] {
+	const modelsPath = path.join(os.homedir(), ".pi", "agent", "models.json");
+	try {
+		const parsed = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as { providers?: Record<string, { models?: Array<{ id?: unknown; name?: unknown }> }> };
+		const out: ConfiguredPiModelChoice[] = [];
+		for (const [provider, config] of Object.entries(parsed.providers ?? {})) {
+			for (const model of config.models ?? []) {
+				if (typeof model.id !== "string" || !model.id.trim()) continue;
+				const label = typeof model.name === "string" && model.name.trim() ? `${model.name} (${model.id})` : model.id;
+				out.push({ provider, model: model.id, display: `${provider}/${label}` });
+			}
+		}
+		return out.sort((a, b) => a.display.localeCompare(b.display));
+	} catch {
+		return [];
+	}
+}
+
+function managedLlamaBackendConfig(setup: { serverPath: string; modelPath: string }): Record<string, unknown> {
+	return {
+		type: "managed-llama",
+		serverPath: setup.serverPath,
+		modelPath: setup.modelPath,
+		host: "127.0.0.1",
+		port: 0,
+		parallel: 2,
+		cachePrompt: true,
+		startupTimeoutMs: 30000,
+		responseFormat: "auto",
+		enableThinking: false,
+		warmup: true,
+	};
 }
 
 function runGateAutoSetupScript(extensionDir: string, onChild?: (child: ChildProcessWithoutNullStreams) => void): Promise<{ installDir: string; serverPath: string; modelPath: string; modelSha256?: string }> {
@@ -1541,7 +1734,7 @@ export default function piGate(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		currentCtx = ctx;
 		const autoConfig = loadGateAutoConfig(ctx.cwd);
-		autoRuntimeEnabled = autoConfig.enabled && (autoConfig.startOnSession || (autoConfig.processKind === "subagent" && Boolean(autoConfig.inheritedEndpoint)));
+		autoRuntimeEnabled = autoConfig.enabled && (autoConfig.startOnSession || (autoConfig.processKind === "subagent" && (Boolean(autoConfig.inheritedEndpoint) || autoConfig.backend.type === "pi-model")));
 		if (autoRuntimeEnabled) await autoManager.refresh(ctx);
 		else await autoManager.disable(ctx);
 		const result = getEffectivePolicy(ctx.cwd);
@@ -1610,16 +1803,31 @@ export default function piGate(pi: ExtensionAPI) {
 					ctx.ui.notify("Gate auto setup is already running", "warning");
 					return;
 				}
+				const backendChoice = ctx.hasUI
+					? await ctx.ui.select("Choose Gate auto approver backend", ["Local managed llama.cpp", "Pi configured model"])
+					: "Local managed llama.cpp";
+				if (backendChoice === "Pi configured model") {
+					const models = listConfiguredPiModels();
+					if (models.length === 0) {
+						ctx.ui.notify("No models found in ~/.pi/agent/models.json for Gate auto setup", "warning");
+						return;
+					}
+					const choice = await ctx.ui.select("Select Pi model for Gate auto. Full semantic approval context may be sent to this provider.", models.map((model) => model.display));
+					const selected = models.find((model) => model.display === choice);
+					if (!selected) return;
+					const confirm = await ctx.ui.select(`Use ${selected.provider}/${selected.model} for Gate auto? Full semantic approval context may be sent to this provider.`, ["Use this model", "Cancel"]);
+					if (confirm !== "Use this model") return;
+					const writeResult = setGateAutoBackendFromSetup(ctx, { type: "pi-model", provider: selected.provider, model: selected.model, thinking: "off", cacheRetention: "short", temperature: 0, maxTokens: 128 });
+					ctx.ui.notify(`Gate auto setup complete. backend=pi-model model=${selected.provider}/${selected.model} | config=${writeResult.scope}:${displayStatusPath(ctx.cwd, writeResult.configPath)} | run /gate auto on when ready`, "info");
+					return;
+				}
 				ctx.ui.notify("Gate auto setup started. This may download the default model the first time; leave Pi running until it completes.", "info");
 				try {
 					const setup = await runGateAutoSetupScript(extensionDir, (child) => {
 						activeAutoSetup = child;
 					});
-					setVar(ctx.cwd, "gate.auto.backend", "llama.cpp");
-					setVar(ctx.cwd, "gate.auto.llama.serverPath", setup.serverPath);
-					setVar(ctx.cwd, "gate.auto.llama.modelPath", setup.modelPath);
-					setVar(ctx.cwd, "gate.auto.timeoutMs", 1500);
-					ctx.ui.notify(`Gate auto setup complete. server=${setup.serverPath} | model=${setup.modelPath} | run /gate auto on when ready`, "info");
+					const writeResult = setGateAutoBackendFromSetup(ctx, managedLlamaBackendConfig(setup));
+					ctx.ui.notify(`Gate auto setup complete. server=${setup.serverPath} | model=${setup.modelPath} | config=${writeResult.scope}:${displayStatusPath(ctx.cwd, writeResult.configPath)} | run /gate auto on when ready`, "info");
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					ctx.ui.notify(`Gate auto setup failed: ${message}`, "warning");
@@ -1636,10 +1844,10 @@ export default function piGate(pi: ExtensionAPI) {
 				const resolved = getEffectivePolicy(ctx.cwd);
 				updateStatus(ctx, resolved.compiled?.profileName, sessionAllows, !resolved.compiled, profileLocked, autoRuntimeEnabled && autoManager.isEnabled());
 				ctx.ui.notify(
-					status.mode === "managed" || status.mode === "external" || status.mode === "inherited"
-						? `Gate auto enabled (${status.mode}${status.endpoint ? ` ${status.endpoint}` : ""})`
+					status.mode === "managed" || status.mode === "external" || status.mode === "inherited" || status.mode === "pi-model"
+						? `Gate auto enabled (${status.mode}${status.endpoint ? ` ${status.endpoint}` : status.provider && status.model ? ` ${status.provider}/${status.model}` : ""})`
 						: `Gate auto enabled but not ready: ${status.lastError ?? status.mode}`,
-					status.mode === "managed" || status.mode === "external" || status.mode === "inherited" ? "info" : "warning",
+					status.mode === "managed" || status.mode === "external" || status.mode === "inherited" || status.mode === "pi-model" ? "info" : "warning",
 				);
 				return;
 			}
@@ -2004,46 +2212,30 @@ export default function piGate(pi: ExtensionAPI) {
 			const sessionKey = scopeSessionKey(compiled, buildBashSessionKey(command));
 			if (sessionAllows.has(sessionKey)) return undefined;
 
-			const normalizedCommand = normalizeCommand(command);
-			const commandDecision = evaluateSubjectAcrossLineage(compiled, "bash", [{ display: normalizedCommand || "<empty command>", values: [normalizedCommand] }]);
-			const analysis = extractMutationTargets(command, ctx.cwd);
-			const reasons = [...commandDecision.reasons];
-
-			if (commandDecision.action === "deny") {
-				return { block: true, reason: pickReason(commandDecision.reasons, "deny", "Gate denied bash command") };
-			}
-
-			if (commandDecision.action === "allow" && !analysis.mutating && !analysis.complex) {
+			const chainedCommands = splitAndChainedBashCommand(command);
+			if (chainedCommands) {
+				for (const segment of chainedCommands) {
+					const chainUnsafeReason = getChainUnsafeShellSegmentReason(segment);
+					if (chainUnsafeReason) {
+						return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${chainUnsafeReason}` };
+					}
+					const segmentEvaluation = evaluateProfileBashCommand(compiled, segment, ctx.cwd);
+					if (segmentEvaluation.decision.action !== "allow") {
+						const reason = segmentEvaluation.decision.action === "deny"
+							? pickReason(segmentEvaluation.decision.reasons, "deny", "Gate denied bash command chain")
+							: pickReason(segmentEvaluation.decision.reasons, "ask", "Gate blocked bash command chain: a component requires review");
+						return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${reason}` };
+					}
+				}
 				return undefined;
 			}
 
-			let pathDecision: Decision = { action: "allow", reasons: [] };
-			let externalDecision: Decision = { action: "allow", reasons: [] };
-			if (analysis.mutating) {
-				const candidatePaths = analysis.paths.length > 0 ? analysis.paths : analysis.inferredCwdTarget ? [normalizeAbsPath(ctx.cwd)] : [];
-				if (candidatePaths.length === 0) {
-					pathDecision = { action: "ask", reasons: [`bash ask: ${analysis.reason}`] };
-				} else {
-					externalDecision = evaluateExternalDirectoryAcrossLineage(compiled, candidatePaths, ctx.cwd);
-					pathDecision = evaluateAbsolutePathsAcrossLineage(compiled, "edit", candidatePaths, ctx.cwd);
-				}
-			}
+			const evaluation = evaluateProfileBashCommand(compiled, command, ctx.cwd);
+			const { normalizedCommand, analysis } = evaluation;
+			const reasons = evaluation.decision.reasons;
 
-			reasons.push(...externalDecision.reasons, ...pathDecision.reasons);
-			let finalAction = commandDecision.action;
-			finalAction = pickMoreRestrictive(finalAction, externalDecision.action);
-			finalAction = pickMoreRestrictive(finalAction, pathDecision.action);
-			if (analysis.mutating && finalAction === "allow" && analysis.paths.length === 0 && !analysis.inferredCwdTarget) {
-				finalAction = "ask";
-				reasons.push(`bash ask: ${analysis.reason}`);
-			}
-			if (analysis.complex && finalAction === "allow") {
-				finalAction = "ask";
-				reasons.push("bash ask: complex shell command requires review");
-			}
-
-			if (finalAction === "allow") return undefined;
-			if (finalAction === "deny") {
+			if (evaluation.decision.action === "allow") return undefined;
+			if (evaluation.decision.action === "deny") {
 				return { block: true, reason: pickReason(reasons, "deny", "Gate denied bash command") };
 			}
 
@@ -2063,7 +2255,7 @@ export default function piGate(pi: ExtensionAPI) {
 					reasons,
 					fallbackDenyReason: "Gate denied bash command",
 					subject: "bash",
-					pathCandidates: analysis.paths.length > 0 ? analysis.paths : analysis.inferredCwdTarget ? [normalizeAbsPath(ctx.cwd)] : [],
+					pathCandidates: evaluation.pathCandidates,
 					bash: { command, normalizedCommand, analysis },
 				},
 				sessionAllows,

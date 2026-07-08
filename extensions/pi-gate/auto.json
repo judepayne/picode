@@ -8,7 +8,11 @@
       "~/.gnupg/**",
       "~/.aws/**",
       "**/*.pem",
-      "**/*.key"
+      "**/*.key",
+      "~/.pi/**/auth*.json",
+      "~/.pi/**/*token*",
+      "~/.pi/**/*credential*",
+      "~/.pi/**/*secret*"
     ],
     "edit": [
       "*.env",
@@ -19,6 +23,10 @@
       "**/.git/**",
       "**/*.pem",
       "**/*.key",
+      "~/.pi/**/auth*.json",
+      "~/.pi/**/*token*",
+      "~/.pi/**/*credential*",
+      "~/.pi/**/*secret*",
       "/etc/**"
     ],
     "bash": [
@@ -33,7 +41,7 @@
   },
   "agents": {
     "builder": {
-      "guidance": "Allow ordinary coding work inside the project: reading files, narrow edits, focused tests, builds, and local refactors. Block or request human approval for external filesystem changes, broad destructive edits, dependency installs, network access, publishing, credential access, privilege escalation, or unclear user intent.",
+      "guidance": "Allow ordinary coding work inside the project: reading files, narrow edits, focused tests, builds, local refactors, and directly requested Pi/picode config work under ~/.pi or project .pi. Treat models/settings config as ordinary user-owned config even when it contains placeholder key names such as apiKey. Block or request human approval for external filesystem changes, broad destructive edits, dependency installs, network access, publishing, actual credential/auth/token/secret access, privilege escalation, or unclear user intent.",
       "alwaysAllow": {
         "read": ["${cwd}/**"],
         "bash": [

@@ -210,18 +210,14 @@ function writeEmptyAlwaysAllowAutoConfig() {
 function configureAuto(args) {
 	writeEmptyAlwaysAllowAutoConfig();
 	if (args.endpoint) {
-		setVar(repoRoot, "gate.auto.llama.endpoint", args.endpoint);
+		setVar(repoRoot, "gate.auto.backend", { type: "managed-llama", endpoint: args.endpoint, host: "127.0.0.1", port: 0, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: !args.noWarmup });
 	} else {
 		if (!args.serverPath) throw new Error("llama-server not found on PATH; pass --server-path or --endpoint");
 		if (!fs.existsSync(args.modelPath)) throw new Error(`model not found: ${args.modelPath}; run scripts/setup-gate-auto-approver.mjs first`);
 		unsetVar(repoRoot, "gate.auto.llama.endpoint");
-		setVar(repoRoot, "gate.auto.llama.serverPath", args.serverPath);
-		setVar(repoRoot, "gate.auto.llama.modelPath", args.modelPath);
-		setVar(repoRoot, "gate.auto.llama.ctxSize", 8192);
-		setVar(repoRoot, "gate.auto.llama.nGpuLayers", 99);
+		setVar(repoRoot, "gate.auto.backend", { type: "managed-llama", serverPath: args.serverPath, modelPath: args.modelPath, host: "127.0.0.1", port: 0, ctxSize: 8192, nGpuLayers: 99, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: !args.noWarmup });
 	}
 	setVar(repoRoot, "gate.auto.timeoutMs", args.timeoutMs);
-	setVar(repoRoot, "gate.auto.llama.warmup", !args.noWarmup);
 	setVar(repoRoot, "gate.auto.context.includeAgentsMd", true);
 	setVar(repoRoot, "gate.auto.context.includeAgents", false);
 	setVar(repoRoot, "gate.auto.context.includeSubagents", false);

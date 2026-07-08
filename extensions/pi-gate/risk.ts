@@ -57,6 +57,18 @@ function combinedText(request: GateRiskRequest): string {
 	return `${request.subject}\n${(request.pathCandidates ?? []).join("\n")}\n${request.bash?.command ?? ""}\n${analysisText(request)}`.toLowerCase();
 }
 
+function mentionsPiConfig(text: string): boolean {
+	return /(^|[\s"'])((~|\$HOME)\/\.pi\/|\/[^\s"']*\/\.pi\/|\.pi\/)/i.test(text);
+}
+
+function mentionsPiCredentialPath(text: string): boolean {
+	return /(^|[\s"'])((~|\$HOME)\/\.pi\/|\/[^\s"']*\/\.pi\/|\.pi\/)[^\s"']*(auth|credential|secret|token|password|private[_-]?key|\.key\b|\.pem\b)/i.test(text);
+}
+
+function isBenignPiConfigRequest(request: GateRiskRequest, combined: string): boolean {
+	return mentionsPiConfig(combined) && !mentionsPiCredentialPath(combined);
+}
+
 function resolveExistingPath(candidate: string): string {
 	let current = path.resolve(candidate);
 	const missingSegments: string[] = [];
@@ -159,7 +171,10 @@ export function assessGateRisk(request: GateRiskRequest): GateRiskAssessment {
 	const analysis = analysisText(request);
 	const combined = combinedText(request);
 
-	if (/\.ssh|id_rsa|id_ed25519|\.env(\b|\.)|credential|secret|api[_-]?key|password|exfil|private[_-]?key/.test(combined)) {
+	const hardCredentialSignal = /\.ssh|id_rsa|id_ed25519|\.env(\b|\.)|exfil|private[_-]?key/.test(combined);
+	const credentialTermSignal = /\bauth(\.json|\b)|credential|secret|api[_-]?key|password|token/.test(combined);
+	const likelySecretValueSignal = /(?:api[_-]?key|token|password|secret)[\\"'\s:=]{1,12}(?![\\"']?\$|[\\"']?<|[\\"']?\{|[\\"']?process\.env\b)[\\"']?[a-z0-9][a-z0-9._-]{15,}/i.test(analysisText(request));
+	if (hardCredentialSignal || likelySecretValueSignal || (credentialTermSignal && !isBenignPiConfigRequest(request, combined))) {
 		addFlag(flags, "credential_or_secret");
 	}
 	if (/rm\s+[^\n;|&]*--no-preserve-root|\brm\s+-[a-z-]*r[a-z-]*f\s+(\/|~|\*|\.\s*$)|\bfind\b[\s\S]*\s-exec(dir)?\s+rm\s+-[a-z-]*r[a-z-]*f|broad deletion|data loss|destructive system/.test(combined)) {

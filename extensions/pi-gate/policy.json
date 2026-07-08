@@ -76,6 +76,12 @@
       "permission": {
         "external_directory": {
           "*": "allow"
+        },
+        "bash": {
+          "npm run*": "allow",
+          "npm test*": "allow",
+          "git status*": "allow",
+          "git diff*": "allow"
         }
       }
     },

@@ -113,10 +113,9 @@ if (args.json) {
 	console.log(`model: ${modelPath}`);
 	console.log("");
 	console.log("Run these commands in Pi:");
-	console.log(`/vars set gate.auto.backend ${JSON.stringify("llama.cpp")}`);
-	console.log(`/vars set gate.auto.llama.serverPath ${JSON.stringify(serverPath)}`);
-	console.log(`/vars set gate.auto.llama.modelPath ${JSON.stringify(modelPath)}`);
-	console.log(`/vars set gate.auto.timeoutMs 1500`);
+	console.log(`/vars location global`);
+	console.log(`/vars set gate.auto.backend ${JSON.stringify({ type: "managed-llama", serverPath, modelPath, host: "127.0.0.1", port: 0, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: true })}`);
+	console.log(`/vars set gate.auto.timeoutMs 4000`);
 	console.log(`/gate auto on`);
 	console.log("");
 	console.log("Optional: start gate auto automatically after future Pi restarts for this project:");

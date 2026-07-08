@@ -150,8 +150,13 @@ interface CustomSessionEntry {
 	customType?: string;
 	data?: {
 		modeId?: string;
+		targetModeId?: string;
 		subagents?: string[];
 		bannedSubagents?: string[];
+	};
+	details?: {
+		targetModeId?: string;
+		targetMode?: string;
 	};
 }
 
@@ -443,14 +448,21 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 	let lastPersistedModeId: string | undefined;
 
-	function persistCurrentMode(): void {
+	function persistCurrentMode(options?: { force?: boolean }): void {
 		const current = getCurrentMode();
 		if (!current) return;
-		if (current.id === lastPersistedModeId) return;
+		if (!options?.force && current.id === lastPersistedModeId) return;
 		lastPersistedModeId = current.id;
 		pi.appendEntry(MODE_STATE_ENTRY_TYPE, {
 			modeId: current.id,
 			...(current.bannedSubagents && current.bannedSubagents.length > 0 ? { bannedSubagents: [...current.bannedSubagents] } : {}),
+		});
+	}
+
+	function persistPendingModeSwitch(mode: ModeDefinition): void {
+		pi.appendEntry(MODE_HANDOFF_MESSAGE_TYPE, {
+			targetMode: mode.name,
+			targetModeId: mode.id,
 		});
 	}
 
@@ -560,6 +572,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 		pendingModeIndex = undefined;
 		currentIndex = nextIndex;
+		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
 	}
 
@@ -571,6 +584,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 		pendingModeIndex = undefined;
 		currentIndex = (currentIndex + 1) % modes.length;
+		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
 	}
 
@@ -582,6 +596,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 		pendingModeIndex = undefined;
 		currentIndex = (currentIndex - 1 + modes.length) % modes.length;
+		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
 	}
 
@@ -610,22 +625,49 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		const nextIndex = findModeIndex(identifier);
 		if (nextIndex < 0) return { error: `Agent mode: unknown mode \"${identifier}\"` };
 		pendingModeIndex = nextIndex;
-		return { mode: modes[nextIndex] };
+		const mode = modes[nextIndex];
+		if (mode) persistPendingModeSwitch(mode);
+		return { mode };
+	}
+
+	function latestDurablePendingModeId(ctx: ExtensionContext): string | undefined {
+		const branch = ctx.sessionManager.getBranch();
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i] as CustomSessionEntry;
+			if (entry?.type === "custom" && entry.customType === MODE_STATE_ENTRY_TYPE) return undefined;
+			if (entry?.customType !== MODE_HANDOFF_MESSAGE_TYPE) continue;
+			if (entry.type === "custom") return entry.data?.targetModeId;
+			if (entry.type === "custom_message") return entry.details?.targetModeId;
+		}
+		return undefined;
 	}
 
 	async function applyPendingModeSwitch(ctx: ExtensionContext): Promise<ModeDefinition | undefined> {
-		if (pendingModeIndex === undefined) return undefined;
+		let nextIndex = pendingModeIndex;
+		if (nextIndex === undefined) {
+			const durableModeId = latestDurablePendingModeId(ctx);
+			if (durableModeId) nextIndex = findModeIndex(durableModeId);
+			if (durableModeId && nextIndex < 0) {
+				persistCurrentMode({ force: true });
+				if (ctx.hasUI) ctx.ui.notify(`Agent mode: ignored invalid queued handoff target "${durableModeId}"`, "warning");
+				return undefined;
+			}
+		}
+		if (nextIndex === undefined) return undefined;
 		if (readAutomodeEnabled(ctx, getCurrentMode()?.id) !== "true") {
 			pendingModeIndex = undefined;
+			persistCurrentMode({ force: true });
 			return undefined;
 		}
-		if (pendingModeIndex < 0 || pendingModeIndex >= modes.length) {
+		if (nextIndex < 0 || nextIndex >= modes.length) {
 			pendingModeIndex = undefined;
+			persistCurrentMode({ force: true });
 			return undefined;
 		}
-		currentIndex = pendingModeIndex;
+		currentIndex = nextIndex;
 		pendingModeIndex = undefined;
-		await applyCurrentMode(ctx, { persist: true });
+		await applyCurrentMode(ctx, { persist: false });
+		persistCurrentMode({ force: true });
 		return getCurrentMode();
 	}
 
@@ -680,7 +722,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(`Agent mode assets: ${warning}`, "warning");
 		}
 		if (modes.length > 0) {
-			await applyCurrentMode(ctx, { persist: true });
+			await applyCurrentMode(ctx, { persist: !latestDurablePendingModeId(ctx) });
 		}
 	});
 

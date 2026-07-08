@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it, beforeEach, afterEach } from "node:test";
 
-import { setGateAutoEnabled, setVar } from "../../z-prompt-vars/prompt-vars.ts";
+import { setGateAutoEnabled, setVar, setWriteLocation } from "../../z-prompt-vars/prompt-vars.ts";
 import { assessGateRisk } from "../risk.ts";
 import { getLastUserTurn } from "../session-context.ts";
 import { loadGateAutoConfig } from "../auto-approver/config.ts";
@@ -13,7 +13,7 @@ import { parseGateSemanticDecisionText } from "../semantic/client.ts";
 import { buildGateSemanticDynamicPayload, buildGateSemanticStableContext } from "../semantic/context.ts";
 import { evaluateGateSemantic, splitAlwaysAllowShellChain } from "../semantic/evaluator.ts";
 import { validateAutoConfigSemantics } from "../semantic/loader.ts";
-import piGate, { extractMutationTargets, validatePolicySchema } from "../index.ts";
+import piGate, { extractMutationTargets, setGateAutoBackendFromSetup, validatePolicySchema } from "../index.ts";
 import autoConfig from "../auto.json" with { type: "json" };
 import schema from "../policy.schema.json" with { type: "json" };
 
@@ -333,6 +333,50 @@ describe("pi-gate risk assessment", () => {
 		assert.ok(!result.flags.includes("unclassified_bash"));
 	});
 
+	it("does not treat benign Pi config placeholders as credential access", () => {
+		const result = assessGateRisk({
+			requestId: "risk-pi-config",
+			toolName: "edit",
+			subject: "edit:/Users/test/.pi/agent/models.json",
+			profileName: "builder",
+			lineageNames: ["builder"],
+			cwd: "/workspace",
+			unattended: false,
+			processKind: "top-level",
+			inputSummary: { path: "/Users/test/.pi/agent/models.json", newText: '{"apiKey":"$OPENROUTER_API_KEY"}' },
+			pathCandidates: ["/Users/test/.pi/agent/models.json"],
+		});
+		assert.ok(!result.flags.includes("credential_or_secret"));
+
+		const realSecret = assessGateRisk({
+			requestId: "risk-pi-config-secret",
+			toolName: "edit",
+			subject: "edit:/Users/test/.pi/agent/models.json",
+			profileName: "builder",
+			lineageNames: ["builder"],
+			cwd: "/workspace",
+			unattended: false,
+			processKind: "top-level",
+			inputSummary: { path: "/Users/test/.pi/agent/models.json", newText: '{"apiKey":"sk-live-1234567890abcdef"}' },
+			pathCandidates: ["/Users/test/.pi/agent/models.json"],
+		});
+		assert.ok(realSecret.flags.includes("credential_or_secret"));
+
+		const auth = assessGateRisk({
+			requestId: "risk-pi-auth",
+			toolName: "read",
+			subject: "read:/Users/test/.pi/agent/auth.json",
+			profileName: "builder",
+			lineageNames: ["builder"],
+			cwd: "/workspace",
+			unattended: false,
+			processKind: "top-level",
+			inputSummary: { path: "/Users/test/.pi/agent/auth.json" },
+			pathCandidates: ["/Users/test/.pi/agent/auth.json"],
+		});
+		assert.ok(auth.flags.includes("credential_or_secret"));
+	});
+
 	it("does not classify external read-only tools as external mutations", () => {
 		const cwd = makeWorkspace();
 		const result = assessGateRisk({
@@ -368,6 +412,73 @@ describe("pi-gate policy schema validation", () => {
 describe("pi-gate auto config and evaluator", () => {
 	it("accepts the built-in auto config", () => {
 		assert.equal(validateAutoConfigSemantics(autoConfig), undefined);
+	});
+
+	it("loads canonical managed-llama backend config", () => {
+		const cwd = makeWorkspace();
+		setVar(cwd, "gate.auto.backend", { type: "managed-llama", serverPath: "/bin/llama-server", modelPath: "/tmp/model.gguf", ctxSize: 8192, nGpuLayers: 99 });
+		const config = loadGateAutoConfig(cwd);
+		assert.equal(config.backend.type, "managed-llama");
+		assert.equal(config.llama.serverPath, "/bin/llama-server");
+		assert.equal(config.llama.modelPath, "/tmp/model.gguf");
+		assert.equal(config.llama.ctxSize, 8192);
+		assert.equal(config.migrationNotice, undefined);
+	});
+
+	it("loads canonical pi-model backend config", () => {
+		const cwd = makeWorkspace();
+		setVar(cwd, "gate.auto.backend", { type: "pi-model", provider: "test-provider", model: "test-model", thinking: "high", cacheRetention: "long", temperature: 0.2, maxTokens: 64 });
+		const config = loadGateAutoConfig(cwd);
+		assert.equal(config.backend.type, "pi-model");
+		assert.equal(config.backend.provider, "test-provider");
+		assert.equal(config.backend.model, "test-model");
+		assert.equal(config.backend.thinking, "high");
+		assert.equal(config.backend.cacheRetention, "long");
+	});
+
+	it("surfaces invalid backend config and lets canonical backend override legacy vars", () => {
+		const invalidCwd = makeWorkspace();
+		setVar(invalidCwd, "gate.auto.backend", { type: "pi-model", provider: "missing-model" });
+		assert.match(loadGateAutoConfig(invalidCwd).backendError ?? "", /provider.*model|required/i);
+
+		const cwd = makeWorkspace();
+		setVar(cwd, "gate.auto.llama.serverPath", "/legacy/server");
+		setVar(cwd, "gate.auto.llama.modelPath", "/legacy/model.gguf");
+		setVar(cwd, "gate.auto.backend", { type: "pi-model", provider: "p", model: "m" });
+		const config = loadGateAutoConfig(cwd);
+		assert.equal(config.backend.type, "pi-model");
+		assert.match(config.migrationNotice ?? "", /legacy.*ignored/i);
+	});
+
+	it("setup writes backend to the configured vars location", () => {
+		const cwd = makeWorkspace();
+		const savedHome = process.env.HOME;
+		process.env.HOME = path.join(cwd, "home");
+		try {
+			setWriteLocation(cwd, "project");
+			let result = setGateAutoBackendFromSetup({ cwd }, { type: "managed-llama", serverPath: "/bin/llama-server", modelPath: "/tmp/model.gguf" });
+			assert.equal(result.scope, "project");
+			assert.equal(loadGateAutoConfig(cwd).backend.type, "managed-llama");
+
+			setWriteLocation(cwd, "global");
+			result = setGateAutoBackendFromSetup({ cwd }, { type: "pi-model", provider: "openrouter", model: "deepseek/deepseek-v4-flash" });
+			assert.equal(result.scope, "global");
+			assert.equal(loadGateAutoConfig(cwd).backend.type, "managed-llama", "project backend still overrides global backend");
+		} finally {
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+		}
+	});
+
+	it("maps legacy llama vars for one transition window", () => {
+		const cwd = makeWorkspace();
+		setVar(cwd, "gate.auto.backend", "llama.cpp");
+		setVar(cwd, "gate.auto.llama.serverPath", "/legacy/server");
+		setVar(cwd, "gate.auto.llama.modelPath", "/legacy/model.gguf");
+		const config = loadGateAutoConfig(cwd);
+		assert.equal(config.backend.type, "managed-llama");
+		assert.equal(config.llama.serverPath, "/legacy/server");
+		assert.match(config.migrationNotice ?? "", /Legacy gate\.auto\.llama/i);
 	});
 
 	it("parses auto model decisions", () => {
@@ -539,6 +650,48 @@ describe("pi-gate policy enforcement", () => {
 		}
 	});
 
+	it("allows common builder validation and git inspection commands without prompting", async () => {
+		const { pi, ctx } = createHarness({ selectChoice: "Deny" });
+		await pi.start(ctx);
+
+		for (const command of ["npm run build", "npm test -- --test-reporter=dot", "git status --short", "git diff --stat"]) {
+			assert.equal(await pi.tool("bash", { command }, ctx), undefined, command);
+		}
+		assert.equal(ctx.selectCalls, 0);
+	});
+
+	it("evaluates && bash chains component-by-component in profile mode", async () => {
+		const { pi, ctx } = createHarness({ selectChoice: "Deny" });
+		await pi.start(ctx);
+
+		assert.equal(await pi.tool("bash", { command: "npm test -- --test-reporter=dot && npm run build:npm && git diff --check" }, ctx), undefined);
+		assert.equal(ctx.selectCalls, 0);
+
+		await switchProfile(pi, "planner", ctx);
+		assert.equal(await pi.tool("bash", { command: "git status --short && git diff --stat" }, ctx), undefined);
+		const blocked = await pi.tool("bash", { command: "git status --short && npm install" }, ctx);
+		assert.equal(blocked?.block, true);
+		assert.match(blocked?.reason ?? "", /command chain|npm install|bash ask/i);
+
+		await switchProfile(pi, "builder", ctx);
+		for (const [command, reason] of [
+			["cd ~/.ssh && touch authorized_keys", /cwd-changing chain components/],
+			["source /tmp/cdssh && touch authorized_keys", /cwd-changing chain components/],
+			[". /tmp/cdssh && touch authorized_keys", /cwd-changing chain components/],
+			["eval 'cd ~/.ssh' && touch authorized_keys", /cwd-changing chain components/],
+			["command -p cd ~/.ssh && touch authorized_keys", /cwd-changing chain components/],
+			["command -- cd ~/.ssh && touch authorized_keys", /cwd-changing chain components/],
+			["shopt -s autocd && ~/.ssh && touch authorized_keys", /shell-state-changing chain components/],
+			["~/.ssh && touch authorized_keys", /path-like command chain components/],
+			["PATH=/tmp:$PATH && touch authorized_keys", /shell assignment chain components/],
+		] as const) {
+			const cwdChanging = await pi.tool("bash", { command }, ctx);
+			assert.equal(cwdChanging?.block, true, command);
+			assert.match(cwdChanging?.reason ?? "", reason, command);
+		}
+		assert.equal(ctx.selectCalls, 0);
+	});
+
 	it("applies read allow/deny precedence for env files", async () => {
 		const { pi, ctx } = createHarness();
 		await pi.start(ctx);
@@ -694,6 +847,19 @@ describe("pi-gate policy enforcement", () => {
 		} finally {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
 		}
+	});
+
+	it("pi-model auto on validates model registry before reporting ready", async () => {
+		const cwd = makeWorkspace();
+		process.env.GATE_PROFILE = "base";
+		const { pi, ctx } = createHarness({ cwd });
+		setVar(cwd, "gate.auto.backend", { type: "pi-model", provider: "missing", model: "missing" });
+
+		await pi.commands.get("gate")?.("auto on", ctx);
+
+		const notification = ctx.notifications.at(-1);
+		assert.equal(notification?.level, "warning");
+		assert.match(notification?.message ?? "", /not ready|registry unavailable|model not found/i);
 	});
 
 	it("auto mode does not let session approvals bypass hardDeny", async () => {
@@ -1102,7 +1268,10 @@ describe("pi-gate policy enforcement", () => {
 			guidance: "Allow ordinary requested project work.",
 		}, config);
 		assert.match(stable.text, /Compare the latest user request\/delegated task to the tool call/);
-		assert.match(stable.text, /unrelated script execution is not needed to read package\.json/);
+		assert.match(stable.text, /script execution is unrelated to the requested package metadata/);
+		assert.match(stable.text, /network access is unrelated to the requested git inspection/);
+		assert.match(stable.text, /dependency installation was not requested and needs human consent/);
+		assert.doesNotMatch(stable.text, /unrelated script execution is not needed to read package\.json/);
 	});
 
 	it("can audit exact dynamic story text when explicitly enabled", async () => {

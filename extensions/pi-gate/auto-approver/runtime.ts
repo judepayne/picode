@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 
+import { validatePiModelBackend } from "./backend-pi-model.ts";
 import { warmGateAutoApprover } from "./client.ts";
 import {
 	GATE_AUTO_BACKEND_ENV,
@@ -67,12 +68,18 @@ export class GateAutoRuntime {
 			enabled: config.enabled,
 			mode: config.enabled ? this.mode : "disabled",
 			processKind: config.processKind,
+			backendType: config.backend.type,
 			endpoint: this.endpoint ?? serverStatus.endpoint ?? config.llama.endpoint ?? config.inheritedEndpoint,
 			pid: serverStatus.pid,
 			modelPath: config.llama.modelPath,
 			serverPath: config.llama.serverPath,
-			healthy: this.mode === "external" || this.mode === "inherited" || serverStatus.healthy,
-			lastError: this.lastError ?? serverStatus.lastError,
+			provider: config.backend.type === "pi-model" ? config.backend.provider : undefined,
+			model: config.backend.type === "pi-model" ? config.backend.model : undefined,
+			thinking: config.backend.type === "pi-model" ? config.backend.thinking : undefined,
+			cache: config.backend.type === "pi-model" ? "provider-dependent" : config.llama.cachePrompt ? "local-prompt-cache" : "none",
+			migrationNotice: config.migrationNotice,
+			healthy: this.mode === "pi-model" || this.mode === "external" || this.mode === "inherited" || serverStatus.healthy,
+			lastError: this.lastError ?? config.backendError ?? serverStatus.lastError,
 		};
 	}
 
@@ -81,6 +88,29 @@ export class GateAutoRuntime {
 		this.config = config;
 		if (!config.enabled) {
 			this.mode = "disabled";
+			return this.status(ctx);
+		}
+
+		if (config.backendError) {
+			await this.disableRuntimeOnly();
+			this.mode = "unconfigured";
+			this.lastError = config.backendError;
+			return this.status(ctx);
+		}
+
+		if (config.backend.type === "pi-model") {
+			await this.disableRuntimeOnly();
+			const validation = await validatePiModelBackend(ctx, config.backend);
+			if (!validation.ok) {
+				this.mode = "unconfigured";
+				this.runtimeKey = undefined;
+				this.lastError = validation.error;
+				return this.status(ctx);
+			}
+			this.mode = "pi-model";
+			this.runtimeKey = `pi-model:${config.backend.provider}/${config.backend.model}`;
+			process.env[GATE_AUTO_BACKEND_ENV] = "pi-model";
+			this.lastError = undefined;
 			return this.status(ctx);
 		}
 
@@ -181,7 +211,7 @@ export class GateAutoRuntime {
 		}
 		process.env[GATE_AUTO_ENDPOINT_ENV] = endpoint;
 		process.env[GATE_AUTO_OWNER_PID_ENV] = String(process.pid);
-		process.env[GATE_AUTO_BACKEND_ENV] = "llama.cpp";
+		process.env[GATE_AUTO_BACKEND_ENV] = "managed-llama";
 		if (contextHash) process.env[GATE_AUTO_CONTEXT_HASH_ENV] = contextHash;
 	}
 

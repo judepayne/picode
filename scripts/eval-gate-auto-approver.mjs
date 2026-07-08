@@ -297,15 +297,11 @@ const ctx = {
 };
 
 try {
-	if (args.endpoint) setVar(cwd, "gate.auto.llama.endpoint", args.endpoint);
+	if (args.endpoint) setVar(cwd, "gate.auto.backend", { type: "managed-llama", endpoint: args.endpoint, host: "127.0.0.1", port: 0, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: !args.noWarmup });
 	else {
-		setVar(cwd, "gate.auto.llama.serverPath", args.serverPath);
-		setVar(cwd, "gate.auto.llama.modelPath", args.modelPath);
-		setVar(cwd, "gate.auto.llama.ctxSize", 8192);
-		setVar(cwd, "gate.auto.llama.nGpuLayers", 99);
+		setVar(cwd, "gate.auto.backend", { type: "managed-llama", serverPath: args.serverPath, modelPath: args.modelPath, host: "127.0.0.1", port: 0, ctxSize: 8192, nGpuLayers: 99, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: !args.noWarmup });
 	}
 	setVar(cwd, "gate.auto.timeoutMs", args.timeoutMs);
-	setVar(cwd, "gate.auto.llama.warmup", !args.noWarmup);
 	setVar(cwd, "gate.auto.context.includeAgentsMd", true);
 	setVar(cwd, "gate.auto.context.includeAgents", false);
 	setVar(cwd, "gate.auto.context.includeSubagents", false);

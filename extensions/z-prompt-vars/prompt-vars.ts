@@ -336,7 +336,7 @@ function defaultBootstrapVarsConfig(): VarsConfig {
 			auto: {
 				enabled: false,
 				backend: "llama.cpp",
-				timeoutMs: 1500,
+				timeoutMs: 4000,
 				llama: {
 					host: "127.0.0.1",
 					port: 0,
@@ -630,6 +630,10 @@ function setVarInternal(cwd: string, key: string, value: unknown, modeId: string
 
 export function setVar(cwd: string, key: string, value: unknown, modeId?: string): VarsState {
 	return setVarInternal(cwd, key, value, modeId);
+}
+
+export function setGlobalVar(cwd: string, key: string, value: unknown, modeId?: string): VarsState {
+	return setVarInternal(cwd, key, value, modeId, { writeLocationOverride: "global" });
 }
 
 export function setAutomodeEnabled(cwd: string, enabled: boolean, modeId?: string): VarsState {

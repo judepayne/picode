@@ -19,6 +19,7 @@ import {
 	interpolatePrompt,
 	setAutomodeEnabled,
 	setGateAutoEnabled,
+	setGlobalVar,
 	setVar,
 	setWriteLocation,
 	unsetVar,
@@ -150,6 +151,16 @@ describe("prompt-vars", () => {
 		assert.ok(fs.existsSync(getGlobalVarsConfigPath()));
 		assert.strictEqual(getVarValue(state, "project.name"), "Global Prompt Vars");
 		assert.match(formatWriteLocation(state), /"global"/);
+	});
+
+	test("setGlobalVar writes global config regardless of current write location", () => {
+		const cwd = makeWorkspace();
+		setWriteLocation(cwd, "project");
+		const state = setGlobalVar(cwd, "custom.globalOnly", "global-value");
+
+		assert.strictEqual(state.writeLocation, "project");
+		assert.deepStrictEqual(state.globalConfig.custom, { globalOnly: "global-value" });
+		assert.strictEqual(getRawStoredVarValue(state, "custom.globalOnly"), "global-value");
 	});
 
 	test("vars-file-name override changes the effective project/global vars file name and strips any path prefix", () => {

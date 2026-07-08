@@ -68,6 +68,7 @@ class FakePi {
 	readonly commands = new Map<string, { handler: CommandHandler; getArgumentCompletions?: (prefix: string) => unknown[] }>();
 	readonly tools = new Map<string, ToolRegistration>();
 	readonly sentMessages: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
+	readonly sessionEntries: unknown[] = [];
 	toolCallHandler?: ToolCallHandler;
 	activeTools: string[] = [];
 	thinkingLevel: string | undefined;
@@ -111,10 +112,12 @@ class FakePi {
 
 	appendEntry(type: string, data: unknown): void {
 		this.appendedEntries.push({ type, data });
+		this.sessionEntries.push({ type: "custom", customType: type, data });
 	}
 
 	sendMessage(message: Record<string, unknown>, options?: Record<string, unknown>): void {
 		this.sentMessages.push({ message, options });
+		this.sessionEntries.push({ type: "custom_message", customType: message.customType, details: message.details, content: message.content });
 	}
 
 	async emitLifecycle(event: string, payload: Record<string, unknown>, ctx: FakeContext): Promise<unknown> {
@@ -134,15 +137,17 @@ class FakeContext {
 	readonly notifications: Array<{ message: string; level?: string }> = [];
 	readonly statuses: Record<string, string | undefined> = {};
 	readonly cwd: string;
+	readonly branch: unknown[];
 	idle = true;
 	readonly modelRegistry = { find: () => undefined };
 	readonly sessionManager = {
-		getBranch: (): unknown[] => [],
+		getBranch: (): unknown[] => this.branch,
 		getSessionFile: (): undefined => undefined,
 	};
 
-	constructor(cwd = process.cwd()) {
+	constructor(cwd = process.cwd(), branch: unknown[] = []) {
 		this.cwd = cwd;
+		this.branch = branch;
 	}
 
 	ui = {
@@ -311,6 +316,53 @@ describe("agent-mode extension entrypoint", () => {
 		});
 		const allowedAfterHandoff = await pi.tool("bash", { command: "rm -rf dist" }, ctx);
 		assert.equal(allowedAfterHandoff, undefined);
+	});
+
+	test("switch_agent_mode handoff survives a fresh extension instance", async () => {
+		const cwd = makeTempCwd();
+		const pi = new FakePi();
+		agentModeExtension(pi as never);
+		const ctx = new FakeContext(cwd);
+		await pi.emitLifecycle("session_start", {}, ctx);
+		const agentsCommand = pi.commands.get("agents");
+		const tool = pi.tools.get("switch_agent_mode");
+		assert.ok(agentsCommand);
+		assert.ok(tool);
+
+		await agentsCommand.handler("Planner", ctx);
+		setAutomodeEnabled(cwd, true, "planner");
+		await tool.execute("tool", { mode: "Builder", triggerTurn: true, handoffPrompt: "Implement the plan." }, new AbortController().signal, undefined, ctx);
+
+		const freshPi = new FakePi();
+		agentModeExtension(freshPi as never);
+		const freshCtx = new FakeContext(cwd, [...pi.sessionEntries]);
+		await freshPi.emitLifecycle("session_start", {}, freshCtx);
+		assert.equal(process.env.GATE_PROFILE, "planner");
+
+		const promptResult = await freshPi.emitLifecycle("before_agent_start", { systemPrompt: "base prompt" }, freshCtx) as { systemPrompt?: string };
+		assert.match(promptResult.systemPrompt ?? "", /The canonical active mode for this turn is Builder/);
+		assert.deepEqual(freshPi.activeTools, ["read", "bash", "switch_agent_mode"]);
+		assert.equal(process.env.GATE_PROFILE, "builder");
+		assert.equal(freshPi.appendedEntries.at(-1)?.type, "agent-mode-state");
+	});
+
+	test("invalid durable mode handoffs are warned and cleared", async () => {
+		const cwd = makeTempCwd();
+		setAutomodeEnabled(cwd, true, "planner");
+		const branch = [
+			{ type: "custom", customType: "agent-mode-state", data: { modeId: "planner" } },
+			{ type: "custom", customType: "agent-mode-handoff", data: { targetModeId: "missing" } },
+		];
+		const pi = new FakePi();
+		agentModeExtension(pi as never);
+		const ctx = new FakeContext(cwd, branch);
+		await pi.emitLifecycle("session_start", {}, ctx);
+
+		const promptResult = await pi.emitLifecycle("before_agent_start", { systemPrompt: "base prompt" }, ctx) as { systemPrompt?: string };
+		assert.match(promptResult.systemPrompt ?? "", /The canonical active mode for this turn is Planner/);
+		assert.equal(process.env.GATE_PROFILE, "planner");
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /invalid queued handoff target/);
+		assert.equal(pi.appendedEntries.at(-1)?.type, "agent-mode-state");
 	});
 
 	test("/automode off clears queued mode handoffs", async () => {

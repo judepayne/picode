@@ -1,6 +1,14 @@
 import { buildPromptVars, getRawStoredVarValue } from "../../z-prompt-vars/prompt-vars.ts";
 
-import type { GateAutoApproverConfig, GateAutoProcessKind, GateAutoResponseFormat } from "./types.ts";
+import type {
+	GateAutoApproverConfig,
+	GateAutoCacheRetention,
+	GateAutoProcessKind,
+	GateAutoResponseFormat,
+	GateAutoThinking,
+	ManagedLlamaGateAutoBackendConfig,
+	PiModelGateAutoBackendConfig,
+} from "./types.ts";
 
 const PI_GATE_AUTO_ENDPOINT_ENV = "PI_GATE_AUTO_ENDPOINT";
 
@@ -26,9 +34,28 @@ function numberValue(value: unknown, fallback: number, options: { min?: number; 
 	return Math.min(max, Math.max(min, Math.trunc(raw)));
 }
 
+function optionalNumberValue(value: unknown, options: { min?: number; max?: number } = {}): number | undefined {
+	if (value === undefined || value === null || value === "") return undefined;
+	return numberValue(value, 0, options);
+}
+
 function responseFormatValue(value: unknown): GateAutoResponseFormat {
 	if (value === "json_schema" || value === "json_object" || value === "plain_json" || value === "auto") return value;
 	return "auto";
+}
+
+function thinkingValue(value: unknown): GateAutoThinking {
+	if (value === "off" || value === "minimal" || value === "low" || value === "medium" || value === "high" || value === "xhigh") return value;
+	return "off";
+}
+
+function cacheRetentionValue(value: unknown): GateAutoCacheRetention {
+	if (value === "none" || value === "short" || value === "long") return value;
+	return "short";
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+	return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function isLoopbackHost(value: string): boolean {
@@ -49,28 +76,131 @@ export function isGateAutoSubagentProcess(env: NodeJS.ProcessEnv = process.env):
 	return Boolean(env.PI_SUBAGENT_DEPTH || env.PI_SUBAGENT_PARENT_CHILD_ID || env.PI_SUBAGENT_TOP_RUN_ID);
 }
 
+function buildManagedLlamaBackend(get: (key: string) => unknown, env: NodeJS.ProcessEnv, processKind: GateAutoProcessKind, source: Record<string, unknown> | undefined): { backend: ManagedLlamaGateAutoBackendConfig; inheritedEndpoint?: string; error?: string } {
+	const from = (key: string): unknown => source ? source[key] : get(`gate.auto.llama.${key}`);
+	const rawInheritedEndpoint = stringValue(env[PI_GATE_AUTO_ENDPOINT_ENV]);
+	const rawConfiguredEndpoint = stringValue(from("endpoint"));
+	const rawHost = stringValue(from("host")) ?? "127.0.0.1";
+	const host = isLoopbackHost(rawHost) ? rawHost : "127.0.0.1";
+	const hostError = !rawConfiguredEndpoint && rawHost !== host ? "gate.auto.backend.host must be loopback for managed gate auto mode" : undefined;
+	const configuredEndpoint = rawConfiguredEndpoint && isLoopbackEndpoint(rawConfiguredEndpoint) ? rawConfiguredEndpoint : undefined;
+	const inheritedEndpoint = processKind === "subagent" && rawInheritedEndpoint && isLoopbackEndpoint(rawInheritedEndpoint) ? rawInheritedEndpoint : undefined;
+	const endpointError = hostError ?? (rawConfiguredEndpoint && !configuredEndpoint
+		? "gate.auto.backend.endpoint must be a local http loopback URL"
+		: processKind === "subagent" && rawInheritedEndpoint && !inheritedEndpoint
+			? "PI_GATE_AUTO_ENDPOINT must be a local http loopback URL"
+			: undefined);
+	return {
+		inheritedEndpoint,
+		error: endpointError,
+		backend: {
+			type: "managed-llama",
+			endpoint: configuredEndpoint,
+			endpointError,
+			serverPath: stringValue(from("serverPath")),
+			modelPath: stringValue(from("modelPath")),
+			host,
+			port: numberValue(from("port"), 0, { min: 0, max: 65535 }),
+			ctxSize: optionalNumberValue(from("ctxSize"), { min: 1 }),
+			threads: optionalNumberValue(from("threads"), { min: 1 }),
+			threadsBatch: optionalNumberValue(from("threadsBatch"), { min: 1 }),
+			nGpuLayers: optionalNumberValue(from("nGpuLayers"), { min: 0 }),
+			parallel: numberValue(from("parallel"), 2, { min: 1, max: 16 }),
+			cachePrompt: boolValue(from("cachePrompt"), true),
+			cacheReuse: optionalNumberValue(from("cacheReuse"), { min: 0 }),
+			idSlot: optionalNumberValue(from("idSlot"), { min: 0 }),
+			startupTimeoutMs: numberValue(from("startupTimeoutMs"), 30000, { min: 1000, max: 300000 }),
+			responseFormat: responseFormatValue(from("responseFormat")),
+			enableThinking: boolValue(from("enableThinking"), false),
+			warmup: boolValue(from("warmup"), true),
+		},
+	};
+}
+
+function buildPiModelBackend(source: Record<string, unknown>): { backend?: PiModelGateAutoBackendConfig; error?: string } {
+	const provider = stringValue(source.provider);
+	const model = stringValue(source.model);
+	if (!provider || !model) return { error: "gate.auto.backend.provider and gate.auto.backend.model are required for pi-model" };
+	return {
+		backend: {
+			type: "pi-model",
+			provider,
+			model,
+			thinking: thinkingValue(source.thinking),
+			cacheRetention: cacheRetentionValue(source.cacheRetention),
+			temperature: numberValue(source.temperature, 0, { min: 0, max: 2 }),
+			maxTokens: numberValue(source.maxTokens, 128, { min: 1, max: 4096 }),
+		},
+	};
+}
+
+function hasLegacyLlamaVars(get: (key: string) => unknown): boolean {
+	return ["endpoint", "serverPath", "modelPath", "host", "port", "ctxSize", "threads", "threadsBatch", "nGpuLayers", "parallel", "cachePrompt", "cacheReuse", "idSlot", "startupTimeoutMs", "responseFormat", "enableThinking", "warmup"]
+		.some((key) => get(`gate.auto.llama.${key}`) !== undefined);
+}
+
+function nestedConfigValue(config: unknown, key: string): unknown {
+	let cursor = config;
+	for (const part of key.split(".")) {
+		if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
+		cursor = (cursor as Record<string, unknown>)[part];
+	}
+	return cursor;
+}
+
+function hasProjectLegacyLlamaVars(config: unknown): boolean {
+	return ["endpoint", "serverPath", "modelPath", "host", "port", "ctxSize", "threads", "threadsBatch", "nGpuLayers", "parallel", "cachePrompt", "cacheReuse", "idSlot", "startupTimeoutMs", "responseFormat", "enableThinking", "warmup"]
+		.some((key) => nestedConfigValue(config, `gate.auto.llama.${key}`) !== undefined);
+}
+
 export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): GateAutoApproverConfig {
 	const state = buildPromptVars(cwd);
 	const get = (key: string): unknown => getRawStoredVarValue(state, key);
 	const processKind: GateAutoProcessKind = isGateAutoSubagentProcess(env) ? "subagent" : "top-level";
-	const rawInheritedEndpoint = stringValue(env[PI_GATE_AUTO_ENDPOINT_ENV]);
-	const rawConfiguredEndpoint = stringValue(get("gate.auto.llama.endpoint"));
-	const rawHost = stringValue(get("gate.auto.llama.host")) ?? "127.0.0.1";
-	const host = isLoopbackHost(rawHost) ? rawHost : "127.0.0.1";
-	const hostError = !rawConfiguredEndpoint && rawHost !== host ? "gate.auto.llama.host must be loopback for managed gate auto mode" : undefined;
-	const configuredEndpoint = rawConfiguredEndpoint && isLoopbackEndpoint(rawConfiguredEndpoint) ? rawConfiguredEndpoint : undefined;
-	const inheritedEndpoint = processKind === "subagent" && rawInheritedEndpoint && isLoopbackEndpoint(rawInheritedEndpoint) ? rawInheritedEndpoint : undefined;
-	const endpointError = hostError ?? (rawConfiguredEndpoint && !configuredEndpoint
-		? "gate.auto.llama.endpoint must be a local http loopback URL"
-		: processKind === "subagent" && rawInheritedEndpoint && !inheritedEndpoint
-			? "PI_GATE_AUTO_ENDPOINT must be a local http loopback URL"
-			: undefined);
-	const backend = stringValue(get("gate.auto.backend")) ?? "llama.cpp";
+	const projectBackend = nestedConfigValue(state.projectConfig, "gate.auto.backend");
+	const projectLegacyPresent = hasProjectLegacyLlamaVars(state.projectConfig);
+	const rawBackend = projectBackend !== undefined || projectLegacyPresent ? projectBackend : get("gate.auto.backend");
+	const backendObject = objectValue(rawBackend);
+	const legacyBackendString = rawBackend === "llama.cpp" || rawBackend === "managed-llama";
+	const legacyPresent = hasLegacyLlamaVars(get) || legacyBackendString;
+	const managedFallback = buildManagedLlamaBackend(get, env, processKind, undefined);
+	let backend = managedFallback.backend;
+	let inheritedEndpoint = managedFallback.inheritedEndpoint;
+	let backendError = managedFallback.error;
+	let migrationNotice: string | undefined = legacyPresent ? "Legacy gate.auto.llama.* config is in use; run /gate auto setup to write gate.auto.backend." : undefined;
+
+	if (backendObject) {
+		const type = backendObject.type;
+		if (type === "managed-llama") {
+			const managed = buildManagedLlamaBackend(get, env, processKind, backendObject);
+			backend = managed.backend;
+			inheritedEndpoint = managed.inheritedEndpoint;
+			backendError = managed.error;
+			migrationNotice = legacyPresent ? "Canonical gate.auto.backend is active; legacy gate.auto.llama.* values are ignored." : undefined;
+		} else if (type === "pi-model") {
+			const piModel = buildPiModelBackend(backendObject);
+			if (piModel.backend) {
+				backend = piModel.backend;
+				backendError = undefined;
+				migrationNotice = legacyPresent ? "Canonical gate.auto.backend is active; legacy gate.auto.llama.* values are ignored." : undefined;
+			} else {
+				backendError = piModel.error;
+			}
+		} else {
+			backendError = "gate.auto.backend.type must be managed-llama or pi-model";
+		}
+	} else if (rawBackend !== undefined && !legacyBackendString) {
+		backendError = "gate.auto.backend must be an object with type managed-llama or pi-model";
+	}
+
 	return {
 		enabled: get("gate.auto.enabled") === true,
 		startOnSession: boolValue(get("gate.auto.startOnSession"), false),
-		backend: backend === "llama.cpp" ? "llama.cpp" : "llama.cpp",
-		timeoutMs: numberValue(get("gate.auto.timeoutMs"), 1500, { min: 100, max: 60000 }),
+		backend,
+		llama: backend.type === "managed-llama" ? backend : managedFallback.backend,
+		backendError,
+		migrationNotice,
+		timeoutMs: numberValue(get("gate.auto.timeoutMs"), 4000, { min: 100, max: 60000 }),
 		auditEnabled: boolValue(get("gate.auto.audit.enabled"), true),
 		auditIncludeDynamicPayloadText: boolValue(get("gate.auto.audit.includeDynamicPayloadText"), false),
 		processKind,
@@ -83,26 +213,6 @@ export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process
 			maxDynamicPayloadChars: numberValue(get("gate.auto.context.maxDynamicPayloadChars"), 8000, { min: 1000, max: 64000 }),
 			maxLastUserTurnChars: numberValue(get("gate.auto.context.maxLastUserTurnChars"), 2000, { min: 0, max: 16000 }),
 			maxTaskPreviewChars: numberValue(get("gate.auto.context.maxTaskPreviewChars"), 1000, { min: 0, max: 8000 }),
-		},
-		llama: {
-			endpoint: configuredEndpoint,
-			endpointError,
-			serverPath: stringValue(get("gate.auto.llama.serverPath")),
-			modelPath: stringValue(get("gate.auto.llama.modelPath")),
-			host,
-			port: numberValue(get("gate.auto.llama.port"), 0, { min: 0, max: 65535 }),
-			ctxSize: get("gate.auto.llama.ctxSize") === undefined ? undefined : numberValue(get("gate.auto.llama.ctxSize"), 0, { min: 1 }),
-			threads: get("gate.auto.llama.threads") === undefined ? undefined : numberValue(get("gate.auto.llama.threads"), 0, { min: 1 }),
-			threadsBatch: get("gate.auto.llama.threadsBatch") === undefined ? undefined : numberValue(get("gate.auto.llama.threadsBatch"), 0, { min: 1 }),
-			nGpuLayers: get("gate.auto.llama.nGpuLayers") === undefined ? undefined : numberValue(get("gate.auto.llama.nGpuLayers"), 0, { min: 0 }),
-			parallel: numberValue(get("gate.auto.llama.parallel"), 2, { min: 1, max: 16 }),
-			cachePrompt: boolValue(get("gate.auto.llama.cachePrompt"), true),
-			cacheReuse: get("gate.auto.llama.cacheReuse") === undefined ? undefined : numberValue(get("gate.auto.llama.cacheReuse"), 0, { min: 0 }),
-			idSlot: get("gate.auto.llama.idSlot") === undefined ? undefined : numberValue(get("gate.auto.llama.idSlot"), 0, { min: 0 }),
-			startupTimeoutMs: numberValue(get("gate.auto.llama.startupTimeoutMs"), 30000, { min: 1000, max: 300000 }),
-			responseFormat: responseFormatValue(get("gate.auto.llama.responseFormat")),
-			enableThinking: boolValue(get("gate.auto.llama.enableThinking"), false),
-			warmup: boolValue(get("gate.auto.llama.warmup"), true),
 		},
 	};
 }
