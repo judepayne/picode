@@ -1,6 +1,7 @@
 export interface ConservativeShellAnalysis {
 	tokens: string[] | undefined;
 	hasSubstitution: boolean;
+	hasControlOperator: boolean;
 	parseUncertain: boolean;
 }
 
@@ -104,19 +105,50 @@ export function shellHasSubstitution(command: string): boolean {
 	return false;
 }
 
+export function shellHasControlOperator(command: string): boolean {
+	let quote: "single" | "double" | undefined;
+	for (let index = 0; index < command.length; index++) {
+		const ch = command[index];
+		if (quote === "single") {
+			if (ch === "'") quote = undefined;
+			continue;
+		}
+		if (quote === "double") {
+			if (ch === '"') quote = undefined;
+			else if (ch === "\\") index++;
+			continue;
+		}
+		if (ch === "'") quote = "single";
+		else if (ch === '"') quote = "double";
+		else if (ch === "\\") index++;
+		else if (ch === "\n" || ch === "\r" || ch === ";" || ch === "&" || ch === "|" || ch === "<" || ch === ">") return true;
+	}
+	return false;
+}
+
 export function analyzeShellCommand(command: string): ConservativeShellAnalysis {
 	const tokens = tokenizeShellCommand(command);
 	return {
 		tokens,
 		hasSubstitution: shellHasSubstitution(command),
+		hasControlOperator: shellHasControlOperator(command),
 		parseUncertain: tokens === undefined,
 	};
 }
 
-function splitConservativeShellSegments(command: string, allowPipes: boolean): string[] | undefined {
+export type ConservativeShellOperator = "&&" | "||" | "|" | "|&" | ";";
+
+export interface ConservativeShellComposite {
+	segments: string[];
+	operators: ConservativeShellOperator[];
+}
+
+function parseConservativeShellSegments(command: string, allowPipes: boolean): ConservativeShellComposite | undefined {
 	const segments: string[] = [];
+	const operators: ConservativeShellOperator[] = [];
 	let current = "";
 	let quote: "single" | "double" | undefined;
+	let requiresFollowingSegment = false;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
 		const next = command[i + 1];
@@ -135,11 +167,14 @@ function splitConservativeShellSegments(command: string, allowPipes: boolean): s
 		if (ch === "'") {
 			quote = "single";
 			current += ch;
+			requiresFollowingSegment = false;
 		} else if (ch === '"') {
 			quote = "double";
 			current += ch;
+			requiresFollowingSegment = false;
 		} else if (ch === "\\") {
 			current += ch + (command[++i] ?? "");
+			requiresFollowingSegment = false;
 		} else if (ch === "&" || ch === "|") {
 			const isAnd = ch === "&" && next === "&";
 			const isOr = ch === "|" && next === "|";
@@ -148,22 +183,40 @@ function splitConservativeShellSegments(command: string, allowPipes: boolean): s
 			const segment = current.trim();
 			if (!segment) return undefined;
 			segments.push(segment);
+			operators.push(isAnd ? "&&" : isOr ? "||" : next === "&" ? "|&" : "|");
 			current = "";
+			requiresFollowingSegment = true;
 			if (isAnd || isOr || next === "&") i++;
 		} else if (ch === "<" || ch === ">" || ch === "`" || (ch === "$" && next === "(")) {
 			return undefined;
-		} else if (ch === ";" || ch === "\n") {
+		} else if (ch === "\n" || ch === "\r") {
+			if (requiresFollowingSegment) {
+				current = "";
+				continue;
+			}
 			const segment = current.trim();
-			if (segment) segments.push(segment);
+			if (segment) {
+				segments.push(segment);
+				operators.push(";");
+			}
+			current = "";
+		} else if (ch === ";") {
+			if (requiresFollowingSegment) return undefined;
+			const segment = current.trim();
+			if (segment) {
+				segments.push(segment);
+				operators.push(";");
+			}
 			current = "";
 		} else {
 			current += ch;
+			if (!/\s/.test(ch)) requiresFollowingSegment = false;
 		}
 	}
-	if (quote) return undefined;
+	if (quote || requiresFollowingSegment) return undefined;
 	const finalSegment = current.trim();
 	if (finalSegment) segments.push(finalSegment);
-	return segments.length > 0 ? segments : undefined;
+	return segments.length > 0 ? { segments, operators } : undefined;
 }
 
 /**
@@ -172,13 +225,17 @@ function splitConservativeShellSegments(command: string, allowPipes: boolean): s
  * return undefined so callers fail closed.
  */
 export function splitConservativeShellChain(command: string): string[] | undefined {
-	return splitConservativeShellSegments(command, false);
+	return parseConservativeShellSegments(command, false)?.segments;
 }
 
 /**
  * As above, but treats pipeline components as independent commands. This is
  * suitable only when the caller validates every component conservatively.
  */
+export function parseConservativeShellPipeline(command: string): ConservativeShellComposite | undefined {
+	return parseConservativeShellSegments(command, true);
+}
+
 export function splitConservativeShellPipeline(command: string): string[] | undefined {
-	return splitConservativeShellSegments(command, true);
+	return parseConservativeShellPipeline(command)?.segments;
 }

@@ -29,7 +29,7 @@ import {
 	type CandidateGroup,
 } from "./matching.ts";
 import { assessGateRisk } from "./risk.ts";
-import { analyzeShellCommand, tokenizeShellCommand, type ConservativeShellAnalysis } from "../shared/shell-analysis.ts";
+import { analyzeShellCommand, parseConservativeShellPipeline, tokenizeShellCommand, type ConservativeShellAnalysis } from "../shared/shell-analysis.ts";
 import { hasSensitivePathCandidate, hasSensitiveSearchTarget } from "./sensitive-paths.ts";
 import { buildPromptVars, setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
@@ -722,8 +722,7 @@ function isIgnorableRedirectionTarget(candidate: string): boolean {
 }
 
 function isComplexShellCommand(analysis: ConservativeShellAnalysis): boolean {
-	if (!analysis.tokens || analysis.hasSubstitution) return true;
-	return analysis.tokens.some((token) => isShellSeparator(token) || token === ">" || token === ">>" || token === "<" || token === "<<");
+	return !analysis.tokens || analysis.hasSubstitution || analysis.hasControlOperator;
 }
 
 function normalizeShellToken(token: string): string {
@@ -963,59 +962,40 @@ function buildBashSessionKey(command: string): string {
 	return `bash:${normalizeCommand(command)}`;
 }
 
-function splitAndChainedBashCommand(command: string): string[] | undefined {
-	const segments: string[] = [];
-	let current = "";
-	let quote: "single" | "double" | undefined;
-	let sawAnd = false;
+interface PolicyBashComposite {
+	segments?: string[];
+	error?: string;
+}
 
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		const next = command[i + 1];
-		if (quote === "single") {
-			current += ch;
-			if (ch === "'") quote = undefined;
+function isSafePipefailPrologue(command: string): boolean {
+	const tokens = tokenizeShellCommand(command);
+	if (!tokens || tokens[0] !== "set" || tokens.length < 3) return false;
+	let sawPipefail = false;
+	for (let index = 1; index < tokens.length; index++) {
+		const token = tokens[index] ?? "";
+		if (/^-[eEu]+$/.test(token)) continue;
+		if (token === "-o" || /^-[eEu]+o$/.test(token)) {
+			if (tokens[index + 1] !== "pipefail") return false;
+			sawPipefail = true;
+			index++;
 			continue;
 		}
-		if (quote === "double") {
-			current += ch;
-			if (ch === "\"") quote = undefined;
-			else if (ch === "\\") current += command[++i] ?? "";
-			else if (ch === "`" || (ch === "$" && next === "(")) return undefined;
-			continue;
-		}
-		if (ch === "'") {
-			quote = "single";
-			current += ch;
-			continue;
-		}
-		if (ch === "\"") {
-			quote = "double";
-			current += ch;
-			continue;
-		}
-		if (ch === "\\") {
-			current += ch + (command[++i] ?? "");
-			continue;
-		}
-		if (ch === "`" || (ch === "$" && next === "(")) return undefined;
-		if (ch === "&" && next === "&") {
-			const segment = current.trim();
-			if (!segment) return undefined;
-			segments.push(segment);
-			current = "";
-			sawAnd = true;
-			i++;
-			continue;
-		}
-		current += ch;
+		return false;
 	}
+	return sawPipefail;
+}
 
-	if (quote || !sawAnd) return undefined;
-	const finalSegment = current.trim();
-	if (!finalSegment) return undefined;
-	segments.push(finalSegment);
-	return segments.length > 1 ? segments : undefined;
+function analyzePolicyBashComposite(command: string): PolicyBashComposite | undefined {
+	const rawLooksComposite = /&&|\|/.test(command);
+	const parsed = parseConservativeShellPipeline(command);
+	if (!parsed) return rawLooksComposite ? { error: "unparseable shell composite requires review" } : undefined;
+	const hasAnd = parsed.operators.includes("&&");
+	const hasPipeline = parsed.operators.includes("|") || parsed.operators.includes("|&");
+	if (!hasAnd && !hasPipeline) return undefined;
+	if (parsed.segments.length < 2) return { error: "unparseable shell composite requires review" };
+	const segments = [...parsed.segments];
+	if (hasPipeline && isSafePipefailPrologue(segments[0] ?? "")) segments.shift();
+	return segments.length > 0 ? { segments } : { error: "shell composite has no commands to review" };
 }
 
 function getChainUnsafeShellSegmentReason(command: string): string | undefined {
@@ -2092,9 +2072,10 @@ export default function piGate(pi: ExtensionAPI) {
 			const sessionKey = scopeSessionKey(compiled, buildBashSessionKey(command));
 			if (sessionAllows.has(sessionKey)) return undefined;
 
-			const chainedCommands = splitAndChainedBashCommand(command);
-			if (chainedCommands) {
-				for (const segment of chainedCommands) {
+			const composite = analyzePolicyBashComposite(command);
+			if (composite?.error) return { block: true, reason: `Gate blocked bash command chain: ${composite.error}` };
+			if (composite?.segments) {
+				for (const segment of composite.segments) {
 					const chainUnsafeReason = getChainUnsafeShellSegmentReason(segment);
 					if (chainUnsafeReason) {
 						return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${chainUnsafeReason}` };

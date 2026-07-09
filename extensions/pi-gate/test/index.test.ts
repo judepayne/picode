@@ -692,6 +692,39 @@ describe("pi-gate policy enforcement", () => {
 		assert.equal(ctx.selectCalls, 0);
 	});
 
+	it("evaluates pipefail-prefixed pipelines component-by-component in profile mode", async () => {
+		const { pi, ctx } = createHarness({ selectChoice: "Deny" });
+		await pi.start(ctx);
+		await switchProfile(pi, "planner", ctx);
+
+		for (const command of [
+			"grep '|' README.md",
+			"grep '|&' README.md",
+			"printf '%s' '&&'",
+			"echo \\|",
+			"set -o pipefail\ngit status --short | grep '^ M' | wc -l",
+			"set -o pipefail\ngit status --short |\n grep '^ M' |\n wc -l",
+			"set -euo pipefail; git status --short | grep '^ M' | wc -l",
+			"git status --short | grep '^ M' | wc -l",
+		]) {
+			assert.equal(await pi.tool("bash", { command }, ctx), undefined, command);
+		}
+		assert.equal(ctx.selectCalls, 0);
+
+		const unsafeStage = await pi.tool("bash", { command: "set -o pipefail\ngit status --short | npm install | wc -l" }, ctx);
+		assert.equal(unsafeStage?.block, true);
+		assert.match(unsafeStage?.reason ?? "", /npm install|component requires review|bash ask/i);
+
+		const unsafePrologue = await pi.tool("bash", { command: "set -o noclobber\ngit status --short | wc -l" }, ctx);
+		assert.equal(unsafePrologue?.block, true);
+		assert.match(unsafePrologue?.reason ?? "", /shell-state-changing chain components/);
+
+		await switchProfile(pi, "builder", ctx);
+		const malformed = await pi.tool("bash", { command: "set -o pipefail\ngit status --short |" }, ctx);
+		assert.equal(malformed?.block, true);
+		assert.match(malformed?.reason ?? "", /unparseable shell composite/);
+	});
+
 	it("applies read allow/deny precedence for env files", async () => {
 		const { pi, ctx } = createHarness();
 		await pi.start(ctx);
