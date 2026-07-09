@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
+import { splitConservativeShellChain as splitSimpleCommandChain } from "../shared/shell-analysis.ts";
+
 export type GateRiskFlag =
 	| "credential_or_secret"
 	| "broad_destructive"
@@ -94,59 +96,6 @@ function isInsidePath(parent: string, candidate: string): boolean {
 
 function isReadOnlyTool(toolName: string): boolean {
 	return toolName === "read" || toolName === "ls" || toolName === "list" || toolName === "find" || toolName === "grep";
-}
-
-function splitSimpleCommandChain(command: string): string[] | undefined {
-	const segments: string[] = [];
-	let current = "";
-	let quote: "single" | "double" | undefined;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		const next = command[i + 1];
-		if (quote === "single") {
-			current += ch;
-			if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double") {
-			current += ch;
-			if (ch === "\"") quote = undefined;
-			else if (ch === "\\") current += command[++i] ?? "";
-			else if (ch === "`" || (ch === "$" && next === "(")) return undefined;
-			continue;
-		}
-		if (ch === "'") {
-			quote = "single";
-			current += ch;
-		} else if (ch === "\"") {
-			quote = "double";
-			current += ch;
-		} else if (ch === "\\") {
-			current += ch + (command[++i] ?? "");
-		} else if (ch === "|" && next === "|") {
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-			i++;
-		} else if (ch === "`" || (ch === "$" && next === "(") || ch === "|" || ch === "<" || ch === ">") {
-			return undefined;
-		} else if (ch === "&") {
-			if (next !== "&") return undefined;
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-			i++;
-		} else if (ch === ";" || ch === "\n") {
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-		} else {
-			current += ch;
-		}
-	}
-	const finalSegment = current.trim();
-	if (finalSegment) segments.push(finalSegment);
-	return segments;
 }
 
 function hasDangerousShellControl(command: string): boolean {

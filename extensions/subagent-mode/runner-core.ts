@@ -221,6 +221,23 @@ interface StreamOutcome {
 	spawnError?: string;
 }
 
+export function terminateChildProcess(proc: ChildProcess, graceMs = 3000): NodeJS.Timeout {
+	try {
+		proc.kill("SIGTERM");
+	} catch {
+		// Already exited.
+	}
+	return setTimeout(() => {
+		if (proc.exitCode === null && proc.signalCode === null) {
+			try {
+				proc.kill("SIGKILL");
+			} catch {
+				// Best effort.
+			}
+		}
+	}, graceMs);
+}
+
 function streamAndCollect(
 	proc: ChildProcess,
 	identity: NormalizerIdentity,
@@ -354,20 +371,7 @@ function streamAndCollect(
 			if (cancelled) return;
 			cancelled = true;
 			cancelReason = reason ?? "aborted";
-			try {
-				proc.kill("SIGTERM");
-			} catch {
-				// Already exited.
-			}
-			killTimer = setTimeout(() => {
-				if (!proc.killed) {
-					try {
-						proc.kill("SIGKILL");
-					} catch {
-						// Best effort.
-					}
-				}
-			}, 3000);
+			killTimer = terminateChildProcess(proc);
 		};
 
 		if (callbacks.signal) {

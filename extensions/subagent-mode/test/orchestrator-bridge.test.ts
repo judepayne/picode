@@ -283,6 +283,37 @@ describe("orchestrator-bridge: request lifecycle", () => {
 		bridge.dispose();
 	});
 
+	test("cancels a detached run when cancellation arrives before spawn completes", async () => {
+		const bus = createBus();
+		let resolveLaunch!: (handle: { runId: string; asyncDir: string; pid: number }) => void;
+		const launch = new Promise<{ runId: string; asyncDir: string; pid: number }>((resolve) => {
+			resolveLaunch = resolve;
+		});
+		const cancelled: string[] = [];
+		const bridge = createOrchestratorBridge({
+			events: bus,
+			getSessionManager: () => undefined,
+			isAsyncAvailableOverride: () => true,
+			launchAsyncRunOverride: async () => await launch,
+			cancelAsyncRunOverride: (runId) => {
+				cancelled.push(runId);
+				return { ok: true };
+			},
+		});
+
+		bus.emit(EVENT_MODE_REQUEST, {
+			requestId: "req-async-spawning",
+			spec: { mode: "single", context: "fresh", agent: "scout", task: "slow", async: true },
+		});
+		bus.emit(EVENT_MODE_CANCEL, { requestId: "req-async-spawning" });
+		resolveLaunch({ runId: "async-spawned", asyncDir: "/tmp/async-spawned", pid: 123 });
+
+		while (bridge.activeRequestIds().length > 0) await new Promise((resolve) => setTimeout(resolve, 1));
+		assert.deepStrictEqual(cancelled, ["async-spawned"]);
+		assert.equal(bus.events.some((event) => event.type === EVENT_MODE_REQUEST_RESPONSE), false);
+		bridge.dispose();
+	});
+
 	test("duplicate requestId is idempotent", async () => {
 		const bus = createBus();
 		const bridge = createOrchestratorBridge({

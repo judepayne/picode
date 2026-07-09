@@ -5,6 +5,7 @@ import {
 	normalizeSlashes,
 	wildcardToRegex,
 } from "../matching.ts";
+import { splitConservativeShellChain, tokenizeShellCommand } from "../../shared/shell-analysis.ts";
 
 import type {
 	GateSemanticConfig,
@@ -20,49 +21,6 @@ import type {
 function compilePattern(subject: GateSemanticSubject, rawPattern: string, cwd: string): RegExp {
 	const expanded = subject === "bash" ? normalizeCommand(rawPattern) : isPathSubject(subject) ? expandPatternValue(rawPattern, cwd) : normalizeSlashes(rawPattern);
 	return wildcardToRegex(expanded);
-}
-
-function tokenizeForPipe(command: string): string[] | undefined {
-	const tokens: string[] = [];
-	let current = "";
-	let quote: "single" | "double" | undefined;
-	const flush = () => {
-		if (current) {
-			tokens.push(current);
-			current = "";
-		}
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ch === "'") quote = undefined;
-			else current += ch;
-			continue;
-		}
-		if (quote === "double") {
-			if (ch === '"') quote = undefined;
-			else if (ch === "\\" && i + 1 < command.length) current += command[++i] ?? "";
-			else current += ch;
-			continue;
-		}
-		if (ch === "'") quote = "single";
-		else if (ch === '"') quote = "double";
-		else if (ch === "\\" && i + 1 < command.length) current += command[++i] ?? "";
-		else if (/\s/.test(ch)) flush();
-		else if (ch === "|") {
-			flush();
-			if (command[i + 1] === "|") {
-				tokens.push("||");
-				i++;
-			} else if (command[i + 1] === "&") {
-				tokens.push("|&");
-				i++;
-			} else tokens.push("|");
-		} else current += ch;
-	}
-	if (quote) return undefined;
-	flush();
-	return tokens;
 }
 
 function commandBasename(value: string): string {
@@ -85,7 +43,7 @@ function normalizeShellToken(value: string): string {
 }
 
 function shellFromEnvSplitString(token: string, shells: Set<string>): boolean {
-	const tokens = tokenizeForPipe(token) ?? token.trim().split(/\s+/).filter(Boolean);
+	const tokens = tokenizeShellCommand(token) ?? token.trim().split(/\s+/).filter(Boolean);
 	const splitStringWrappers = new Set(["env", "command", "builtin", "exec", "nohup", "nice", "time", "setsid", "sudo", "doas", "stdbuf", "unbuffer", "timeout"]);
 	for (const part of tokens) {
 		if (/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(part)) continue;
@@ -153,7 +111,7 @@ function skipWrapperArgs(tokens: string[], commandIndex: number, wrapper: string
 
 function findPipeToShell(command: string | undefined): GateSemanticMatch | undefined {
 	const normalized = normalizeCommand(command ?? "");
-	const tokens = tokenizeForPipe(normalized);
+	const tokens = tokenizeShellCommand(normalized);
 	if (!tokens) return undefined;
 	const shells = new Set(["sh", "bash", "zsh", "dash", "fish", "ksh"]);
 	for (let index = 0; index < tokens.length; index++) {
@@ -231,59 +189,7 @@ function findRuleMatch(
 	return undefined;
 }
 
-export function splitAlwaysAllowShellChain(command: string): string[] | undefined {
-	const segments: string[] = [];
-	let current = "";
-	let quote: "single" | "double" | undefined;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		const next = command[i + 1];
-		if (quote === "single") {
-			current += ch;
-			if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double") {
-			current += ch;
-			if (ch === "\"") quote = undefined;
-			else if (ch === "\\") current += command[++i] ?? "";
-			else if (ch === "`" || (ch === "$" && next === "(")) return undefined;
-			continue;
-		}
-		if (ch === "'") {
-			quote = "single";
-			current += ch;
-		} else if (ch === "\"") {
-			quote = "double";
-			current += ch;
-		} else if (ch === "\\") {
-			current += ch + (command[++i] ?? "");
-		} else if (ch === "&") {
-			if (next !== "&") return undefined;
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-			i++;
-		} else if (ch === "|" && next === "|") {
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-			i++;
-		} else if (ch === "|" || ch === "<" || ch === ">" || ch === "`" || (ch === "$" && next === "(")) {
-			return undefined;
-		} else if (ch === ";" || ch === "\n") {
-			const segment = current.trim();
-			if (segment) segments.push(segment);
-			current = "";
-		} else {
-			current += ch;
-		}
-	}
-	if (quote) return undefined;
-	const finalSegment = current.trim();
-	if (finalSegment) segments.push(finalSegment);
-	return segments.length > 0 ? segments : undefined;
-}
+export const splitAlwaysAllowShellChain = splitConservativeShellChain;
 
 function findAlwaysAllowMatch(
 	rules: GateSemanticRuleMap | undefined,

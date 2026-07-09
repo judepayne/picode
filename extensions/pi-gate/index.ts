@@ -29,6 +29,7 @@ import {
 	type CandidateGroup,
 } from "./matching.ts";
 import { assessGateRisk } from "./risk.ts";
+import { analyzeShellCommand, tokenizeShellCommand, type ConservativeShellAnalysis } from "../shared/shell-analysis.ts";
 import { hasSensitivePathCandidate, hasSensitiveSearchTarget } from "./sensitive-paths.ts";
 import { buildPromptVars, setGateAutoEnabled, setVar } from "../z-prompt-vars/prompt-vars.ts";
 
@@ -133,7 +134,7 @@ const AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD = 3;
 const AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD = 20;
 const GATE_AUTO_SETUP_TIMEOUT_MS = 15 * 60 * 1000;
 const GATE_AUTO_SETUP_MAX_OUTPUT_CHARS = 8000;
-const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "&", "then", "do", "else", "elif", "fi"]);
+const SHELL_SEPARATOR_TOKENS = new Set([";", "&&", "||", "|", "|&", "&", "then", "do", "else", "elif", "fi"]);
 const ACTION_PRIORITY: Record<PermissionAction, number> = { allow: 0, ask: 1, deny: 2 };
 const BUILTIN_PERMISSION: PermissionConfig = {
 	"*": "allow",
@@ -720,131 +721,9 @@ function isIgnorableRedirectionTarget(candidate: string): boolean {
 	return normalized === "/dev/null" || normalized === "/dev/stdout" || normalized === "/dev/stderr" || normalized === "/dev/tty";
 }
 
-function tokenizeShell(command: string): string[] | undefined {
-	const tokens: string[] = [];
-	let current = "";
-	let quote: "single" | "double" | undefined;
-
-	const flush = () => {
-		if (current) {
-			tokens.push(current);
-			current = "";
-		}
-	};
-
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ch === "'") quote = undefined;
-			else current += ch;
-			continue;
-		}
-		if (quote === "double") {
-			if (ch === '"') quote = undefined;
-			else if (ch === "\\" && i + 1 < command.length) current += command[++i] ?? "";
-			else current += ch;
-			continue;
-		}
-		if (ch === "'") {
-			quote = "single";
-			continue;
-		}
-		if (ch === '"') {
-			quote = "double";
-			continue;
-		}
-		if (ch === "\\" && i + 1 < command.length) {
-			current += command[++i] ?? "";
-			continue;
-		}
-		if (ch === "\n" || ch === "\r") {
-			flush();
-			tokens.push(";");
-			continue;
-		}
-		if (/\s/.test(ch)) {
-			flush();
-			continue;
-		}
-		if (ch === "<") {
-			flush();
-			if (command[i + 1] === "<") {
-				tokens.push("<<");
-				i++;
-			} else {
-				tokens.push("<");
-			}
-			continue;
-		}
-		if (ch === ">") {
-			flush();
-			if (command[i + 1] === ">") {
-				tokens.push(">>");
-				i++;
-			} else {
-				tokens.push(">");
-			}
-			continue;
-		}
-		if (ch === ";") {
-			flush();
-			tokens.push(";");
-			continue;
-		}
-		if (ch === "&") {
-			flush();
-			if (command[i + 1] === "&") {
-				tokens.push("&&");
-				i++;
-			} else {
-				tokens.push("&");
-			}
-			continue;
-		}
-		if (ch === "|") {
-			flush();
-			if (command[i + 1] === "|") {
-				tokens.push("||");
-				i++;
-			} else {
-				tokens.push("|");
-			}
-			continue;
-		}
-		current += ch;
-	}
-
-	if (quote) return undefined;
-	flush();
-	return tokens;
-}
-
-function hasShellSubstitution(command: string): boolean {
-	let quote: "single" | "double" | undefined;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote === "single") {
-			if (ch === "'") quote = undefined;
-			continue;
-		}
-		if (quote === "double") {
-			if (ch === '"') quote = undefined;
-			else if (ch === "\\") i++;
-			else if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
-			continue;
-		}
-		if (ch === "'") quote = "single";
-		else if (ch === '"') quote = "double";
-		else if (ch === "\\") i++;
-		else if (ch === "`" || (ch === "$" && command[i + 1] === "(")) return true;
-	}
-	return false;
-}
-
-function isComplexShellCommand(command: string, tokens: string[] | undefined): boolean {
-	if (!tokens) return true;
-	if (hasShellSubstitution(command)) return true;
-	return tokens.some((token) => isShellSeparator(token) || token === ">" || token === ">>" || token === "<" || token === "<<");
+function isComplexShellCommand(analysis: ConservativeShellAnalysis): boolean {
+	if (!analysis.tokens || analysis.hasSubstitution) return true;
+	return analysis.tokens.some((token) => isShellSeparator(token) || token === ">" || token === ">>" || token === "<" || token === "<<");
 }
 
 function normalizeShellToken(token: string): string {
@@ -972,7 +851,8 @@ function getUnknownExecutableReason(tokens: string[] | undefined): string | unde
 
 export function extractMutationTargets(command: string, cwd: string): MutationAnalysis {
 	const lower = command.toLowerCase();
-	const tokens = tokenizeShell(command);
+	const shellAnalysis = analyzeShellCommand(command);
+	const tokens = shellAnalysis.tokens;
 	const tokenizedFindDelete = tokens?.some((token, index) =>
 		normalizeShellToken(token).toLowerCase() === "find"
 		&& tokens.slice(index + 1).some((arg) => normalizeShellToken(arg) === "-delete")
@@ -980,7 +860,7 @@ export function extractMutationTargets(command: string, cwd: string): MutationAn
 	const mutating = /\brm\b|\brmdir\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\btee\b|\bln\b|\binstall\b|\bchmod\b|\bchown\b|\bfind\b[^\n]*\s-delete\b|\bgit\s+clean\b|>|\bsed\b[^\n]*\s-i|\bperl\b[^\n]*\s-pi/.test(lower)
 		|| tokenizedFindDelete
 		|| hasMutatingAwkPattern(command);
-	const complex = isComplexShellCommand(command, tokens);
+	const complex = isComplexShellCommand(shellAnalysis);
 	if (!mutating) {
 		return { mutating: false, complex, paths: [], inferredCwdTarget: false, reason: getUnknownExecutableReason(tokens) ?? "read-only command" };
 	}
@@ -1139,7 +1019,7 @@ function splitAndChainedBashCommand(command: string): string[] | undefined {
 }
 
 function getChainUnsafeShellSegmentReason(command: string): string | undefined {
-	const tokens = tokenizeShell(command);
+	const tokens = tokenizeShellCommand(command);
 	if (!tokens || tokens.length === 0) return "unparseable chain component requires review";
 	const commandIndex = firstCommandIndex(tokens);
 	const primary = normalizeShellToken(tokens[commandIndex] ?? "");

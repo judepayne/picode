@@ -9,6 +9,7 @@ import { Type } from "@sinclair/typebox";
 import { collectAgentAssetDiagnostics, collectAgentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
+import { splitConservativeShellPipeline } from "../shared/shell-analysis.ts";
 import { buildPromptVars, getVarValue, setAutomodeEnabled } from "../z-prompt-vars/prompt-vars.ts";
 import { isDelegatedSubagentChildProcess } from "./runtime.ts";
 const SETTINGS_FILE_NAME = "settings.json";
@@ -358,11 +359,15 @@ function isReadOnlyDdCommand(command: string): boolean {
 	return true;
 }
 
-export function isReadOnlyBashCommand(command: string): boolean {
-	const blocked = READ_ONLY_BASH_BLOCKLIST.some((pattern) => pattern.test(command));
-	if (blocked) return false;
+function isReadOnlyBashSegment(command: string): boolean {
 	if (/^\s*dd\b/i.test(command)) return isReadOnlyDdCommand(command);
 	return READ_ONLY_BASH_ALLOWLIST.some((pattern) => pattern.test(command));
+}
+
+export function isReadOnlyBashCommand(command: string): boolean {
+	if (READ_ONLY_BASH_BLOCKLIST.some((pattern) => pattern.test(command))) return false;
+	const segments = splitConservativeShellPipeline(command);
+	return Boolean(segments?.length) && segments.every(isReadOnlyBashSegment);
 }
 
 export default function agentModeExtension(pi: ExtensionAPI) {

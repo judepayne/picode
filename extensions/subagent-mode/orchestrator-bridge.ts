@@ -74,6 +74,10 @@ export interface OrchestratorBridgeDeps {
 	getCwd?: () => string | undefined;
 	/** Test hook: override the child execution primitive (skips real spawning). */
 	runChildOverride?: RunChildFn;
+	/** Test hooks for deterministic detached-launch lifecycle coverage. */
+	isAsyncAvailableOverride?: typeof isAsyncAvailable;
+	launchAsyncRunOverride?: typeof launchAsyncRun;
+	cancelAsyncRunOverride?: typeof cancelAsyncRun;
 }
 
 export interface OrchestratorBridge {
@@ -90,6 +94,12 @@ interface ActiveRun {
 	/** Set for async runs; cleared when the completion watcher fires. */
 	asyncHandle?: LaunchAsyncRunOutput;
 	completionWatcher?: CompletionWatcher;
+}
+
+function cancelDetachedRun(entry: ActiveRun, deps: OrchestratorBridgeDeps): void {
+	if (!entry.asyncHandle) return;
+	const cancel = deps.cancelAsyncRunOverride ?? cancelAsyncRun;
+	cancel(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
 }
 
 function registerEventListener(events: EventBus, event: string, handler: (data: unknown) => void): () => void {
@@ -136,7 +146,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 		deps.events.emit(EVENT_MODE_REQUEST_STARTED, { requestId });
 
 		if (spec.async === true) {
-			handleAsyncRequest(requestId, spec, entry, deps, () => {
+			void handleAsyncRequest(requestId, spec, entry, deps, () => {
 				active.delete(requestId);
 			});
 			return;
@@ -164,9 +174,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 		entry.controller.abort();
 		// Async runs do not respond to the in-process abort signal; the
 		// detached child is signaled via its persisted pid.
-		if (entry.asyncHandle) {
-			cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
-		}
+		cancelDetachedRun(entry, deps);
 	};
 
 	const unsubscribeRequest = registerEventListener(deps.events, EVENT_MODE_REQUEST, handleRequest);
@@ -179,7 +187,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 			for (const entry of active.values()) {
 				entry.controller.abort();
 				entry.completionWatcher?.stop();
-				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
+				cancelDetachedRun(entry, deps);
 			}
 			active.clear();
 		},
@@ -187,7 +195,7 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 			for (const entry of active.values()) {
 				entry.controller.abort();
 				entry.completionWatcher?.stop();
-				if (entry.asyncHandle) cancelAsyncRun(entry.asyncHandle.runId, { pid: entry.asyncHandle.pid, allowUnverifiedPid: true });
+				cancelDetachedRun(entry, deps);
 			}
 			active.clear();
 		},
@@ -197,14 +205,15 @@ export function createOrchestratorBridge(deps: OrchestratorBridgeDeps): Orchestr
 	};
 }
 
-function handleAsyncRequest(
+async function handleAsyncRequest(
 	requestId: string,
 	spec: RunSpec,
 	entry: ActiveRun,
 	deps: OrchestratorBridgeDeps,
 	onSettled: () => void,
-): void {
-	if (!isAsyncAvailable()) {
+): Promise<void> {
+	const asyncAvailable = deps.isAsyncAvailableOverride ?? isAsyncAvailable;
+	if (!asyncAvailable()) {
 		emitResponse(deps.events, requestId, null, false, "jiti is not available; async runs cannot be launched");
 		onSettled();
 		return;
@@ -212,7 +221,8 @@ function handleAsyncRequest(
 
 	let handle: LaunchAsyncRunOutput;
 	try {
-		handle = launchAsyncRun({
+		const launch = deps.launchAsyncRunOverride ?? launchAsyncRun;
+		handle = await launch({
 			spec,
 			cwd: deps.getCwd?.(),
 			parentSessionFile: spec.parentSessionFile,
@@ -226,6 +236,11 @@ function handleAsyncRequest(
 
 	entry.runId = handle.runId;
 	entry.asyncHandle = handle;
+	if (entry.controller.signal.aborted) {
+		cancelDetachedRun(entry, deps);
+		onSettled();
+		return;
+	}
 
 	// Resolve the tool call immediately with a "launched" result shape. The
 	// orchestrator treats the presence of `asyncDir` as the async-mode

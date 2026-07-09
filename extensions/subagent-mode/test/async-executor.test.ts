@@ -1,4 +1,6 @@
 import * as assert from "node:assert";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import { describe, test } from "node:test";
 
@@ -6,6 +8,7 @@ import {
 	buildAsyncRunnerSpawnConfig,
 	cancelAsyncRun,
 	isAsyncAvailable,
+	spawnDetachedRunner,
 	watchCompletion,
 } from "../async-executor.ts";
 import {
@@ -74,6 +77,50 @@ describe("launchAsyncRun", () => {
 			stdio: "ignore",
 			windowsHide: true,
 		});
+	});
+
+	test("rejects asynchronous spawn failures without leaving an unhandled error", async () => {
+		const proc = new EventEmitter() as ChildProcess;
+		proc.unref = () => proc;
+		const error = new Error("spawn failed asynchronously");
+		const launched = spawnDetachedRunner(
+			buildAsyncRunnerSpawnConfig({
+				cfgPath: "/tmp/run-config.json",
+				cwd: "/missing",
+				jitiCliPath: "/node_modules/.bin/jiti",
+			}),
+			() => {
+				queueMicrotask(() => proc.emit("error", error));
+				return proc;
+			},
+		);
+
+		await assert.rejects(launched, error);
+		assert.strictEqual(proc.listenerCount("error"), 0);
+	});
+
+	test("unrefs only after spawn succeeds and absorbs later process errors", async () => {
+		const proc = new EventEmitter() as ChildProcess;
+		let unrefCount = 0;
+		proc.unref = () => {
+			unrefCount += 1;
+			return proc;
+		};
+		const launched = spawnDetachedRunner(
+			buildAsyncRunnerSpawnConfig({
+				cfgPath: "/tmp/run-config.json",
+				cwd: "/workspace/project",
+				jitiCliPath: "/node_modules/.bin/jiti",
+			}),
+			() => {
+				queueMicrotask(() => proc.emit("spawn"));
+				return proc;
+			},
+		);
+
+		assert.strictEqual(await launched, proc);
+		assert.strictEqual(unrefCount, 1);
+		assert.doesNotThrow(() => proc.emit("error", new Error("late process error")));
 	});
 });
 

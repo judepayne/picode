@@ -277,7 +277,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		const result = payload.result;
 		if (!result) return;
 		const run = state.findRunByUnderlyingId(payload.runId);
-		if (!run) return;
+		if (!run || run.status === "cancelled") return;
 		const status = input.toRunStatus(result.status, result.status === "complete", result.status === "cancelled");
 		const summary = result.results
 			.map((r) => r.finalText ?? "")
@@ -363,7 +363,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		const event = data as AsyncCompleteEvent;
 		if (typeof event.id !== "string") return;
 		const run = state.findRunByUnderlyingId(event.id);
-		if (!run) return;
+		if (!run || run.status === "cancelled") return;
 		const status = input.toRunStatus(event.status, event.success, event.cancelled);
 		const summary = event.summary ?? `${event.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT} ${status}`;
 		const errorSummary = status === "failed" ? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary : undefined;

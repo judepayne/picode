@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { EVENT_CHILD_TEXT_DELTA } from "../../subagent-mode/types.ts";
+import { EVENT_CHILD_COMPLETE, EVENT_CHILD_TEXT_DELTA } from "../../subagent-mode/types.ts";
 import { createChildEventController } from "../child-events.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorNodeLogRecord, RunStatus } from "../types.ts";
 
@@ -61,6 +61,44 @@ describe("child event controller", () => {
 		controller.clearPendingTextDeltaFlushes();
 
 		assert.equal(appendCount, 0);
+	});
+
+	test("ignores a late completion for a cancelled child", () => {
+		const child = { ...childRecord(), status: "cancelled" as const, completedAt: 2, resultSummary: "cancelled by user" };
+		let updateCount = 0;
+		const controller = createChildEventController({
+			pi: { events: { emit() {} } } as never,
+			state: {
+				listChildSessionsByRun: () => [child],
+				findChildSessionByRunAndExecutionChildId: () => child,
+				getChildSession: () => child,
+				updateChildSession: (_childSessionId: string, patch: Partial<OrchestratorChildSessionRecord>) => {
+					updateCount += 1;
+					return { ...child, ...patch };
+				},
+				appendNodeLogRecord: (_childSessionId: string, record: Omit<OrchestratorNodeLogRecord, "cursor">) => ({
+					cursor: "0",
+					childSessionId: child.childSessionId,
+					...record,
+				}),
+			},
+			isTerminal: (status: RunStatus) => status === "complete" || status === "failed" || status === "cancelled",
+			appendChildEntry: () => undefined,
+			refreshRunAggregates: () => undefined,
+			refreshRunMessageSnapshot: () => undefined,
+			bindStickyUserSubagentSessionToRun: () => undefined,
+		});
+
+		controller.handleChildEvent("run-1", {
+			type: EVENT_CHILD_COMPLETE,
+			runId: "underlying-run-1",
+			childId: child.executionChildId,
+			agent: "scout",
+			timestamp: 3,
+			result: { status: "complete", finalText: "late result" },
+		});
+
+		assert.equal(updateCount, 0);
 	});
 
 	test("appends worker-marked events when the worker log child id does not match the resolved child", () => {

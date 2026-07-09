@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -524,6 +525,28 @@ describe("subagent-orchestrator extension entrypoint", () => {
 	});
 
 
+	test("pre-aborted delegation is finalized without launching a child request", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			const delegateTool = pi.tools.get("delegate_subagent");
+			assert.ok(delegateTool);
+			const ctx = new FakeContext(process.cwd());
+			const controller = new AbortController();
+			controller.abort();
+
+			const result = await delegateTool.execute("tool", { agent: "scout", task: "cancelled", async: true }, controller.signal, undefined, ctx);
+			assert.equal(result.isError, true);
+			assert.match(result.content?.[0]?.text ?? "", /cancelled/);
+			assert.equal(pi.events.emitted.some((entry) => entry.event === "subagent:mode:request"), false);
+
+			const runDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs");
+			const runFile = readdirSync(runDir).find((name) => name.endsWith(".json"));
+			assert.ok(runFile);
+			assert.equal(JSON.parse(readFileSync(join(runDir, runFile), "utf8")).status, "cancelled");
+		});
+	});
+
 	test("delegate_subagent_status cancel does not mark already-finished async runs cancelled", async () => {
 		await withTempProcessCwd(async () => {
 			const pi = new FakePi();
@@ -568,6 +591,86 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			assert.ok(runFile);
 			const runRecord = JSON.parse(readFileSync(join(runDir, runFile), "utf8")) as { status?: string };
 			assert.notEqual(runRecord.status, "cancelled");
+		});
+	});
+
+	test("cancellation stays terminal and releases direct-user continuation", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			const inputHandler = pi.lifecycle.get("input")?.[0] as ((event: Record<string, unknown>, ctx: FakeContext) => Promise<{ action: string }>) | undefined;
+			const statusTool = pi.tools.get("delegate_subagent_status");
+			assert.ok(inputHandler);
+			assert.ok(statusTool);
+			const ctx = new FakeContext(process.cwd(), { hasUI: true });
+
+			const firstPending = inputHandler({ source: "interactive", text: "~scout --continue first" }, ctx);
+			const firstRequest = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+			const firstRequestId = (firstRequest?.data as { requestId?: string } | undefined)?.requestId;
+			assert.ok(firstRequestId);
+			const asyncId = "async-cancelled";
+			const dummy = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "async-runner-main.ts", asyncId], { stdio: "ignore" });
+			try {
+				pi.events.dispatch("subagent:mode:request.response", {
+					requestId: firstRequestId,
+					ok: true,
+					async: true,
+					asyncId,
+					asyncDir: join(process.cwd(), asyncId),
+					pid: dummy.pid,
+					result: { mode: "single", status: "running", results: [] },
+				});
+				assert.equal((await firstPending).action, "handled");
+
+				mkdirSync(dirname(asyncRunManifestPath(asyncId)), { recursive: true });
+				writeFileSync(asyncRunManifestPath(asyncId), JSON.stringify({
+					schemaVersion: 1,
+					runId: asyncId,
+					status: "running",
+					pid: dummy.pid,
+					startedAt: Date.now(),
+				}, null, 2));
+
+				const cancelled = await statusTool.execute("tool", { action: "cancel", runId: firstRequestId }, new AbortController().signal, undefined, ctx);
+				assert.equal(cancelled.isError, undefined);
+
+				pi.events.dispatch("subagent:mode:child.complete", {
+					runId: asyncId,
+					agent: "scout",
+					result: { status: "complete", finalText: "late child result" },
+				});
+				pi.events.dispatch("subagent:mode:run.complete", {
+					async: true,
+					runId: asyncId,
+					result: { runId: asyncId, mode: "single", status: "complete", results: [{ childId: "late", agent: "scout", status: "complete", finalText: "late run result" }] },
+				});
+
+				const runPath = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs", `${firstRequestId}.json`);
+				const run = JSON.parse(readFileSync(runPath, "utf8")) as { status?: string };
+				assert.equal(run.status, "cancelled");
+				const childDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "child-sessions");
+				const childFile = readdirSync(childDir).find((name) => name.endsWith(".json"));
+				assert.ok(childFile);
+				assert.equal(JSON.parse(readFileSync(join(childDir, childFile), "utf8")).status, "cancelled");
+
+				const requestCount = pi.events.emitted.filter((entry) => entry.event === "subagent:mode:request").length;
+				const secondPending = inputHandler({ source: "interactive", text: "~scout --continue second" }, ctx);
+				const requests = pi.events.emitted.filter((entry) => entry.event === "subagent:mode:request");
+				assert.equal(requests.length, requestCount + 1);
+				const secondRequestId = (requests.at(-1)?.data as { requestId?: string } | undefined)?.requestId;
+				assert.ok(secondRequestId);
+				pi.events.dispatch("subagent:mode:request.response", {
+					requestId: secondRequestId,
+					ok: true,
+					async: true,
+					asyncId: "async-second",
+					asyncDir: join(process.cwd(), "async-second"),
+					result: { mode: "single", status: "running", results: [] },
+				});
+				assert.equal((await secondPending).action, "handled");
+			} finally {
+				if (dummy.exitCode === null && dummy.signalCode === null) dummy.kill("SIGKILL");
+			}
 		});
 	});
 

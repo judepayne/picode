@@ -168,6 +168,7 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 	}
 
 	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
+		if (child.status === "cancelled" && event.type !== SUBAGENT_MODE_CHILD_CANCELLED_EVENT) return undefined;
 		const now = typeof event.timestamp === "number" ? event.timestamp : Date.now();
 		const runningStatus = input.isTerminal(child.status) ? child.status : "running";
 		switch (event.type) {

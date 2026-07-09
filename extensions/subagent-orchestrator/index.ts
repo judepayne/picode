@@ -1187,16 +1187,22 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		const extracted = extractChildResultPayloads(results);
 		for (const child of children) {
 			const result = extracted[child.childIndex];
-			const finalAnswer = result?.output ?? result?.finalOutput ?? (children.length === 1 ? fallbackText : undefined);
+			const finalAnswer = status === "cancelled"
+				? undefined
+				: result?.output ?? result?.finalOutput ?? (children.length === 1 ? fallbackText : undefined);
 			const nextStatus = (() => {
-				if (child.status === "cancelled") return child.status;
+				if (child.status === "cancelled" || status === "cancelled") return "cancelled";
 				if (result?.success === true) return "complete";
 				if (result?.success === false) return "failed";
 				if (!result && child.requestShape === "chain" && child.status === "queued") return "queued";
 				return status;
 			})();
 			const nextSessionFile = result?.sessionFile ?? child.sessionFile;
-			const nextResultSummary = finalAnswer ? summarizeHandbackText(finalAnswer, 120) : child.resultSummary;
+			const nextResultSummary = finalAnswer
+				? summarizeHandbackText(finalAnswer, 120)
+				: status === "cancelled" && fallbackText
+					? fallbackText
+					: child.resultSummary;
 			const nextError = result?.success === false && finalAnswer
 				? finalAnswer
 				: status === "failed" && !result && finalAnswer
@@ -1474,25 +1480,27 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				},
 			});
 		};
-		if (options.signal?.aborted) cancelRequest();
-		else options.signal?.addEventListener("abort", cancelRequest, { once: true });
-
-		pi.events.emit(SUBAGENT_MODE_REQUEST_EVENT, {
-			requestId: orchestratorRunId,
-			spec: buildSubagentModeRunSpec(
-				ctx,
-				currentModeId,
-				request,
-				pi.getThinkingLevel(),
-				launchChildSessions.map((child) => child.childSessionId),
-				sessionFiles,
-				{
-					nodeLogsDir: state.nodeLogsDir,
-					runId: orchestratorRunId,
-					...(rootRunId ? { rootRunId } : {}),
-				},
-			),
-		});
+		if (options.signal?.aborted) {
+			cancelRequest();
+		} else {
+			options.signal?.addEventListener("abort", cancelRequest, { once: true });
+			pi.events.emit(SUBAGENT_MODE_REQUEST_EVENT, {
+				requestId: orchestratorRunId,
+				spec: buildSubagentModeRunSpec(
+					ctx,
+					currentModeId,
+					request,
+					pi.getThinkingLevel(),
+					launchChildSessions.map((child) => child.childSessionId),
+					sessionFiles,
+					{
+						nodeLogsDir: state.nodeLogsDir,
+						runId: orchestratorRunId,
+						...(rootRunId ? { rootRunId } : {}),
+					},
+				),
+			});
+		}
 
 		const response = await responsePromise;
 		options.signal?.removeEventListener("abort", cancelRequest);
@@ -1878,21 +1886,15 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 				pi.events.emit(SUBAGENT_MODE_CANCEL_EVENT, { requestId: run.underlyingRequestId });
 			}
 
+			const now = Date.now();
+			const cancellationSummary = "Cancelled by delegate_subagent_status.";
 			const updated = state.updateRun(runId, {
 				status: "cancelled",
-				updatedAt: Date.now(),
-				completedAt: Date.now(),
-				resultSummary: "Cancelled by delegate_subagent_status.",
+				updatedAt: now,
+				completedAt: now,
+				resultSummary: cancellationSummary,
 			});
-			for (const child of state.listChildSessionsByRun(runId)) {
-				state.updateChildSession(child.childSessionId, {
-					status: "cancelled",
-					updatedAt: Date.now(),
-					completedAt: Date.now(),
-					resultSummary: "Cancelled by delegate_subagent_status.",
-				});
-			}
-			refreshRunAggregates(runId);
+			finalizeChildrenFromResults(runId, undefined, cancellationSummary, "cancelled", now);
 			return successText(cancelMessage ?? `Cancelled run ${runId}.`, { run: updated ?? run });
 		},
 	});

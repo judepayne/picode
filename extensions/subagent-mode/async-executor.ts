@@ -152,7 +152,37 @@ export function buildAsyncRunnerSpawnConfig(input: { cfgPath: string; cwd: strin
 	};
 }
 
-export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput {
+export type DetachedSpawn = (
+	command: string,
+	args: string[],
+	options: AsyncRunnerSpawnConfig["options"],
+) => ReturnType<typeof spawn>;
+
+export async function spawnDetachedRunner(
+	config: AsyncRunnerSpawnConfig,
+	spawnImpl: DetachedSpawn = spawn,
+): Promise<ReturnType<typeof spawn>> {
+	const proc = spawnImpl(config.command, config.args, config.options);
+	await new Promise<void>((resolve, reject) => {
+		const onError = (error: Error): void => {
+			proc.off("spawn", onSpawn);
+			reject(error);
+		};
+		const onSpawn = (): void => {
+			proc.off("error", onError);
+			// Detached children have no later observer. Keep subsequent process
+			// errors from becoming unhandled EventEmitter errors.
+			proc.on("error", () => undefined);
+			resolve();
+		};
+		proc.once("error", onError);
+		proc.once("spawn", onSpawn);
+	});
+	proc.unref();
+	return proc;
+}
+
+export async function launchAsyncRun(input: LaunchAsyncRunInput): Promise<LaunchAsyncRunOutput> {
 	if (!jitiCliPath) {
 		throw new Error("jiti is not available; async runs cannot be launched.");
 	}
@@ -172,8 +202,13 @@ export function launchAsyncRun(input: LaunchAsyncRunInput): LaunchAsyncRunOutput
 	writePrivateFile(cfgPath, JSON.stringify(config, null, 2));
 
 	const spawnConfig = buildAsyncRunnerSpawnConfig({ cfgPath, cwd: config.cwd, jitiCliPath });
-	const proc = spawn(spawnConfig.command, spawnConfig.args, spawnConfig.options);
-	proc.unref();
+	let proc: ReturnType<typeof spawn>;
+	try {
+		proc = await spawnDetachedRunner(spawnConfig);
+	} catch (error) {
+		fs.rmSync(dir, { recursive: true, force: true });
+		throw error;
+	}
 
 	return {
 		runId,
