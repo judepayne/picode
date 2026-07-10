@@ -29,6 +29,9 @@ export class GateAutoRuntime {
 	private warmedKey?: string;
 	private originalEnv?: Record<string, string | undefined>;
 	private cleanupRegistered = false;
+	private exitHandler?: () => void;
+	private sigintHandler?: () => void;
+	private sigtermHandler?: () => void;
 
 	isEnabled(): boolean {
 		return this.config?.enabled === true;
@@ -58,6 +61,7 @@ export class GateAutoRuntime {
 
 	async shutdown(): Promise<void> {
 		await this.disableRuntimeOnly();
+		this.unregisterCleanup();
 	}
 
 	status(ctx?: ExtensionContext): GateAutoRuntimeStatus {
@@ -243,16 +247,21 @@ export class GateAutoRuntime {
 	private registerCleanupOnce(): void {
 		if (this.cleanupRegistered) return;
 		this.cleanupRegistered = true;
-		process.once("exit", () => {
-			this.killRuntimeNow();
-		});
-		process.once("SIGINT", async () => {
-			await this.shutdown();
-			process.kill(process.pid, "SIGINT");
-		});
-		process.once("SIGTERM", async () => {
-			await this.shutdown();
-			process.kill(process.pid, "SIGTERM");
-		});
+		this.exitHandler = () => { this.killRuntimeNow(); };
+		this.sigintHandler = () => { void this.shutdown().then(() => process.kill(process.pid, "SIGINT")); };
+		this.sigtermHandler = () => { void this.shutdown().then(() => process.kill(process.pid, "SIGTERM")); };
+		process.once("exit", this.exitHandler);
+		process.once("SIGINT", this.sigintHandler);
+		process.once("SIGTERM", this.sigtermHandler);
+	}
+
+	private unregisterCleanup(): void {
+		if (this.exitHandler) process.off("exit", this.exitHandler);
+		if (this.sigintHandler) process.off("SIGINT", this.sigintHandler);
+		if (this.sigtermHandler) process.off("SIGTERM", this.sigtermHandler);
+		this.exitHandler = undefined;
+		this.sigintHandler = undefined;
+		this.sigtermHandler = undefined;
+		this.cleanupRegistered = false;
 	}
 }

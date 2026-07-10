@@ -168,7 +168,7 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 	}
 
 	function updateChildSessionFromEvent(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorChildSessionRecord | undefined {
-		if (child.status === "cancelled" && event.type !== SUBAGENT_MODE_CHILD_CANCELLED_EVENT) return undefined;
+		if (input.isTerminal(child.status)) return undefined;
 		const now = typeof event.timestamp === "number" ? event.timestamp : Date.now();
 		const runningStatus = input.isTerminal(child.status) ? child.status : "running";
 		switch (event.type) {
@@ -214,8 +214,9 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 				});
 			case SUBAGENT_MODE_CHILD_ERROR_EVENT:
 				return input.state.updateChildSession(child.childSessionId, {
-					status: child.status === "cancelled" ? child.status : "failed",
+					status: event.fatal === true ? "failed" : runningStatus,
 					updatedAt: now,
+					...(event.fatal === true ? { completedAt: now } : {}),
 					...(typeof event.message === "string" ? { error: event.message } : {}),
 				});
 			case SUBAGENT_MODE_CHILD_CANCELLED_EVENT:

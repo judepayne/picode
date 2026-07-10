@@ -4,7 +4,15 @@ Permission gate for pi with an OpenCode-compatible policy format, profile inheri
 
 ## Files
 
-- `index.ts` — extension entrypoint
+- `index.ts` — public extension entrypoint and named re-exports
+- `runtime.ts` — runtime composition and lifecycle registration
+- `policy-loader.ts`, `policy-compiler.ts`, `policy-evaluator.ts` — deterministic policy loading, compilation, and evaluation
+- `profile-controller.ts` — profile selection, lineage, and queued switching
+- `shell-mutation.ts`, `policy-shell.ts`, `tool-classification.ts` — conservative shell and tool classification
+- `enforcement/tool-handler.ts` — policy/auto enforcement routing and security ordering
+- `semantic/decision-flow.ts` — semantic approval, risk floors, and prompt fallback
+- `commands.ts` and `auto-approver/setup.ts` — command and setup behavior
+- `status-ui.ts` — footer and Gate Auto status formatting
 - `policy.json` — deterministic policy-mode rules
 - `policy.schema.json` — JSON Schema for `policy.json`
 - `auto.json` — semantic auto-approval guidance, hard denies, and always-allow shortcuts

@@ -142,7 +142,13 @@ export function assessGateRisk(request: GateRiskRequest): GateRiskAssessment {
 	if (!request.bash && request.cwd && !isReadOnlyTool(request.toolName) && (request.pathCandidates ?? []).some((candidate) => !isInsidePath(request.cwd!, candidate))) {
 		addFlag(flags, "external_mutation");
 	}
-	if (/opaque|unknown/.test(combined) || hasDangerousShellControl(request.bash?.command ?? "") || (splitSimpleCommandChain(request.bash?.command.trim() ?? "") ?? []).some((segment) => /^\.\/[^\s]+/.test(segment)) || /\bfind\b[\s\S]*\s-(exec|execdir|ok|okdir)\b|\b(bash|sh|zsh|python|python3|node|ruby|perl|php)\s+-[ec]\b|\bsed\s+-i\b|\bawk\b.*>/.test(request.bash?.command ?? "")) {
+	const bashCommand = request.bash?.command;
+	const hasOpaqueShell = bashCommand !== undefined && (
+		hasDangerousShellControl(bashCommand)
+		|| (splitSimpleCommandChain(bashCommand.trim()) ?? []).some((segment) => /^\.\/[^\s]+/.test(segment))
+		|| /\bfind\b[\s\S]*\s-(exec|execdir|ok|okdir)\b|\b(bash|sh|zsh|python|python3|node|ruby|perl|php)\s+-[ec]\b|\bsed\s+-i\b|\bawk\b.*>/.test(bashCommand)
+	);
+	if (/opaque|unknown/.test(combined) || hasOpaqueShell) {
 		addFlag(flags, "opaque_or_unknown");
 	}
 	const lowRiskAllowCandidate = isLowRiskAllowCandidate(request);

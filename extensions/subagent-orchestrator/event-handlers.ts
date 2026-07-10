@@ -20,6 +20,22 @@ export interface PendingRequest {
 	resolve: (response: ProgrammaticSubagentResponse) => void;
 }
 
+export function settlePendingRequests(pending: Map<string, PendingRequest>, message: string): void {
+	for (const request of pending.values()) {
+		request.resolve({
+			requestId: request.orchestratorRunId,
+			isError: true,
+			errorText: message,
+			result: {
+				content: [{ type: "text", text: message }],
+				isError: true,
+				details: { mode: "single", results: [] },
+			},
+		});
+	}
+	pending.clear();
+}
+
 export interface SubagentModeChildResult {
 	childId: string;
 	agent: string;
@@ -100,6 +116,7 @@ export interface RegisterSubagentEventHandlersInput {
 	toRunStatus: (status: string | undefined, success: boolean | undefined, cancelled: boolean | undefined) => RunStatus;
 	summarizeAsyncFailure: (result: SubagentModeRunResult, fallback: string) => string;
 	truncateDisplayText: (text: string | undefined, limit?: number) => string | undefined;
+	tryFinalizeRun: (runId: string, patch: { status: RunStatus } & Partial<OrchestratorRunRecord>) => OrchestratorRunRecord | undefined;
 	finalizeChildrenFromResults: (runId: string, results: ProgrammaticResultEntry[] | undefined, fallbackText: string | undefined, status: RunStatus, now: number) => void;
 	queueHandback: (run: OrchestratorRunRecord, event: AsyncCompleteEvent) => OrchestratorHandbackRecord | undefined;
 	flushQueuedHandbacks: (ctx?: ExtensionContext | null) => void;
@@ -277,7 +294,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		const result = payload.result;
 		if (!result) return;
 		const run = state.findRunByUnderlyingId(payload.runId);
-		if (!run || run.status === "cancelled") return;
+		if (!run || isTerminal(run.status)) return;
 		const status = input.toRunStatus(result.status, result.status === "complete", result.status === "cancelled");
 		const summary = result.results
 			.map((r) => r.finalText ?? "")
@@ -286,13 +303,14 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 			|| `${result.mode} ${status}`;
 		const errorSummary = status === "failed" ? input.summarizeAsyncFailure(result, summary) : undefined;
 		const displaySummary = errorSummary ?? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary;
-		state.updateRun(run.orchestratorRunId, {
+		const finalizedRun = input.tryFinalizeRun(run.orchestratorRunId, {
 			status,
 			updatedAt: Date.now(),
 			completedAt: Date.now(),
 			resultSummary: summary,
 			...(errorSummary ? { error: errorSummary } : {}),
 		});
+		if (!finalizedRun) return;
 		input.finalizeChildrenFromResults(
 			run.orchestratorRunId,
 			result.results.map((r) => ({
@@ -363,18 +381,19 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 		const event = data as AsyncCompleteEvent;
 		if (typeof event.id !== "string") return;
 		const run = state.findRunByUnderlyingId(event.id);
-		if (!run || run.status === "cancelled") return;
+		if (!run || isTerminal(run.status)) return;
 		const status = input.toRunStatus(event.status, event.success, event.cancelled);
 		const summary = event.summary ?? `${event.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT} ${status}`;
 		const errorSummary = status === "failed" ? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary : undefined;
 		const displaySummary = errorSummary ?? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary;
-		state.updateRun(run.orchestratorRunId, {
+		const finalizedRun = input.tryFinalizeRun(run.orchestratorRunId, {
 			status,
 			updatedAt: Date.now(),
 			completedAt: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
 			resultSummary: summary,
 			...(errorSummary ? { error: errorSummary } : {}),
 		});
+		if (!finalizedRun) return;
 		input.finalizeChildrenFromResults(run.orchestratorRunId, event.results, summary, status, typeof event.timestamp === "number" ? event.timestamp : Date.now());
 		pi.appendEntry(input.completeEntryType, {
 			orchestratorRunId: run.orchestratorRunId,

@@ -48,19 +48,29 @@ type ActiveStreamService = {
 	open(childSessionId: string, handler: SubagentStreamHandler, options?: OpenSubagentStreamOptions): () => void;
 };
 
-let activeStreamService: ActiveStreamService | undefined;
+let activeStreamService: { token: symbol; service: ActiveStreamService } | undefined;
 
 export function subagentStreamTopic(childSessionId: string): string {
 	return `${SUBAGENT_STREAM_TOPIC_PREFIX}${childSessionId}`;
 }
 
+/** Activate a registration-owned stream service. A stale disposer cannot clear a newer registration. */
+export function activateSubagentStreamService(service: ActiveStreamService): () => void {
+	const token = Symbol("subagent-stream-service");
+	activeStreamService = { token, service };
+	return () => {
+		if (activeStreamService?.token === token) activeStreamService = undefined;
+	};
+}
+
+/** @deprecated Prefer activateSubagentStreamService for ownership-safe lifecycle management. */
 export function setActiveSubagentStreamService(service: ActiveStreamService | undefined): void {
-	activeStreamService = service;
+	activeStreamService = service ? { token: Symbol("legacy-subagent-stream-service"), service } : undefined;
 }
 
 export function openSubagentStream(childSessionId: string, handler: SubagentStreamHandler, options?: OpenSubagentStreamOptions): () => void {
 	if (!activeStreamService) throw new Error("subagent-orchestrator stream service is not active.");
-	return activeStreamService.open(childSessionId, handler, options);
+	return activeStreamService.service.open(childSessionId, handler, options);
 }
 
 export function createSubagentStreamService(pi: ExtensionAPI, state: StateStore, serviceOptions: SubagentStreamServiceOptions = {}): ActiveStreamService {

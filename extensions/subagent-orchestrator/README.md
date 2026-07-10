@@ -44,6 +44,10 @@ Internally, it:
 - stores run state under `.pi/state/subagent-orchestrator/`
 - manages handbacks, continuations, and run UI state
 
+### Internal service boundaries
+
+`index.ts` is the composition root. `run-launcher.ts` owns the launch transaction, `async-recovery.ts` owns event/artifact reconciliation, `register-tools.ts` and `lifecycle.ts` own Pi surface registration, and `status-query-service.ts` owns tree/log lookup boundaries. Registration-local mutable concerns live in `card-config-resolver.ts`, `continuation-controller.ts`, and `run-live-state.ts`; `run-state-service.ts` provides independent first-terminal-wins child/run claims. `stream.ts` uses ownership-token activation so stale shutdown cannot clear a newer stream service.
+
 ---
 
 ## User surface

@@ -108,7 +108,13 @@ Read this first if the change affects:
 Permission layer with OpenCode-style policies, profile inheritance, and runtime profile switching.
 
 Important files:
-- `extensions/pi-gate/index.ts`
+- `extensions/pi-gate/index.ts` — public extension entrypoint/re-exports
+- `extensions/pi-gate/runtime.ts` — thin runtime composition and lifecycle wiring
+- `extensions/pi-gate/policy-loader.ts`, `policy-compiler.ts`, `policy-evaluator.ts` — deterministic policy core
+- `extensions/pi-gate/profile-controller.ts` — profile selection, lineage, and queued switching
+- `extensions/pi-gate/enforcement/tool-handler.ts` — policy/auto tool enforcement ordering
+- `extensions/pi-gate/semantic/decision-flow.ts` — semantic approval, risk floors, and prompt fallback
+- `extensions/pi-gate/commands.ts` — `/gate` command routing
 - `extensions/pi-gate/policy.json`
 - `extensions/pi-gate/policy.schema.json`
 
@@ -142,7 +148,14 @@ Read this first if the change affects:
 Public delegation layer for both the top-level agent and direct user `~subagent` commands. It also owns subagent stream replay/follow, the TUI tap-in transcript, and the unified footer tree used for both normal subagent status and tap navigation.
 
 Important files:
-- `extensions/subagent-orchestrator/index.ts` — main entrypoint, tool registration, run lifecycle, UI status wiring
+- `extensions/subagent-orchestrator/index.ts` — runtime composition and event/controller wiring
+- `extensions/subagent-orchestrator/run-launcher.ts` — transactional delegated-run launch
+- `extensions/subagent-orchestrator/async-recovery.ts` — async event/artifact recovery
+- `extensions/subagent-orchestrator/run-state-service.ts` — independent child/run terminal transition claims
+- `extensions/subagent-orchestrator/card-config-resolver.ts` — registration-local asset snapshot and card caches
+- `extensions/subagent-orchestrator/continuation-controller.ts` — user and agent continuation state/validation
+- `extensions/subagent-orchestrator/register-tools.ts` — delegate/status/dev tool registration
+- `extensions/subagent-orchestrator/lifecycle.ts` — guarded Pi lifecycle registration and disposal
 - `extensions/subagent-orchestrator/user-dispatch.ts` — `~scout` / `~worker` / `~reviewer`
 - `extensions/subagent-orchestrator/delegate-input.ts` — tool input normalization
 - `extensions/subagent-orchestrator/state.ts` — persistent run/child/handback state plus node-log JSONL cursors

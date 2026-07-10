@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
-import { EVENT_CHILD_COMPLETE, EVENT_CHILD_TEXT_DELTA } from "../../subagent-mode/types.ts";
+import { EVENT_CHILD_COMPLETE, EVENT_CHILD_ERROR, EVENT_CHILD_TEXT_DELTA } from "../../subagent-mode/types.ts";
 import { createChildEventController } from "../child-events.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorNodeLogRecord, RunStatus } from "../types.ts";
 
@@ -99,6 +99,40 @@ describe("child event controller", () => {
 		});
 
 		assert.equal(updateCount, 0);
+	});
+
+	test("allows authoritative completion after a non-fatal child diagnostic", () => {
+		let child = childRecord();
+		const controller = createChildEventController({
+			pi: { events: { emit() {} } } as never,
+			state: {
+				listChildSessionsByRun: () => [child],
+				findChildSessionByRunAndExecutionChildId: () => child,
+				getChildSession: () => child,
+				updateChildSession: (_id: string, patch: Partial<OrchestratorChildSessionRecord>) => (child = { ...child, ...patch }),
+				appendNodeLogRecord: (_id: string, record: Omit<OrchestratorNodeLogRecord, "cursor">) => ({ cursor: "0", childSessionId: child.childSessionId, ...record }),
+			},
+			isTerminal: (status: RunStatus) => status === "complete" || status === "failed" || status === "cancelled",
+			appendChildEntry: () => undefined,
+			refreshRunAggregates: () => undefined,
+			refreshRunMessageSnapshot: () => undefined,
+			bindStickyUserSubagentSessionToRun: () => undefined,
+		});
+
+		controller.handleChildEvent("run-1", {
+			type: EVENT_CHILD_ERROR,
+			childId: child.executionChildId,
+			fatal: false,
+			message: "malformed stdout line",
+		});
+		assert.equal(child.status, "running");
+		controller.handleChildEvent("run-1", {
+			type: EVENT_CHILD_COMPLETE,
+			childId: child.executionChildId,
+			result: { status: "complete", finalText: "done", sessionFile: "/tmp/child.jsonl" },
+		});
+		assert.equal(child.status, "complete");
+		assert.equal(child.sessionFile, "/tmp/child.jsonl");
 	});
 
 	test("appends worker-marked events when the worker log child id does not match the resolved child", () => {

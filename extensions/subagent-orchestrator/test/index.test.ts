@@ -240,6 +240,23 @@ describe("subagent-orchestrator extension entrypoint", () => {
 		});
 	});
 
+	test("settles in-flight delegated calls when a replacement runtime disposes the old registration", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			agentAssetsExtension(pi as never);
+			subagentOrchestratorExtension(pi as never);
+			const oldTool = pi.tools.get("delegate_subagent");
+			assert.ok(oldTool);
+			const ctx = new FakeContext(process.cwd());
+			const pending = oldTool.execute("tool", { agent: "scout", task: "wait forever" }, new AbortController().signal, undefined, ctx);
+			assert.ok(pi.events.emitted.some((entry) => entry.event === "subagent:mode:request"));
+			subagentOrchestratorExtension(pi as never);
+			const result = await pending;
+			assert.equal(result.isError, true);
+			assert.match(result.content?.[0]?.text ?? "", /runtime was replaced/i);
+		});
+	});
+
 	test("registers the dev stream file tool only behind its explicit flag", async () => {
 		await withTempProcessCwd(() => {
 			process.env.PICODE_ENABLE_DEV_STREAM_TO_FILE = "1";
@@ -751,6 +768,41 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			const child = JSON.parse(readFileSync(join(childDir, childFile), "utf8"));
 			assert.equal(child.status, "running");
 			assert.equal(child.currentTool, "read");
+			await shutdownHandler?.();
+		});
+	});
+
+	test("reconciles a completion artifact that exists before async metadata is persisted", async () => {
+		await withTempProcessCwd(async () => {
+			const pi = new FakePi();
+			subagentOrchestratorExtension(pi as never);
+			const inputHandler = pi.lifecycle.get("input")?.[0] as ((event: Record<string, unknown>, ctx: FakeContext) => Promise<{ action: string }>) | undefined;
+			const shutdownHandler = pi.lifecycle.get("session_shutdown")?.[0] as (() => Promise<void>) | undefined;
+			assert.ok(inputHandler);
+			const ctx = new FakeContext(process.cwd(), { hasUI: true });
+			const pending = inputHandler({ source: "interactive", text: "~scout finish immediately" }, ctx);
+			const request = pi.events.emitted.find((entry) => entry.event === "subagent:mode:request");
+			const requestId = (request?.data as { requestId?: string } | undefined)?.requestId;
+			assert.ok(requestId);
+			const asyncDir = join(process.cwd(), "async-fast");
+			mkdirSync(asyncDir, { recursive: true });
+			writeFileSync(join(asyncDir, "result.json"), JSON.stringify({
+				endedAt: 10,
+				result: { status: "complete", results: [{ agent: "scout", status: "complete", finalText: "done" }] },
+			}));
+			pi.events.dispatch("subagent:mode:request.response", {
+				requestId,
+				ok: true,
+				async: true,
+				asyncId: "async-fast",
+				asyncDir,
+				result: { mode: "single", status: "running", results: [] },
+			});
+			assert.equal((await pending).action, "handled");
+			const runFile = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "runs", `${requestId}.json`);
+			assert.equal(JSON.parse(readFileSync(runFile, "utf8")).status, "complete");
+			const handbackDir = join(process.cwd(), ".pi", "state", "subagent-orchestrator", "handbacks");
+			assert.equal(readdirSync(handbackDir).filter((name) => name.endsWith(".json")).length, 1);
 			await shutdownHandler?.();
 		});
 	});

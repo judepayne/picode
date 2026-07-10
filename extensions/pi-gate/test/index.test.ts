@@ -14,6 +14,7 @@ import { buildGateSemanticDynamicPayload, buildGateSemanticStableContext } from 
 import { evaluateGateSemantic, splitAlwaysAllowShellChain } from "../semantic/evaluator.ts";
 import { validateAutoConfigSemantics } from "../semantic/loader.ts";
 import piGate, { extractMutationTargets, setGateAutoBackendFromSetup, validatePolicySchema } from "../index.ts";
+import { GateAutoApproverManager } from "../auto-approver/manager.ts";
 import autoConfig from "../auto.json" with { type: "json" };
 import schema from "../policy.schema.json" with { type: "json" };
 
@@ -177,7 +178,7 @@ function createHarness(options: FakeContextOptions = {}): { pi: FakePi; ctx: Fak
 }
 
 function makeWorkspace(): string {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-gate-"));
+	const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pi-gate-")));
 	tempDirs.push(cwd);
 	return cwd;
 }
@@ -647,6 +648,59 @@ describe("pi-gate session context", () => {
 });
 
 describe("pi-gate policy enforcement", () => {
+	it("keeps only the latest registration active across reload-style reinitialization", async () => {
+		process.env.GATE_PROFILE = "base";
+		const pi = new FakePi();
+		piGate(pi as never);
+		piGate(pi as never);
+		const ctx = new FakeContext({ cwd: makeWorkspace() });
+		pi.events.emit("gate:switch-profile", { profile: "planner", notify: true });
+		await pi.start(ctx);
+		assert.equal(ctx.notifications.filter((entry) => /switched to planner/.test(entry.message)).length, 1);
+		assert.match(ctx.statuses.gate, /gate:planner/);
+	});
+
+	it("chains disposal transitively across rapid successive registrations", async () => {
+		const originalShutdown = GateAutoApproverManager.prototype.shutdown;
+		let shutdownCalls = 0;
+		let releaseFirst!: () => void;
+		const firstShutdown = new Promise<void>((resolve) => { releaseFirst = resolve; });
+		GateAutoApproverManager.prototype.shutdown = async function () {
+			shutdownCalls += 1;
+			if (shutdownCalls === 1) await firstShutdown;
+		};
+		try {
+			const pi = new FakePi();
+			piGate(pi as never);
+			piGate(pi as never);
+			piGate(pi as never);
+			while (shutdownCalls === 0) await Promise.resolve();
+			assert.equal(shutdownCalls, 1);
+			releaseFirst();
+			while (shutdownCalls < 2) await Promise.resolve();
+			assert.equal(shutdownCalls, 2);
+		} finally {
+			GateAutoApproverManager.prototype.shutdown = originalShutdown;
+			releaseFirst();
+		}
+	});
+
+	it("fails closed when a pending approval outlives its registration", async () => {
+		process.env.GATE_PROFILE = "base";
+		const pi = new FakePi();
+		piGate(pi as never);
+		const ctx = new FakeContext({ cwd: makeWorkspace() });
+		let resolveChoice!: (choice: string) => void;
+		ctx.ui.select = async () => await new Promise<string>((resolve) => { resolveChoice = resolve; });
+		const pending = pi.tool("read", { path: "/etc/hosts" }, ctx);
+		while (!resolveChoice) await Promise.resolve();
+		piGate(pi as never);
+		resolveChoice("Allow once");
+		const result = await pending;
+		assert.equal(result?.block, true);
+		assert.match(result?.reason ?? "", /runtime changed.*retry/i);
+	});
+
 	it("starts in the configured builder profile", async () => {
 		const { pi, ctx } = createHarness();
 		await pi.start(ctx);
