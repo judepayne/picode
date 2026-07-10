@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { collectAgentAssetDiagnostics, collectAgentAssetCardEntries, collectAgentCards, collectSubagentCards, COLLECT_AGENT_ASSET_CARDS_EVENT } from "../contract.ts";
+import { collectAgentAssetDiagnostics, collectAgentAssetCardEntries, collectAgentAssetSnapshot, collectAgentCards, collectSubagentCards, COLLECT_AGENT_ASSET_CARDS_EVENT } from "../contract.ts";
 
 describe("agent asset card collection", () => {
 	it("collects manifest entries from the event bus in descending priority order", () => {
@@ -101,6 +101,31 @@ describe("agent asset card collection", () => {
 
 		assert.deepEqual(collectAgentCards(pi), [{ name: "Code Writer", prompt: "overlay" }]);
 		assert.deepEqual(collectSubagentCards(pi), [{ name: "Scout", prompt: "overlay" }]);
+	});
+
+	it("collects cards and diagnostics from one consistent snapshot emission", () => {
+		let emissionCount = 0;
+		const pi = {
+			events: {
+				emit(event: string, payload: unknown) {
+					assert.equal(event, COLLECT_AGENT_ASSET_CARDS_EVENT);
+					emissionCount += 1;
+					(payload as { entries: unknown[] }).entries.push({
+						source: `source-${emissionCount}`,
+						agents: [{ name: `Agent ${emissionCount}` }],
+						subagents: [{ name: `Subagent ${emissionCount}` }],
+						diagnostics: [{ severity: "warning", message: `warning ${emissionCount}` }],
+					});
+				},
+			},
+		};
+
+		const snapshot = collectAgentAssetSnapshot(pi);
+		assert.equal(emissionCount, 1);
+		assert.deepEqual(snapshot.agents, [{ name: "Agent 1" }]);
+		assert.deepEqual(snapshot.subagents, [{ name: "Subagent 1" }]);
+		assert.deepEqual(snapshot.diagnostics, [{ severity: "warning", message: "warning 1" }]);
+		assert.equal(snapshot.entries[0]?.source, "source-1");
 	});
 
 	it("dedupes subagents by slugified name", () => {

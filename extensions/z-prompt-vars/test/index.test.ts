@@ -116,15 +116,82 @@ describe("z-prompt-vars extension entrypoint", () => {
 		assert.equal(result.systemPrompt, "Project: Picode");
 	});
 
-	test("/vars command reports syntax errors", async () => {
+	test("command and tool adapters share operation behavior", async () => {
 		const pi = new FakePi();
 		promptVarsExtension(pi as never);
 		const ctx = new FakeContext(makeTempCwd());
 		const command = pi.commands.get("vars");
-		assert.ok(command, "/vars command registered");
+		const tool = pi.tools.get("vars");
+		assert.ok(command);
+		assert.ok(tool);
+		const executeTool = (params: Record<string, unknown>) => tool.execute("tool", params, new AbortController().signal, undefined, ctx);
 
-		await command("set missing-value", ctx);
+		await command("bootstrap", ctx);
+		assert.equal(ctx.notifications.at(-1)?.level, "info");
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /pi-location/);
+		assert.equal((await executeTool({ action: "bootstrap" })).isError, undefined);
+
+		await command('set parity.value {"ok":true}', ctx);
+		assert.equal((await executeTool({ action: "get", key: "parity.value" })).content?.[0]?.text, '{"ok":true}');
+		await command("parity.value", ctx);
+		assert.equal(ctx.notifications.at(-1)?.message, 'parity.value={"ok":true}');
+
+		assert.equal((await executeTool({ action: "set", key: "parity.value", value: { ok: false } })).isError, undefined);
+		await command("parity.value", ctx);
+		assert.equal(ctx.notifications.at(-1)?.message, 'parity.value={"ok":false}');
+
+		await command("", ctx);
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /parity\.value=/);
+		assert.match((await executeTool({ action: "list" })).content?.[0]?.text ?? "", /parity\.value=/);
+
+		await command("location global", ctx);
+		assert.equal((await executeTool({ action: "location" })).details?.value, "global");
+		assert.equal((await executeTool({ action: "location", value: "project" })).details?.value, "project");
+		await command("location", ctx);
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /pi-location="project"/);
+
+		await command("unset parity.value", ctx);
+		const missing = await executeTool({ action: "get", key: "parity.value" });
+		assert.equal(missing.isError, true);
+		assert.match(missing.content?.[0]?.text ?? "", /Unknown var/);
+	});
+
+	test("command and tool adapters preserve validation errors", async () => {
+		const pi = new FakePi();
+		promptVarsExtension(pi as never);
+		const ctx = new FakeContext(makeTempCwd());
+		const command = pi.commands.get("vars");
+		const tool = pi.tools.get("vars");
+		assert.ok(command);
+		assert.ok(tool);
+
+		for (const [args, expected] of [
+			["set missing-value", /Usage: \/vars set/],
+			["unset", /Usage: \/vars unset/],
+			["location elsewhere", /Usage: \/vars location/],
+			["bootstrap extra", /Usage: \/vars bootstrap/],
+		] as const) {
+			await command(args, ctx);
+			assert.equal(ctx.notifications.at(-1)?.level, "warning");
+			assert.match(ctx.notifications.at(-1)?.message ?? "", expected);
+		}
+
+		await command('set plan.path "elsewhere.md"', ctx);
 		assert.equal(ctx.notifications.at(-1)?.level, "warning");
-		assert.match(ctx.notifications.at(-1)?.message ?? "", /Usage: \/vars set/);
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /Cannot set.*derived var/);
+
+		for (const [params, expected] of [
+			[{ action: "invalid" }, /action must be one of/],
+			[{ action: "location", value: "elsewhere" }, /project.*global/],
+			[{ action: "get" }, /key is required/],
+			[{ action: "set", value: true }, /key is required/],
+			[{ action: "set", key: "missing.value" }, /value is required/],
+			[{ action: "unset" }, /key is required/],
+			[{ action: "set", key: "plan.path", value: "elsewhere.md" }, /Cannot set.*derived var/],
+		] as const) {
+			const result = await tool.execute("tool", params, new AbortController().signal, undefined, ctx);
+			assert.equal(result.isError, true);
+			assert.match(result.content?.[0]?.text ?? "", expected);
+		}
 	});
 });

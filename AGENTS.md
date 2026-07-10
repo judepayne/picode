@@ -24,6 +24,10 @@ If you are new to the repo, the mental model is:
 5. `subagent-orchestrator` mediates delegated work.
 6. `subagent-mode` runs the delegated child processes underneath.
 
+## Product maturity — ALPHA (2026-07-10)
+
+`picode` is currently an **ALPHA** product. Unless a user or task explicitly requires compatibility, do not preserve obsolete behavior with migration layers, deprecated aliases, or compatibility shims. Prefer surgical removal of obsolete paths and update source, tests, and documentation together. Avoid broad unrelated rewrites: alpha status removes the default backward-compatibility requirement, not the requirement to keep changes focused and verified.
+
 ## Fast bootstrap reading order
 
 If you only have a few minutes, read in this order:
@@ -184,6 +188,11 @@ Key runtime files it manages:
 - `.pi/agent-mode-vars-config.json`
 - default plan path: `.pi/plans/active.md`
 - default design path: `.pi/designs/active.md`
+
+Write-location rule:
+- `.pi/agent-mode-vars-config.json` stores `pi-location`, which controls whether ordinary vars mutations write to the project or global vars file.
+- `/gate auto setup` uses the ordinary vars write path and already respects the selected `pi-location`; do not add a separate scope override without an explicit product decision.
+- `automode.enabled` and `gate.auto.enabled` are intentional exceptions forced to project-local state regardless of `pi-location`.
 
 Read this first if the change affects:
 - `${plan.path}` / `${design.path}`

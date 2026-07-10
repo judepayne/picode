@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT, childEnv } from "./policy.ts";
-import { collectAgentCards, collectSubagentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
+import { collectAgentAssetSnapshot, type AgentAssetCard, type AgentAssetSnapshot } from "../agent-assets/contract.ts";
 import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { createAsyncEventManager } from "./async-events.ts";
 import { createChildEventController } from "./child-events.ts";
@@ -398,16 +398,21 @@ const subagentToolSelectionCache = new Map<string, ToolSelectionSpec | undefined
 const subagentExtensionPathsCache = new Map<string, string[] | undefined>();
 const subagentInstructionsCache = new Map<string, string | undefined>();
 
-let resolveAgentCards: (() => AgentAssetCard[]) | undefined;
-let resolveSubagentCards: (() => AgentAssetCard[]) | undefined;
+let resolveAssetSnapshot: (() => AgentAssetSnapshot) | undefined;
+let currentAssetSnapshot: AgentAssetSnapshot | undefined;
 let stickyUserSubagentSessions: StickyUserSubagentSession[] = [];
 
+function getCurrentAssetSnapshot(): AgentAssetSnapshot | undefined {
+	if (!currentAssetSnapshot) currentAssetSnapshot = resolveAssetSnapshot?.();
+	return currentAssetSnapshot;
+}
+
 function currentAgentCards(): AgentAssetCard[] {
-	return resolveAgentCards?.() ?? [];
+	return getCurrentAssetSnapshot()?.agents ?? [];
 }
 
 function currentSubagentCards(): AgentAssetCard[] {
-	return resolveSubagentCards?.() ?? [];
+	return getCurrentAssetSnapshot()?.subagents ?? [];
 }
 
 function readModeMaxDepth(modeId: string): number | undefined {
@@ -837,8 +842,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	subagentToolSelectionCache.clear();
 	subagentExtensionPathsCache.clear();
 	subagentInstructionsCache.clear();
-	resolveAgentCards = () => collectAgentCards(pi);
-	resolveSubagentCards = () => collectSubagentCards(pi);
+	currentAssetSnapshot = undefined;
+	resolveAssetSnapshot = () => collectAgentAssetSnapshot(pi);
 
 	pi.registerMessageRenderer<OrchestratorRunMessageDetails>(ORCHESTRATOR_RUN_MESSAGE_TYPE, (message, _options, theme) => {
 		const details = resolveRunMessageDetails(message.details);
@@ -1321,8 +1326,8 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		subagentExtensionPathsCache.clear();
 		subagentInstructionsCache.clear();
 		stickyUserSubagentSessions = [];
-		resolveAgentCards = undefined;
-		resolveSubagentCards = undefined;
+		currentAssetSnapshot = undefined;
+		resolveAssetSnapshot = undefined;
 	});
 
 	async function launchDelegatedRun(

@@ -318,51 +318,17 @@ function deepMergeConfig(base: VarsConfig, override: VarsConfig): VarsConfig {
 	return result;
 }
 
-function defaultBootstrapVarsConfig(): VarsConfig {
+function defaultProjectBootstrapVarsConfig(): VarsConfig {
 	return {
-		paths: {
-			plan: DEFAULT_PLAN_PATH,
-			design: DEFAULT_DESIGN_PATH,
-		},
-		subagents: {
-			dispatch: {
-				defaultContext: "fresh",
-			},
-		},
 		automode: {
 			enabled: false,
 		},
 		gate: {
 			auto: {
 				enabled: false,
-				backend: "llama.cpp",
-				timeoutMs: 4000,
-				llama: {
-					host: "127.0.0.1",
-					port: 0,
-				},
-				context: {
-					includeAgentsMd: true,
-					includeAgents: true,
-					includeSubagents: true,
-				},
-				audit: {
-					enabled: true,
-				},
 			},
 		},
 	};
-}
-
-function defaultProjectBootstrapVarsConfig(globalConfig: VarsConfig): VarsConfig {
-	let initialConfig = defaultBootstrapVarsConfig();
-	if (getNestedValue(globalConfig, "paths.plan") !== undefined) {
-		initialConfig = unsetNestedValue(initialConfig, "paths.plan");
-	}
-	if (getNestedValue(globalConfig, "paths.design") !== undefined) {
-		initialConfig = unsetNestedValue(initialConfig, "paths.design");
-	}
-	return initialConfig;
 }
 
 function getConfiguredPathValue(config: VarsConfig, key: "paths.plan" | "paths.design", fallback: string): string {
@@ -535,28 +501,14 @@ export function bootstrapVarsFiles(cwd: string, modeId?: string): VarsBootstrapR
 		existing.push(writeConfigPath);
 	}
 
-	const globalBeforeBootstrap = readScopeConfig(cwd, "global", writeLocation.varsFileName);
 	const projectVarsPath = getProjectVarsConfigPath(cwd, writeLocation.varsFileName);
 	if (!fs.existsSync(projectVarsPath)) {
-		const initialConfig = defaultProjectBootstrapVarsConfig(globalBeforeBootstrap.config);
+		const initialConfig = defaultProjectBootstrapVarsConfig();
 		fs.mkdirSync(path.dirname(projectVarsPath), { recursive: true });
 		fs.writeFileSync(projectVarsPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
 		created.push(projectVarsPath);
 	} else {
 		existing.push(projectVarsPath);
-	}
-
-	// Also ensure the global vars file exists so bootstrap is complete regardless
-	// of which location writes go to. This avoids surprises when the user later
-	// switches write-location to "global" or uses global-scoped vars.
-	const globalVarsPath = getGlobalVarsConfigPath(writeLocation.varsFileName);
-	if (!fs.existsSync(globalVarsPath)) {
-		const initialConfig = defaultBootstrapVarsConfig();
-		fs.mkdirSync(path.dirname(globalVarsPath), { recursive: true });
-		fs.writeFileSync(globalVarsPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
-		created.push(globalVarsPath);
-	} else {
-		existing.push(globalVarsPath);
 	}
 
 	return {

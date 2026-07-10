@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { AutocompleteItem } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { collectAgentAssetDiagnostics, collectAgentCards, type AgentAssetCard } from "../agent-assets/contract.ts";
+import { collectAgentAssetSnapshot, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { splitConservativeShellPipeline } from "../shared/shell-analysis.ts";
@@ -399,8 +399,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		loadError = undefined;
 		loadWarnings = [];
 		pendingModeIndex = undefined;
-		const cards = collectAgentCards(pi);
-		const diagnostics = collectAgentAssetDiagnostics(pi);
+		const { agents: cards, diagnostics } = collectAgentAssetSnapshot(pi);
 		const discovered = new Map<string, ModeDefinition>();
 		let lastError: string | undefined;
 

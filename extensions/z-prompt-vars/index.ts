@@ -16,6 +16,8 @@ import {
 	setWriteLocation,
 	unsetVar,
 	type PiLocation,
+	type VarsBootstrapResult,
+	type VarsState,
 } from "./prompt-vars.ts";
 
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
@@ -48,7 +50,7 @@ function findCurrentModeId(ctx: ExtensionContext): string | undefined {
 	return undefined;
 }
 
-type VarsCommandRequest =
+type VarsOperationRequest =
 	| { action: "list" }
 	| { action: "get"; key: string }
 	| { action: "set"; key: string; value: unknown }
@@ -66,7 +68,7 @@ function parseLooseValue(raw: string): unknown {
 	}
 }
 
-function parseVarsCommand(args: string): VarsCommandRequest | { error: string } {
+function parseVarsCommand(args: string): VarsOperationRequest | { error: string } {
 	const trimmed = args.trim();
 	if (!trimmed) return { action: "list" };
 
@@ -115,6 +117,44 @@ function parseVarsCommand(args: string): VarsCommandRequest | { error: string } 
 	return { action: "get", key: trimmed };
 }
 
+interface VarsOperationResult {
+	request: VarsOperationRequest;
+	state: VarsState;
+	bootstrap?: VarsBootstrapResult;
+	resolvedValue?: string;
+	rawValue?: unknown;
+	found?: boolean;
+}
+
+function executeVarsOperation(cwd: string, modeId: string | undefined, request: VarsOperationRequest): VarsOperationResult {
+	if (request.action === "bootstrap") {
+		const bootstrap = bootstrapVarsFiles(cwd, modeId);
+		return { request, state: bootstrap.state, bootstrap };
+	}
+	if (request.action === "location") {
+		const state = request.value ? setWriteLocation(cwd, request.value, modeId) : buildPromptVars(cwd, modeId);
+		return { request, state };
+	}
+	if (request.action === "set") {
+		const state = setVar(cwd, request.key, request.value, modeId);
+		return { request, state, rawValue: getRawStoredVarValue(state, request.key) };
+	}
+	if (request.action === "unset") {
+		const state = unsetVar(cwd, request.key, modeId);
+		return { request, state, rawValue: getRawStoredVarValue(state, request.key) };
+	}
+	const state = buildPromptVars(cwd, modeId);
+	if (request.action === "list") return { request, state };
+	const resolvedValue = getVarValue(state, request.key);
+	return {
+		request,
+		state,
+		resolvedValue,
+		rawValue: getRawStoredVarValue(state, request.key),
+		found: resolvedValue !== undefined,
+	};
+}
+
 export default function promptVarsExtension(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		try {
@@ -145,45 +185,29 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 
 			const modeId = findCurrentModeId(ctx);
 			try {
+				const result = executeVarsOperation(ctx.cwd, modeId, request);
 				if (request.action === "bootstrap") {
-					const result = bootstrapVarsFiles(ctx.cwd, modeId);
-					ctx.ui.notify(formatBootstrapResult(result), "info");
+					ctx.ui.notify(formatBootstrapResult(result.bootstrap!), "info");
 					return;
 				}
-
 				if (request.action === "location") {
-					const state = request.value ? setWriteLocation(ctx.cwd, request.value, modeId) : buildPromptVars(ctx.cwd, modeId);
-					ctx.ui.notify(formatWriteLocation(state), "info");
+					ctx.ui.notify(formatWriteLocation(result.state), "info");
 					return;
 				}
-
-				if (request.action === "set") {
-					const state = setVar(ctx.cwd, request.key, request.value, modeId);
-					ctx.ui.notify(formatMutationResult(request.key, state), "info");
+				if (request.action === "set" || request.action === "unset") {
+					ctx.ui.notify(formatMutationResult(request.key, result.state), "info");
 					return;
 				}
-
-				if (request.action === "unset") {
-					const state = unsetVar(ctx.cwd, request.key, modeId);
-					ctx.ui.notify(formatMutationResult(request.key, state), "info");
-					return;
-				}
-
-				const state = buildPromptVars(ctx.cwd, modeId);
-				if (state.configError) {
-					ctx.ui.notify(state.configError, "warning");
-				}
+				if (result.state.configError) ctx.ui.notify(result.state.configError, "warning");
 				if (request.action === "list") {
-					ctx.ui.notify(formatVars(getVisibleVars(state)), "info");
+					ctx.ui.notify(formatVars(getVisibleVars(result.state)), "info");
 					return;
 				}
-				const value = getVarValue(state, request.key);
-				if (value === undefined) {
+				if (!result.found) {
 					ctx.ui.notify(`Unknown var: ${request.key}`, "warning");
 					return;
 				}
-				const rawValue = getRawStoredVarValue(state, request.key);
-				ctx.ui.notify(`${request.key}=${JSON.stringify(rawValue === undefined ? value : rawValue)}`, "info");
+				ctx.ui.notify(`${request.key}=${JSON.stringify(result.rawValue === undefined ? result.resolvedValue : result.rawValue)}`, "info");
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(message, "warning");
@@ -222,7 +246,8 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 
 			try {
 				if (action === "bootstrap") {
-					const result = bootstrapVarsFiles(ctx.cwd, modeId);
+					const operation = executeVarsOperation(ctx.cwd, modeId, { action: "bootstrap" });
+					const result = operation.bootstrap!;
 					return {
 						content: [{ type: "text", text: formatBootstrapResult(result) }],
 						details: {
@@ -247,9 +272,10 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 							details: { action, value: params.value },
 						};
 					}
-					const state = params.value === undefined
-						? buildPromptVars(ctx.cwd, modeId)
-						: setWriteLocation(ctx.cwd, params.value as PiLocation, modeId);
+					const request: VarsOperationRequest = params.value === undefined
+						? { action: "location" }
+						: { action: "location", value: params.value as PiLocation };
+					const state = executeVarsOperation(ctx.cwd, modeId, request).state;
 					return {
 						content: [{ type: "text", text: formatWriteLocation(state) }],
 						details: {
@@ -278,7 +304,8 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 							details: { action, key },
 						};
 					}
-					const state = setVar(ctx.cwd, key, params.value, modeId);
+					const operation = executeVarsOperation(ctx.cwd, modeId, { action: "set", key, value: params.value });
+					const state = operation.state;
 					return {
 						content: [{ type: "text", text: formatMutationResult(key, state) }],
 						details: {
@@ -301,7 +328,8 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 							details: { action },
 						};
 					}
-					const state = unsetVar(ctx.cwd, key, modeId);
+					const operation = executeVarsOperation(ctx.cwd, modeId, { action: "unset", key });
+					const state = operation.state;
 					return {
 						content: [{ type: "text", text: formatMutationResult(key, state) }],
 						details: {
@@ -316,7 +344,8 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 					};
 				}
 
-				const state = buildPromptVars(ctx.cwd, modeId);
+				const operation = executeVarsOperation(ctx.cwd, modeId, action === "get" ? { action: "get", key } : { action: "list" });
+				const state = operation.state;
 				const vars = getVisibleVars(state);
 				if (action === "get") {
 					if (!key) {
@@ -326,8 +355,8 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 							details: { action },
 						};
 					}
-					const resolvedValue = getVarValue(state, key);
-					if (resolvedValue === undefined) {
+					const resolvedValue = operation.resolvedValue;
+					if (!operation.found) {
 						return {
 							content: [{ type: "text", text: `Unknown var: ${key}` }],
 							isError: true,
@@ -341,7 +370,7 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 							},
 						};
 					}
-					const rawValue = getRawStoredVarValue(state, key);
+					const rawValue = operation.rawValue;
 					return {
 						content: [{ type: "text", text: rawValue === undefined ? resolvedValue : JSON.stringify(rawValue) }],
 						details: {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import agentAssetsExtension from "../../agent-assets/index.ts";
+import { COLLECT_AGENT_ASSET_CARDS_EVENT } from "../../agent-assets/contract.ts";
 import { asyncRunManifestPath } from "../../subagent-mode/paths.ts";
 import subagentOrchestratorExtension from "../index.ts";
 
@@ -446,6 +447,7 @@ describe("subagent-orchestrator extension entrypoint", () => {
 				assert.equal(nestedChild.ownerModeId, "planner");
 				assert.equal(nestedChild.rootRunId, parentChild.runId);
 				assert.equal(nestedChild.parentChildSessionId, parentChild.childSessionId);
+				assert.equal(pi.events.emitted.filter((entry) => entry.event === COLLECT_AGENT_ASSET_CARDS_EVENT).length, 1);
 			} finally {
 				if (previousEnv.depth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
 				else process.env.PI_SUBAGENT_DEPTH = previousEnv.depth;

@@ -1071,7 +1071,6 @@ function formatGateAutoStatusMessage(ctx: ExtensionContext, status: ReturnType<G
 	} else {
 		lines.push("Setup: not configured (run /gate auto setup)");
 	}
-	if (status.migrationNotice) lines.push(`Migration: ${status.migrationNotice}`);
 	if (runtimeEnabled && status.auditPath) lines.push(`Audit: ${displayStatusPath(ctx.cwd, status.auditPath)}`);
 	if (loadedSemantic.error) lines.push(`Problem: ${loadedSemantic.error}`);
 	if (status.lastError) lines.push(`Runtime problem: ${status.lastError}`);

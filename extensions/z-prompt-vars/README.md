@@ -34,7 +34,7 @@ and the placeholders are resolved from a combination of:
 `extensions/z-prompt-vars/index.ts`
 
 This file is the runtime entry point. It:
-- bootstraps missing project/global vars files on session start
+- bootstraps missing project-local vars files on session start
 - registers the `before_agent_start` hook
 - registers the `/vars` command
 - registers the `vars` tool
@@ -48,7 +48,7 @@ This file is the runtime entry point. It:
 This file contains the core implementation. It:
 - reads merged vars from project and global config files
 - writes vars to the configured write target
-- bootstraps the initial project/global vars files when requested
+- bootstraps the initial project-local vars files when requested
 - manages the tiny write-location config file
 - flattens nested stored values into dot-path keys
 - computes the built-in derived vars for plan/design
@@ -104,14 +104,15 @@ If a user mistakenly puts a path there instead of just a filename, the extension
 - `custom/agent-vars.json` → `agent-vars.json`
 - `/tmp/agent-vars.json` → `agent-vars.json`
 
-This config controls where `/vars set`, `/vars unset`, and the `vars` tool write changes, and which vars filename is used inside the fixed project/global directories.
+This config controls where ordinary `/vars set`, `/vars unset`, and `vars` tool mutations write changes, and which vars filename is used inside the fixed project/global directories. `/gate auto setup` uses the same ordinary vars write path and therefore respects the selected `pi-location`.
 
-When bootstrap creates the initial vars files, it seeds:
-- `paths.plan = ".pi/plans/active.md"` unless the project file is being created and a global `paths.plan` already exists
-- `paths.design = ".pi/designs/active.md"` unless the project file is being created and a global `paths.design` already exists
-- `subagents.dispatch.defaultContext = "fresh"`
+The workflow activation flags `automode.enabled` and `gate.auto.enabled` are deliberate exceptions: they always write project-local state regardless of `pi-location`.
+
+Bootstrap creates only the project write-location config and a minimal project vars file containing:
 - `automode.enabled = false`
-- `gate.auto.enabled = false` and `gate.auto.startOnSession = false` plus safe default `gate.auto.*` config for pi-gate local auto approval
+- `gate.auto.enabled = false`
+
+It does not create or populate the global vars file. Global files are created lazily when a mutation targets `pi-location=global`. Plan/design paths, subagent dispatch defaults, and Gate Auto runtime/backend settings continue to inherit global values or use runtime defaults when unset.
 
 Allowed dispatch defaults:
 - `fresh`
@@ -133,7 +134,7 @@ Recommendation:
 6. Project vars are merged over global vars.
 7. Built-in derived vars are computed from the merged config.
 8. The extension interpolates `${...}` placeholders in the system prompt text.
-9. On session start, the extension bootstraps missing project/global vars files if needed.
+9. On session start, the extension bootstraps missing project-local vars files if needed.
 10. During the turn, the user or agent can inspect, bootstrap, or mutate vars with:
    - `/vars ...`
    - `vars({ action: ... })`
@@ -146,7 +147,7 @@ Some vars are protected because generic agent-driven mutation should not silentl
 - `automode.enabled=true` can only be set by the automode helper; generic vars may clear it to `false`.
 - `gate.auto.enabled=true` can only be set by `/gate auto on`; generic vars may clear it to `false`.
 - `gate.auto.startOnSession=true` is user-configurable and opts a project into starting gate auto automatically after a fresh Pi start.
-`gate.auto.enabled` is project-scoped for activation. A global `gate.auto.enabled=true` does not turn on auto-approval in every workspace. Other `gate.auto.*` settings, such as `gate.auto.startOnSession`, `gate.auto.llama.modelPath`, `gate.auto.llama.serverPath`, `gate.auto.llama.endpoint`, `gate.auto.llama.warmup`, and `gate.auto.timeoutMs`, still use normal global-under-project merge semantics.
+`gate.auto.enabled` is project-scoped for activation. A global `gate.auto.enabled=true` does not turn on auto-approval in every workspace. Other `gate.auto.*` settings, such as `gate.auto.startOnSession`, `gate.auto.backend`, and `gate.auto.timeoutMs`, use normal global-under-project merge semantics.
 
 ## Built-in plan/design behavior
 
@@ -212,7 +213,7 @@ Supported forms:
 /vars location global
 ```
 
-`/vars bootstrap` creates the initial project/global vars files if they are missing and does not overwrite existing files. Project path defaults are not seeded over existing global `paths.plan` or `paths.design` values.
+`/vars bootstrap` creates the project write-location config and minimal project vars file if they are missing and does not overwrite existing files. It does not create or populate the global vars file.
 
 `/vars set` first tries to parse the value as JSON. If JSON parsing fails, the raw text is stored as a string.
 

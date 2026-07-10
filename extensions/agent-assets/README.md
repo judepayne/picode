@@ -108,11 +108,14 @@ Diagnostics are meant to make configuration problems legible without requiring c
 
 Downstream consumers do not scan directories or parse markdown themselves.
 
-Instead, they consume ordered effective card maps from `agent-assets`, including:
+Instead, they collect one `AgentAssetSnapshot` per logical load from `agent-assets`. The snapshot contains:
 
+- ordered source entries
 - resolved agent cards
 - resolved subagent cards
-- diagnostics
+- diagnostics from the same collection event
+
+The older `collectAgentCards(...)`, `collectSubagentCards(...)`, and `collectAgentAssetDiagnostics(...)` helpers remain available for callers that need only one view. Consumers that need multiple views should use `collectAgentAssetSnapshot(...)` so cards and diagnostics cannot come from different event-bus resolutions.
 
 Current consumers:
 

@@ -182,6 +182,14 @@ function makeWorkspace(): string {
 	return cwd;
 }
 
+function configureManagedEndpoint(cwd: string, endpoint: string): void {
+	setVar(cwd, "gate.auto.backend", {
+		type: "managed-llama",
+		endpoint,
+		warmup: false,
+	});
+}
+
 async function switchProfile(pi: FakePi, profile: string, ctx: FakeContext): Promise<void> {
 	pi.events.emit("gate:switch-profile", { profile, notify: false });
 	await pi.end(ctx);
@@ -422,7 +430,6 @@ describe("pi-gate auto config and evaluator", () => {
 		assert.equal(config.llama.serverPath, "/bin/llama-server");
 		assert.equal(config.llama.modelPath, "/tmp/model.gguf");
 		assert.equal(config.llama.ctxSize, 8192);
-		assert.equal(config.migrationNotice, undefined);
 	});
 
 	it("loads canonical pi-model backend config", () => {
@@ -436,18 +443,43 @@ describe("pi-gate auto config and evaluator", () => {
 		assert.equal(config.backend.cacheRetention, "long");
 	});
 
-	it("surfaces invalid backend config and lets canonical backend override legacy vars", () => {
+	it("rejects invalid and obsolete backend config", () => {
 		const invalidCwd = makeWorkspace();
 		setVar(invalidCwd, "gate.auto.backend", { type: "pi-model", provider: "missing-model" });
 		assert.match(loadGateAutoConfig(invalidCwd).backendError ?? "", /provider.*model|required/i);
 
+		const obsoleteCwd = makeWorkspace();
+		setVar(obsoleteCwd, "gate.auto.backend", "llama.cpp");
+		setVar(obsoleteCwd, "gate.auto.llama.serverPath", "/obsolete/server");
+		setVar(obsoleteCwd, "gate.auto.llama.modelPath", "/obsolete/model.gguf");
+		const obsolete = loadGateAutoConfig(obsoleteCwd);
+		assert.match(obsolete.backendError ?? "", /must be an object/i);
+		assert.equal(obsolete.llama.serverPath, undefined);
+		assert.equal(obsolete.llama.modelPath, undefined);
+	});
+
+	it("keeps an unconfigured managed fallback and validates inherited endpoints", () => {
 		const cwd = makeWorkspace();
-		setVar(cwd, "gate.auto.llama.serverPath", "/legacy/server");
-		setVar(cwd, "gate.auto.llama.modelPath", "/legacy/model.gguf");
-		setVar(cwd, "gate.auto.backend", { type: "pi-model", provider: "p", model: "m" });
-		const config = loadGateAutoConfig(cwd);
-		assert.equal(config.backend.type, "pi-model");
-		assert.match(config.migrationNotice ?? "", /legacy.*ignored/i);
+		const unconfigured = loadGateAutoConfig(cwd, {});
+		assert.equal(unconfigured.backend.type, "managed-llama");
+		assert.equal(unconfigured.llama.serverPath, undefined);
+		assert.equal(unconfigured.llama.modelPath, undefined);
+		assert.equal(unconfigured.backendError, undefined);
+		assert.equal(unconfigured.inheritedEndpoint, undefined);
+
+		const inherited = loadGateAutoConfig(cwd, {
+			PI_SUBAGENT_DEPTH: "1",
+			PI_GATE_AUTO_ENDPOINT: "http://127.0.0.1:8080",
+		});
+		assert.equal(inherited.inheritedEndpoint, "http://127.0.0.1:8080");
+		assert.equal(inherited.backendError, undefined);
+
+		const invalid = loadGateAutoConfig(cwd, {
+			PI_SUBAGENT_DEPTH: "1",
+			PI_GATE_AUTO_ENDPOINT: "https://example.com",
+		});
+		assert.equal(invalid.inheritedEndpoint, undefined);
+		assert.match(invalid.backendError ?? "", /local http loopback URL/);
 	});
 
 	it("setup writes backend to the configured vars location", () => {
@@ -468,17 +500,6 @@ describe("pi-gate auto config and evaluator", () => {
 			if (savedHome === undefined) delete process.env.HOME;
 			else process.env.HOME = savedHome;
 		}
-	});
-
-	it("maps legacy llama vars for one transition window", () => {
-		const cwd = makeWorkspace();
-		setVar(cwd, "gate.auto.backend", "llama.cpp");
-		setVar(cwd, "gate.auto.llama.serverPath", "/legacy/server");
-		setVar(cwd, "gate.auto.llama.modelPath", "/legacy/model.gguf");
-		const config = loadGateAutoConfig(cwd);
-		assert.equal(config.backend.type, "managed-llama");
-		assert.equal(config.llama.serverPath, "/legacy/server");
-		assert.match(config.migrationNotice ?? "", /Legacy gate\.auto\.llama/i);
 	});
 
 	it("parses auto model decisions", () => {
@@ -864,7 +885,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			setVar(cwd, "gate.auto.startOnSession", false);
 			setGateAutoEnabled(cwd, true);
 
@@ -929,8 +950,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
@@ -960,8 +980,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd });
@@ -1000,8 +1019,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
@@ -1032,8 +1050,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "planner";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
@@ -1064,8 +1081,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 			process.env.PI_GATE_SUBAGENT_AGENT = "reviewer";
 
@@ -1097,8 +1113,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
 			await pi.start(ctx);
@@ -1132,8 +1147,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
 			await pi.start(ctx);
@@ -1162,8 +1176,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
@@ -1194,8 +1207,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "builder";
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Allow once" });
@@ -1235,8 +1247,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
@@ -1319,8 +1330,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			setVar(cwd, "gate.auto.audit.includeDynamicPayloadText", true);
 			process.env.GATE_PROFILE = "builder";
 
@@ -1354,8 +1364,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 
 			const { pi, ctx } = createHarness({ cwd, selectChoice: "Deny" });
@@ -1385,8 +1394,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 
 			process.env.GATE_PROFILE = "worker";
 			process.env.PI_GATE_PROFILE_LINEAGE = "planner,worker";
@@ -1418,8 +1426,7 @@ describe("pi-gate policy enforcement", () => {
 		try {
 			const address = server.address();
 			assert.ok(address && typeof address === "object");
-			setVar(cwd, "gate.auto.llama.endpoint", `http://127.0.0.1:${address.port}`);
-			setVar(cwd, "gate.auto.llama.warmup", false);
+			configureManagedEndpoint(cwd, `http://127.0.0.1:${address.port}`);
 			process.env.GATE_PROFILE = "builder";
 			process.env.PI_GATE_SUBAGENT_AGENT = "reviewer";
 

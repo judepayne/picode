@@ -24,7 +24,7 @@ export class ManagedLlamaServer {
 	async start(config: GateAutoApproverConfig): Promise<ManagedLlamaServerStatus> {
 		if (this.proc && this.endpoint) return this.status();
 		if (!config.llama.serverPath || !config.llama.modelPath) {
-			this.lastError = "gate.auto.llama.serverPath and gate.auto.llama.modelPath are required for managed mode";
+			this.lastError = "gate.auto.backend.serverPath and gate.auto.backend.modelPath are required for managed mode";
 			return this.status();
 		}
 

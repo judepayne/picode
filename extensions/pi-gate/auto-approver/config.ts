@@ -76,8 +76,8 @@ export function isGateAutoSubagentProcess(env: NodeJS.ProcessEnv = process.env):
 	return Boolean(env.PI_SUBAGENT_DEPTH || env.PI_SUBAGENT_PARENT_CHILD_ID || env.PI_SUBAGENT_TOP_RUN_ID);
 }
 
-function buildManagedLlamaBackend(get: (key: string) => unknown, env: NodeJS.ProcessEnv, processKind: GateAutoProcessKind, source: Record<string, unknown> | undefined): { backend: ManagedLlamaGateAutoBackendConfig; inheritedEndpoint?: string; error?: string } {
-	const from = (key: string): unknown => source ? source[key] : get(`gate.auto.llama.${key}`);
+function buildManagedLlamaBackend(env: NodeJS.ProcessEnv, processKind: GateAutoProcessKind, source: Record<string, unknown> | undefined): { backend: ManagedLlamaGateAutoBackendConfig; inheritedEndpoint?: string; error?: string } {
+	const from = (key: string): unknown => source?.[key];
 	const rawInheritedEndpoint = stringValue(env[PI_GATE_AUTO_ENDPOINT_ENV]);
 	const rawConfiguredEndpoint = stringValue(from("endpoint"));
 	const rawHost = stringValue(from("host")) ?? "127.0.0.1";
@@ -134,62 +134,36 @@ function buildPiModelBackend(source: Record<string, unknown>): { backend?: PiMod
 	};
 }
 
-function hasLegacyLlamaVars(get: (key: string) => unknown): boolean {
-	return ["endpoint", "serverPath", "modelPath", "host", "port", "ctxSize", "threads", "threadsBatch", "nGpuLayers", "parallel", "cachePrompt", "cacheReuse", "idSlot", "startupTimeoutMs", "responseFormat", "enableThinking", "warmup"]
-		.some((key) => get(`gate.auto.llama.${key}`) !== undefined);
-}
-
-function nestedConfigValue(config: unknown, key: string): unknown {
-	let cursor = config;
-	for (const part of key.split(".")) {
-		if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) return undefined;
-		cursor = (cursor as Record<string, unknown>)[part];
-	}
-	return cursor;
-}
-
-function hasProjectLegacyLlamaVars(config: unknown): boolean {
-	return ["endpoint", "serverPath", "modelPath", "host", "port", "ctxSize", "threads", "threadsBatch", "nGpuLayers", "parallel", "cachePrompt", "cacheReuse", "idSlot", "startupTimeoutMs", "responseFormat", "enableThinking", "warmup"]
-		.some((key) => nestedConfigValue(config, `gate.auto.llama.${key}`) !== undefined);
-}
-
 export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): GateAutoApproverConfig {
 	const state = buildPromptVars(cwd);
 	const get = (key: string): unknown => getRawStoredVarValue(state, key);
 	const processKind: GateAutoProcessKind = isGateAutoSubagentProcess(env) ? "subagent" : "top-level";
-	const projectBackend = nestedConfigValue(state.projectConfig, "gate.auto.backend");
-	const projectLegacyPresent = hasProjectLegacyLlamaVars(state.projectConfig);
-	const rawBackend = projectBackend !== undefined || projectLegacyPresent ? projectBackend : get("gate.auto.backend");
+	const rawBackend = get("gate.auto.backend");
 	const backendObject = objectValue(rawBackend);
-	const legacyBackendString = rawBackend === "llama.cpp" || rawBackend === "managed-llama";
-	const legacyPresent = hasLegacyLlamaVars(get) || legacyBackendString;
-	const managedFallback = buildManagedLlamaBackend(get, env, processKind, undefined);
+	const managedFallback = buildManagedLlamaBackend(env, processKind, undefined);
 	let backend = managedFallback.backend;
 	let inheritedEndpoint = managedFallback.inheritedEndpoint;
 	let backendError = managedFallback.error;
-	let migrationNotice: string | undefined = legacyPresent ? "Legacy gate.auto.llama.* config is in use; run /gate auto setup to write gate.auto.backend." : undefined;
 
 	if (backendObject) {
 		const type = backendObject.type;
 		if (type === "managed-llama") {
-			const managed = buildManagedLlamaBackend(get, env, processKind, backendObject);
+			const managed = buildManagedLlamaBackend(env, processKind, backendObject);
 			backend = managed.backend;
 			inheritedEndpoint = managed.inheritedEndpoint;
 			backendError = managed.error;
-			migrationNotice = legacyPresent ? "Canonical gate.auto.backend is active; legacy gate.auto.llama.* values are ignored." : undefined;
 		} else if (type === "pi-model") {
 			const piModel = buildPiModelBackend(backendObject);
 			if (piModel.backend) {
 				backend = piModel.backend;
 				backendError = undefined;
-				migrationNotice = legacyPresent ? "Canonical gate.auto.backend is active; legacy gate.auto.llama.* values are ignored." : undefined;
 			} else {
 				backendError = piModel.error;
 			}
 		} else {
 			backendError = "gate.auto.backend.type must be managed-llama or pi-model";
 		}
-	} else if (rawBackend !== undefined && !legacyBackendString) {
+	} else if (rawBackend !== undefined) {
 		backendError = "gate.auto.backend must be an object with type managed-llama or pi-model";
 	}
 
@@ -199,7 +173,6 @@ export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process
 		backend,
 		llama: backend.type === "managed-llama" ? backend : managedFallback.backend,
 		backendError,
-		migrationNotice,
 		timeoutMs: numberValue(get("gate.auto.timeoutMs"), 4000, { min: 100, max: 60000 }),
 		auditEnabled: boolValue(get("gate.auto.audit.enabled"), true),
 		auditIncludeDynamicPayloadText: boolValue(get("gate.auto.audit.includeDynamicPayloadText"), false),

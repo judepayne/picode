@@ -57,7 +57,6 @@ export interface GateAutoApproverConfig {
 	/** Compatibility alias for managed-llama code paths. */
 	llama: ManagedLlamaGateAutoBackendConfig;
 	backendError?: string;
-	migrationNotice?: string;
 	timeoutMs: number;
 	auditEnabled: boolean;
 	auditIncludeDynamicPayloadText: boolean;
@@ -87,7 +86,6 @@ export interface GateAutoRuntimeStatus {
 	model?: string;
 	thinking?: GateAutoThinking;
 	cache?: "local-prompt-cache" | "provider-dependent" | "none";
-	migrationNotice?: string;
 	healthy?: boolean;
 	lastError?: string;
 	auditPath?: string;

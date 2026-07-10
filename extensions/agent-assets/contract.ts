@@ -24,6 +24,13 @@ export interface CollectAgentAssetCardsRequest {
 	entries: AgentAssetCardEntry[];
 }
 
+export interface AgentAssetSnapshot {
+	entries: AgentAssetCardEntry[];
+	agents: AgentAssetCard[];
+	subagents: AgentAssetCard[];
+	diagnostics: AgentAssetDiagnostic[];
+}
+
 interface EventEmitterLike {
 	emit(event: string, data: unknown): void;
 }
@@ -70,20 +77,28 @@ function flattenUniqueCards(entries: AgentAssetCardEntry[], kind: AgentAssetKind
 	return out;
 }
 
+export function collectAgentAssetSnapshot(pi: PiLike): AgentAssetSnapshot {
+	const entries = collectAgentAssetCardEntries(pi);
+	const diagnostics: AgentAssetDiagnostic[] = [];
+	for (const entry of entries) {
+		for (const diagnostic of entry.diagnostics ?? []) diagnostics.push(diagnostic);
+	}
+	return {
+		entries,
+		agents: flattenUniqueCards(entries, "agent"),
+		subagents: flattenUniqueCards(entries, "subagent"),
+		diagnostics,
+	};
+}
+
 export function collectAgentCards(pi: PiLike): AgentAssetCard[] {
-	return flattenUniqueCards(collectAgentAssetCardEntries(pi), "agent");
+	return collectAgentAssetSnapshot(pi).agents;
 }
 
 export function collectSubagentCards(pi: PiLike): AgentAssetCard[] {
-	return flattenUniqueCards(collectAgentAssetCardEntries(pi), "subagent");
+	return collectAgentAssetSnapshot(pi).subagents;
 }
 
 export function collectAgentAssetDiagnostics(pi: PiLike): AgentAssetDiagnostic[] {
-	const diagnostics: AgentAssetDiagnostic[] = [];
-	for (const entry of collectAgentAssetCardEntries(pi)) {
-		for (const diagnostic of entry.diagnostics ?? []) {
-			diagnostics.push(diagnostic);
-		}
-	}
-	return diagnostics;
+	return collectAgentAssetSnapshot(pi).diagnostics;
 }

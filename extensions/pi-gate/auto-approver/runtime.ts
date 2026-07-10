@@ -77,7 +77,6 @@ export class GateAutoRuntime {
 			model: config.backend.type === "pi-model" ? config.backend.model : undefined,
 			thinking: config.backend.type === "pi-model" ? config.backend.thinking : undefined,
 			cache: config.backend.type === "pi-model" ? "provider-dependent" : config.llama.cachePrompt ? "local-prompt-cache" : "none",
-			migrationNotice: config.migrationNotice,
 			healthy: this.mode === "pi-model" || this.mode === "external" || this.mode === "inherited" || serverStatus.healthy,
 			lastError: this.lastError ?? config.backendError ?? serverStatus.lastError,
 		};
@@ -152,7 +151,7 @@ export class GateAutoRuntime {
 		if (!config.llama.serverPath || !config.llama.modelPath) {
 			await this.disableRuntimeOnly();
 			this.mode = "unconfigured";
-			this.lastError = "Configure gate.auto.llama.serverPath and gate.auto.llama.modelPath or gate.auto.llama.endpoint";
+			this.lastError = "Configure gate.auto.backend.serverPath and gate.auto.backend.modelPath or gate.auto.backend.endpoint";
 			return this.status(ctx);
 		}
 

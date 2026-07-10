@@ -67,27 +67,44 @@ describe("prompt-vars", () => {
 		assert.strictEqual(state.promptVars["plan.active"], "false");
 	});
 
-	test("bootstrapVarsFiles creates the initial project vars files without overwriting existing files", () => {
+	test("bootstrapVarsFiles creates only minimal project-local state without overwriting files", () => {
 		const cwd = makeWorkspace();
 
 		const first = bootstrapVarsFiles(cwd);
 		const second = bootstrapVarsFiles(cwd);
-		const varsFile = fs.readFileSync(getVarsConfigPath(cwd), "utf8");
+		const projectConfig = JSON.parse(fs.readFileSync(getVarsConfigPath(cwd), "utf8"));
 		const configFile = fs.readFileSync(getWriteLocationConfigPath(cwd), "utf8");
 
-		// Bootstrap creates write-config, project vars, and global vars.
-		const expectedFirstCreated = [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd), getGlobalVarsConfigPath()].sort();
+		const expectedFirstCreated = [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd)].sort();
 		assert.deepStrictEqual(first.created.sort(), expectedFirstCreated);
 		assert.deepStrictEqual(second.existing.sort(), expectedFirstCreated);
-		assert.match(varsFile, /"paths"/);
-		assert.match(varsFile, /"defaultContext": "fresh"/);
-		assert.match(varsFile, /"automode"/);
-		assert.match(varsFile, /"enabled": false/);
+		assert.deepStrictEqual(projectConfig, {
+			automode: { enabled: false },
+			gate: { auto: { enabled: false } },
+		});
+		assert.strictEqual(fs.existsSync(getGlobalVarsConfigPath()), false);
 		assert.match(configFile, /"pi-location": "project"/);
 		assert.match(formatBootstrapResult(first), /created=/);
 	});
 
-	test("bootstrapVarsFiles does not shadow existing global plan and design paths", () => {
+	test("bootstrapVarsFiles stays project-local under global write location and preserves existing project content", () => {
+		const cwd = makeWorkspace();
+		setWriteLocation(cwd, "global");
+
+		const first = bootstrapVarsFiles(cwd);
+		assert.deepStrictEqual(first.created, [getVarsConfigPath(cwd)]);
+		assert.strictEqual(fs.existsSync(getGlobalVarsConfigPath()), false);
+
+		const preserved = `${JSON.stringify({ project: { owner: "user" }, automode: { enabled: true } }, null, 2)}\n`;
+		fs.writeFileSync(getVarsConfigPath(cwd), preserved, "utf8");
+		const second = bootstrapVarsFiles(cwd);
+
+		assert.strictEqual(fs.readFileSync(getVarsConfigPath(cwd), "utf8"), preserved);
+		assert.strictEqual(fs.existsSync(getGlobalVarsConfigPath()), false);
+		assert.deepStrictEqual(second.existing.sort(), [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd)].sort());
+	});
+
+	test("bootstrapVarsFiles inherits existing global paths without shadowing them", () => {
 		const cwd = makeWorkspace();
 		fs.mkdirSync(path.dirname(getGlobalVarsConfigPath()), { recursive: true });
 		fs.writeFileSync(
@@ -99,6 +116,7 @@ describe("prompt-vars", () => {
 		const projectConfig = JSON.parse(fs.readFileSync(getVarsConfigPath(cwd), "utf8")) as { paths?: unknown };
 
 		assert.strictEqual(projectConfig.paths, undefined);
+		assert.deepStrictEqual(result.created.sort(), [getVarsConfigPath(cwd), getWriteLocationConfigPath(cwd)].sort());
 		assert.strictEqual(result.state.promptVars["plan.path"], path.join(cwd, "global-plan.md"));
 		assert.strictEqual(result.state.promptVars["design.path"], path.join(cwd, "global-design.md"));
 	});

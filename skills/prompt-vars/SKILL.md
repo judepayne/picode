@@ -174,7 +174,7 @@ Prefer `fresh` as the default. Use `fork` only when the delegated task specifica
 
 `gate.auto.startOnSession` defaults to `false`. Users may set it to `true` when they explicitly want gate auto to start after each fresh Pi start for the project.
 
-Agents may configure supporting values such as `gate.auto.llama.serverPath`, `gate.auto.llama.modelPath`, `gate.auto.llama.endpoint`, `gate.auto.startOnSession`, and `gate.auto.timeoutMs` when asked, but should not try to bypass `/gate auto on`.
+Agents may configure the canonical `gate.auto.backend` object plus supporting values such as `gate.auto.startOnSession` and `gate.auto.timeoutMs` when asked, but should not try to bypass `/gate auto on`.
 
 ## Guidelines
 

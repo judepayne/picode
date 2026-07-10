@@ -25,9 +25,11 @@ type ToolRegistration = {
 
 class FakeEventBus {
 	readonly emitted: Array<{ event: string; data: unknown }> = [];
+	assetCollectionCount = 0;
 	emit(event: string, data: unknown): void {
 		this.emitted.push({ event, data });
 		if (event === COLLECT_AGENT_ASSET_CARDS_EVENT) {
+			this.assetCollectionCount += 1;
 			const request = data as CollectAgentAssetCardsRequest;
 			request.entries.push({
 				source: "test",
@@ -214,6 +216,7 @@ describe("agent-mode extension entrypoint", () => {
 		assert.ok(pi.commands.has("agents"));
 		await pi.emitLifecycle("session_start", {}, ctx);
 
+		assert.equal(pi.events.assetCollectionCount, 1);
 		assert.deepEqual(pi.activeTools, ["read", "bash"]);
 		assert.equal(pi.thinkingLevel, "low");
 		assert.equal(pi.appendedEntries[0]?.type, "agent-mode-state");

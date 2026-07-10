@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import piGate from "../extensions/pi-gate/index.ts";
-import { buildPromptVars, setGateAutoEnabled, setVar, unsetVar } from "../extensions/z-prompt-vars/prompt-vars.ts";
+import { buildPromptVars, setGateAutoEnabled, setVar } from "../extensions/z-prompt-vars/prompt-vars.ts";
 
 function defaultInstallDir() {
 	if (process.env.PICODE_GATE_AUTO_HOME) return path.resolve(process.env.PICODE_GATE_AUTO_HOME);
@@ -214,7 +214,6 @@ function configureAuto(args) {
 	} else {
 		if (!args.serverPath) throw new Error("llama-server not found on PATH; pass --server-path or --endpoint");
 		if (!fs.existsSync(args.modelPath)) throw new Error(`model not found: ${args.modelPath}; run scripts/setup-gate-auto-approver.mjs first`);
-		unsetVar(repoRoot, "gate.auto.llama.endpoint");
 		setVar(repoRoot, "gate.auto.backend", { type: "managed-llama", serverPath: args.serverPath, modelPath: args.modelPath, host: "127.0.0.1", port: 0, ctxSize: 8192, nGpuLayers: 99, parallel: 2, cachePrompt: true, startupTimeoutMs: 30000, responseFormat: "auto", enableThinking: false, warmup: !args.noWarmup });
 	}
 	setVar(repoRoot, "gate.auto.timeoutMs", args.timeoutMs);

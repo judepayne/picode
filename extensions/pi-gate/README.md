@@ -297,7 +297,7 @@ Pi model backend:
 {"type":"pi-model","provider":"openai","model":"gpt-4.1-mini","thinking":"off","cacheRetention":"short","temperature":0,"maxTokens":128}
 ```
 
-`pi-model` uses Pi's model registry/auth from `~/.pi/agent/models.json`. Each approval call is a fresh one-shot context. Prompt caching for public providers is best-effort/provider-dependent. Legacy `gate.auto.llama.*` vars are still read for one transition window but `/gate auto setup` writes only `gate.auto.backend`.
+`pi-model` uses Pi's model registry/auth from `~/.pi/agent/models.json`. Each approval call is a fresh one-shot context. Prompt caching for public providers is best-effort/provider-dependent. Gate Auto accepts only the canonical `gate.auto.backend` object; legacy configuration shapes are not supported.
 
 ### Testing
 
