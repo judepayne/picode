@@ -518,10 +518,15 @@ describe("subagent-orchestrator extension entrypoint", () => {
 			const tool = pi.tools.get("delegate_subagent_status");
 			assert.ok(tool);
 			const ctx = new FakeContext(process.cwd());
+			for (const handler of pi.lifecycle.get("session_start") ?? []) {
+				await (handler as (event: unknown, ctx: FakeContext) => void | Promise<void>)({}, ctx);
+			}
 
 			const result = await tool.execute("tool", { action: "list" }, new AbortController().signal, undefined, ctx);
 			assert.equal(result.isError, undefined);
 			assert.match(result.content?.[0]?.text ?? "", /No subagent orchestrator runs found/);
+			assert.match(result.content?.[0]?.text ?? "", /Retention: 30d \/ 100/);
+			assert.equal(typeof result.details?.retention, "object");
 		});
 	});
 

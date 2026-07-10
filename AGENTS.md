@@ -167,6 +167,7 @@ Important files:
 - `extensions/subagent-orchestrator/handbacks.ts` — completion/handback behavior
 - `extensions/subagent-orchestrator/footer-status.ts` — notification text helpers, not the unified footer tree renderer
 - `extensions/subagent-orchestrator/run-ui.ts` — surfaced UI/run card behavior
+- `extensions/subagent-orchestrator/retention.ts` — terminal root-tree retention policy, protection rules, and proven-owned async artifact pruning
 - `extensions/subagent-orchestrator/sticky-user-sessions.ts` — continue semantics for direct user subagents
 - `extensions/subagent-orchestrator/max-subagent-depth.ts` — nested delegation bounds
 

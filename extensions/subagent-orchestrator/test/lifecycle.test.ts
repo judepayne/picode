@@ -31,12 +31,55 @@ function options(pi: never, shutdown: () => void): OrchestratorLifecycleOptions 
 		reconcileOwned: () => undefined,
 		reconcileDuplicateHandbacks: () => undefined,
 		flushQueuedHandbacks: () => undefined,
+		pruneState: () => undefined,
+		scheduleRetention: () => undefined,
 		scheduleHandbackFlush: () => undefined,
 		shutdown,
 	};
 }
 
 describe("orchestrator lifecycle ownership", () => {
+	it("prunes startup state after recovery and handback delivery but before footer rendering", async () => {
+		const pi = makePi();
+		const calls: string[] = [];
+		const configured = options(pi, () => undefined);
+		configured.ensureStateReady = () => { calls.push("ready"); };
+		configured.restoreSnapshots = () => { calls.push("restore"); };
+		configured.reconcileOwned = () => { calls.push("recover"); };
+		configured.reconcileDuplicateHandbacks = () => { calls.push("dedupe"); };
+		configured.flushQueuedHandbacks = () => { calls.push("handbacks"); throw new Error("delivery failed"); };
+		configured.onHandbackDeliveryError = () => { calls.push("delivery-error"); };
+		configured.pruneState = () => { calls.push("prune"); };
+		configured.updateFooter = () => { calls.push("footer"); };
+		configured.scheduleHandbackFlush = () => { calls.push("schedule"); };
+		registerOrchestratorLifecycle(configured);
+		const ctx = {
+			hasUI: false,
+			sessionManager: { getBranch: () => [] },
+		} as never;
+		const handler = pi.handlers.get("session_start")?.[0];
+		assert.ok(handler);
+		await handler({} as never, ctx);
+		assert.deepEqual(calls, ["ready", "restore", "recover", "dedupe", "handbacks", "delivery-error", "prune", "footer", "schedule"]);
+	});
+
+	it("contains turn-end handback delivery failures and still refreshes and schedules", async () => {
+		const pi = makePi();
+		const calls: string[] = [];
+		const configured = options(pi, () => undefined);
+		configured.reconcileOwned = () => { calls.push("recover"); };
+		configured.reconcileDuplicateHandbacks = () => { calls.push("dedupe"); };
+		configured.flushQueuedHandbacks = () => { calls.push("handbacks"); throw new Error("delivery failed"); };
+		configured.onHandbackDeliveryError = () => { calls.push("delivery-error"); };
+		configured.updateFooter = () => { calls.push("footer"); };
+		configured.scheduleHandbackFlush = () => { calls.push("schedule"); };
+		registerOrchestratorLifecycle(configured);
+		const handler = pi.handlers.get("turn_end")?.[0];
+		assert.ok(handler);
+		await handler({} as never, {} as never);
+		assert.deepEqual(calls, ["recover", "dedupe", "handbacks", "delivery-error", "footer", "schedule"]);
+	});
+
 	it("disposes the previous runtime when the extension is registered again", () => {
 		const pi = makePi();
 		let firstShutdowns = 0;

@@ -409,3 +409,26 @@ That state includes things like:
 - indexes used for status and recovery
 
 This makes async delegation observable and resumable instead of purely ephemeral.
+
+### State retention
+
+Terminal root trees are retained for 30 days and capped at the newest 100 top-level terminal runs per project. A tree becomes eligible when either limit is exceeded. Pruning runs at session startup after async recovery/handback delivery and is coalesced after terminal run persistence.
+
+Retention always preserves complete trees for active runs or children, footer-visible terminal runs, queued handbacks, queued/deferred continuations, active direct-user continuations, and active async event tailers. A `launched` continuation is historical because its handback has already been dispatched. Pruning removes orchestrator-owned run/child/handback/continuation records and node logs; it never removes Pi child `sessionFile` history. Canonical async run directories are removed only when their path and manifest identity prove ownership.
+
+Override the defaults with positive integers in merged prompt vars:
+
+```json
+{
+  "subagent": {
+    "orchestrator": {
+      "retention": {
+        "maxAgeDays": 30,
+        "maxTopLevelRuns": 100
+      }
+    }
+  }
+}
+```
+
+Invalid values fall back independently to the defaults. The `delegate_subagent_status` `list` result includes the effective policy and last pruning summary; there is no manual prune command.

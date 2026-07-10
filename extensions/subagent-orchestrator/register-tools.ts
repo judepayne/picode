@@ -7,6 +7,7 @@ import { normalizeRunOrigin } from "./delegation-context.ts";
 import type { DelegationContextResolver } from "./delegation-context.ts";
 import type { AsyncRecoveryService } from "./async-recovery.ts";
 import type { RunLauncher } from "./run-launcher.ts";
+import { formatOrchestratorRetentionSummary, type OrchestratorRetentionSummary } from "./retention.ts";
 import type { StatusQueryService } from "./status-query-service.ts";
 import type { StateStore } from "./state.ts";
 import { filterNodeLogRecords, formatNodeLogLines, formatRunDetails, formatRunList, formatTree, selectRunChild, STATUS_LIST_LIMIT, summarizeRunForListDetails } from "./status-tools.ts";
@@ -36,6 +37,7 @@ export interface RegisterOrchestratorToolsOptions {
  hydrateDelegationRequest(ctx: ExtensionContext, request: NormalizedDelegationRequest, thinking?: string): NormalizedDelegationRequest;
  tryFinalizeRun(runId: string, patch: { status: RunStatus } & Partial<OrchestratorRunRecord>): OrchestratorRunRecord | undefined;
  finalizeChildrenFromResults(runId: string, results: ProgrammaticResultEntry[] | undefined, fallbackText: string | undefined, status: RunStatus, now: number): void;
+ getRetentionSummary(): OrchestratorRetentionSummary | undefined;
 }
 
 export function registerOrchestratorTools(options: RegisterOrchestratorToolsOptions): void {
@@ -184,11 +186,14 @@ export function registerOrchestratorTools(options: RegisterOrchestratorToolsOpti
 			reconcileOwnedAsyncRuns(ctx);
 			if (action === "list") {
 				const runs = state.listOwnedRuns(currentModeId);
+				const retention = options.getRetentionSummary();
+				const runList = formatRunList(runs, currentModeId, (runId) => state.listChildSessionsByRun(runId));
 				return successText(
-					formatRunList(runs, currentModeId, (runId) => state.listChildSessionsByRun(runId)),
+					retention ? `${runList}\n${formatOrchestratorRetentionSummary(retention)}` : runList,
 					{
 						totalRuns: runs.length,
 						runs: runs.slice(0, STATUS_LIST_LIMIT).map(summarizeRunForListDetails),
+						...(retention ? { retention } : {}),
 					},
 				);
 			}

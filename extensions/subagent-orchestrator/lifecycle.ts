@@ -28,6 +28,9 @@ export interface OrchestratorLifecycleOptions {
 	reconcileOwned(ctx: ExtensionContext): void;
 	reconcileDuplicateHandbacks(ctx: ExtensionContext): void;
 	flushQueuedHandbacks(ctx: ExtensionContext): void;
+	onHandbackDeliveryError?(error: unknown): void;
+	pruneState(ctx: ExtensionContext): void;
+	scheduleRetention(ctx: ExtensionContext): void;
 	scheduleHandbackFlush(): void;
 	shutdown(): void | Promise<void>;
 }
@@ -52,6 +55,7 @@ export function registerOrchestratorLifecycle(options: OrchestratorLifecycleOpti
 		options.setLatestCtx(ctx);
 		if (event.source !== "interactive") return { action: "continue" };
 		options.acknowledgeVisibleTerminalRuns(ctx);
+		options.scheduleRetention(ctx);
 		options.updateFooter(ctx, true);
 		if ((event.images?.length ?? 0) > 0) return { action: "continue" };
 		const currentMode = options.delegationContext.findCurrent(ctx);
@@ -95,7 +99,12 @@ export function registerOrchestratorLifecycle(options: OrchestratorLifecycleOpti
 		options.restoreSnapshots(ctx.sessionManager.getBranch());
 		options.reconcileOwned(ctx);
 		options.reconcileDuplicateHandbacks(ctx);
-		options.flushQueuedHandbacks(ctx);
+		try {
+			options.flushQueuedHandbacks(ctx);
+		} catch (error) {
+			options.onHandbackDeliveryError?.(error);
+		}
+		options.pruneState(ctx);
 		options.updateFooter(ctx, true);
 		options.scheduleHandbackFlush();
 	});
@@ -106,7 +115,11 @@ export function registerOrchestratorLifecycle(options: OrchestratorLifecycleOpti
 		options.handleTapContext(ctx);
 		options.reconcileOwned(ctx);
 		options.reconcileDuplicateHandbacks(ctx);
-		options.flushQueuedHandbacks(ctx);
+		try {
+			options.flushQueuedHandbacks(ctx);
+		} catch (error) {
+			options.onHandbackDeliveryError?.(error);
+		}
 		options.updateFooter(ctx, true);
 		options.scheduleHandbackFlush();
 	});

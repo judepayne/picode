@@ -149,6 +149,86 @@ describe("subagent-orchestrator state store", () => {
 		}
 	});
 
+	it("deletes complete run trees without dangling durable references", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-orchestrator-state-"));
+		try {
+			const store = createStateStore(root);
+			const createRun = (id: string, rootRunId: string, parentRunId?: string) => store.createRun({
+				orchestratorRunId: id, rootRunId, ...(parentRunId ? { parentRunId } : {}), ownerModeId: "builder",
+				parentSessionId: "parent", depth: parentRunId ? 1 : 0, launchedAt: 1, updatedAt: 1,
+				requestShape: "single", async: true, context: "fresh", status: "completed", taskSummary: id,
+			});
+			createRun("root-a", "root-a");
+			createRun("nested-a", "root-a", "root-a");
+			createRun("root-b", "root-b");
+			for (const [id, runId, sessionFile] of [["child-a", "nested-a", "/tmp/keep-session.json"], ["child-b", "root-b", undefined]] as const) {
+				store.createChildSession({ childSessionId: id, runId, rootRunId: runId === "nested-a" ? "root-a" : "root-b", ownerModeId: "builder", parentSessionId: "parent",
+					requestShape: "single", async: true, context: "fresh", agent: "worker", childIndex: 0, childKey: "single:0", status: "completed",
+					taskSummary: id, ...(sessionFile ? { sessionFile } : {}), createdAt: 1, updatedAt: 1 });
+				store.appendNodeLogRecord(id, { runId, timestamp: 1, eventType: "done", event: {} });
+			}
+			fs.writeFileSync("/tmp/keep-session.json", "keep");
+			for (const [id, runId, status] of [["hb-a", "nested-a", "consumed"], ["hb-b", "root-b", "consumed"]] as const) {
+				store.createHandback({ handbackId: id, runId, ownerModeId: "builder", parentSessionId: "parent", childSessionIds: [], status,
+					content: id, summary: id, createdAt: 1, updatedAt: 1 });
+			}
+			store.createContinuation({ continuationId: "cont-a", parentSessionId: "parent", ownerModeId: "builder", handbackIds: ["hb-a"],
+				status: "launched", content: "continue", createdAt: 1, updatedAt: 1 });
+
+			assert.deepEqual(store.deleteRunTrees(["root-a"]), { rootRuns: 1, runs: 2, childSessions: 1, handbacks: 1, continuations: 1, nodeLogs: 1, errors: [] });
+			assert.equal(fs.existsSync("/tmp/keep-session.json"), true);
+			assert.deepEqual(store.listRuns().map((run) => run.orchestratorRunId), ["root-b"]);
+			assert.equal(store.listChildSessions().length, 1);
+			assert.equal(store.listHandbacks().length, 1);
+			assert.equal(store.listContinuations().length, 0);
+			assert.deepEqual(store.deleteRunTrees(["root-a"]), { rootRuns: 0, runs: 0, childSessions: 0, handbacks: 0, continuations: 0, nodeLogs: 0, errors: [] });
+			fs.rmSync("/tmp/keep-session.json", { force: true });
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips trees with queued handbacks or cross-tree continuations", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-orchestrator-state-"));
+		try {
+			const store = createStateStore(root);
+			for (const id of ["root-a", "root-b", "root-c"]) store.createRun({ orchestratorRunId: id, rootRunId: id, ownerModeId: "builder", launchedAt: 1,
+				updatedAt: 1, requestShape: "single", async: true, context: "fresh", status: "completed", taskSummary: id });
+			for (const [id, runId, status] of [["hb-a", "root-a", "consumed"], ["hb-b", "root-b", "consumed"], ["hb-c", "root-c", "queued"]] as const)
+				store.createHandback({ handbackId: id, runId, ownerModeId: "builder", parentSessionId: "parent", childSessionIds: [], status, content: id, summary: id, createdAt: 1, updatedAt: 1 });
+			store.createContinuation({ continuationId: "cross", parentSessionId: "parent", ownerModeId: "builder", handbackIds: ["hb-a", "hb-b"],
+				status: "launched", content: "continue", createdAt: 1, updatedAt: 1 });
+			assert.equal(store.deleteRunTrees(["root-a", "root-c"]).rootRuns, 0);
+			assert.equal(store.listRuns().length, 3);
+			assert.deepEqual(store.deleteRunTrees(["root-a", "root-b"]).rootRuns, 2);
+			assert.deepEqual(store.listRuns().map((run) => run.orchestratorRunId), ["root-c"]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the root recoverable and rebuilds indexes when a dependency cannot be removed", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-orchestrator-state-"));
+		try {
+			const store = createStateStore(root);
+			store.ensureReady();
+			store.createRun({ orchestratorRunId: "root", ownerModeId: "builder", rootRunId: "root", launchedAt: 1, updatedAt: 2, completedAt: 2, requestShape: "single", async: false, context: "fresh", status: "complete", taskSummary: "root" });
+			store.createChildSession({ childSessionId: "child", runId: "root", rootRunId: "root", ownerModeId: "builder", parentSessionId: "parent", requestShape: "single", async: false, context: "fresh", agent: "worker", childIndex: 0, childKey: "single:0", status: "complete", taskSummary: "child", createdAt: 1, updatedAt: 2, completedAt: 2 });
+			const blockedLogPath = path.join(root, "node-logs", "child.jsonl");
+			fs.mkdirSync(blockedLogPath);
+			const failed = store.deleteRunTrees(["root"]);
+			assert.equal(failed.rootRuns, 0);
+			assert.equal(failed.errors.length, 1);
+			assert.ok(store.getRun("root"));
+			assert.equal(store.listChildSessions().length, 1);
+			assert.deepEqual(store.loadRunsIndex().runs.map((run) => run.orchestratorRunId), ["root"]);
+			fs.rmdirSync(blockedLogPath);
+			assert.equal(store.deleteRunTrees(["root"]).rootRuns, 1);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps run index summaries compact while preserving full run records", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-orchestrator-state-"));
 		try {

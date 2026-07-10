@@ -112,6 +112,9 @@ export function createContinuationController(state: StateStore) {
 		validateAgent,
 		prepareUser,
 		prepareAgent,
+		activeRunIds() {
+			return sticky.flatMap((entry) => entry.activeRunId ? [entry.activeRunId] : []);
+		},
 		dispose() { sticky = []; },
 	};
 }

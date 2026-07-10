@@ -630,6 +630,136 @@ export function createStateStore(rootDir: string) {
 		return parseJsonlBufferWithCursor(buffer, start);
 	}
 
+	function deleteRunTrees(rootRunIds: Iterable<string>): {
+		rootRuns: number;
+		runs: number;
+		childSessions: number;
+		handbacks: number;
+		continuations: number;
+		nodeLogs: number;
+		errors: string[];
+	} {
+		ensureReady();
+		const requestedRoots = new Set(rootRunIds);
+		const runs = listRuns();
+		const children = listChildSessions();
+		const handbacks = listHandbacks();
+		const continuations = listContinuations();
+		const eligibleRoots = new Set([...requestedRoots].filter((rootRunId) =>
+			runs.some((run) => (run.rootRunId ?? run.orchestratorRunId) === rootRunId),
+		));
+
+		// Eligibility is resolved to a fixed point: rejecting one tree can make a
+		// continuation shared with another requested tree a cross-tree reference.
+		let changed = true;
+		while (changed) {
+			changed = false;
+			const runIds = new Set(runs
+				.filter((run) => eligibleRoots.has(run.rootRunId ?? run.orchestratorRunId))
+				.map((run) => run.orchestratorRunId));
+			const deletedHandbackIds = new Set(handbacks.filter((handback) => runIds.has(handback.runId)).map((handback) => handback.handbackId));
+			for (const rootRunId of [...eligibleRoots]) {
+				const treeRunIds = new Set(runs
+					.filter((run) => (run.rootRunId ?? run.orchestratorRunId) === rootRunId)
+					.map((run) => run.orchestratorRunId));
+				const treeHandbacks = handbacks.filter((handback) => treeRunIds.has(handback.runId));
+				const hasQueuedHandback = treeHandbacks.some((handback) => handback.status === "queued");
+				const hasUnsafeContinuation = continuations.some((continuation) => {
+					if (!continuation.handbackIds.some((id) => treeHandbacks.some((handback) => handback.handbackId === id))) return false;
+					return continuation.status === "queued" || continuation.handbackIds.some((id) =>
+						handbacks.some((handback) => handback.handbackId === id) && !deletedHandbackIds.has(id),
+					);
+				});
+				if (hasQueuedHandback || hasUnsafeContinuation) {
+					eligibleRoots.delete(rootRunId);
+					changed = true;
+				}
+			}
+		}
+
+		const deletedRuns = runs.filter((run) => eligibleRoots.has(run.rootRunId ?? run.orchestratorRunId));
+		const deletedRunIds = new Set(deletedRuns.map((run) => run.orchestratorRunId));
+		const deletedChildren = children.filter((child) => deletedRunIds.has(child.runId));
+		const deletedHandbacks = handbacks.filter((handback) => deletedRunIds.has(handback.runId));
+		const deletedHandbackIds = new Set(deletedHandbacks.map((handback) => handback.handbackId));
+		const deletedContinuations = continuations.filter((continuation) =>
+			continuation.status !== "queued"
+			&& continuation.handbackIds.some((id) => deletedHandbackIds.has(id))
+			&& continuation.handbackIds.every((id) => deletedHandbackIds.has(id) || !handbacks.some((handback) => handback.handbackId === id)),
+		);
+		const errors: string[] = [];
+		const remove = (filePath: string): { removed: boolean; absent: boolean } => {
+			try {
+				fs.unlinkSync(filePath);
+				return { removed: true, absent: false };
+			} catch (error) {
+				if (typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+					return { removed: false, absent: true };
+				}
+				errors.push(`Failed to remove ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+				return { removed: false, absent: false };
+			}
+		};
+
+		let continuationCount = 0;
+		let handbackCount = 0;
+		let childSessionCount = 0;
+		let nodeLogCount = 0;
+		let runCount = 0;
+		let rootRunCount = 0;
+		const blockedHandbackIds = new Set<string>();
+		for (const continuation of deletedContinuations) {
+			const result = remove(continuationPath(continuation.continuationId));
+			continuationCount += result.removed ? 1 : 0;
+			if (!result.removed && !result.absent) {
+				for (const handbackId of continuation.handbackIds) blockedHandbackIds.add(handbackId);
+			}
+		}
+		for (const handback of deletedHandbacks) {
+			if (blockedHandbackIds.has(handback.handbackId)) continue;
+			handbackCount += remove(handbackPath(handback.handbackId)).removed ? 1 : 0;
+		}
+		for (const child of deletedChildren) {
+			const logResult = remove(nodeLogPath(child.childSessionId));
+			nodeLogCount += logResult.removed ? 1 : 0;
+			if (!logResult.removed && !logResult.absent) continue;
+			childSessionCount += remove(childSessionPath(child.childSessionId)).removed ? 1 : 0;
+		}
+		const dependencyErrors = errors.length > 0;
+		if (!dependencyErrors) {
+			for (const run of deletedRuns.filter((run) => run.parentRunId || run.parentChildSessionId)) {
+				const result = remove(runPath(run.orchestratorRunId));
+				if (result.removed || result.absent) runCount += result.removed ? 1 : 0;
+			}
+			const nestedRunErrors = errors.length > 0;
+			if (!nestedRunErrors) {
+				for (const run of deletedRuns.filter((run) => !run.parentRunId && !run.parentChildSessionId)) {
+					const result = remove(runPath(run.orchestratorRunId));
+					if (result.removed || result.absent) {
+						runCount += result.removed ? 1 : 0;
+						rootRunCount += 1;
+					}
+				}
+			}
+		}
+		for (const rebuild of [rebuildRunsIndex, rebuildChildSessionsIndex, rebuildHandbacksIndex, rebuildContinuationsIndex]) {
+			try {
+				rebuild();
+			} catch (error) {
+				errors.push(`Failed to rebuild orchestrator state index: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		return {
+			rootRuns: rootRunCount,
+			runs: runCount,
+			childSessions: childSessionCount,
+			handbacks: handbackCount,
+			continuations: continuationCount,
+			nodeLogs: nodeLogCount,
+			errors,
+		};
+	}
+
 	return {
 		rootDir,
 		runsDir,
@@ -677,6 +807,7 @@ export function createStateStore(rootDir: string) {
 		appendNodeLogRecord,
 		readNodeLog,
 		readNodeLogSince,
+		deleteRunTrees,
 		loadRunsIndex,
 		loadChildSessionsIndex,
 		loadHandbacksIndex,

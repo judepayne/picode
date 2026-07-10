@@ -47,6 +47,7 @@ import {
 } from "./delegation-context.ts";
 import { createRunSpecBuilder } from "./run-spec.ts";
 import { createRunStateService } from "./run-state-service.ts";
+import { createOrchestratorRetentionController } from "./retention.ts";
 import { createRunLauncher } from "./run-launcher.ts";
 import { registerOrchestratorTools } from "./register-tools.ts";
 import { registerOrchestratorLifecycle } from "./lifecycle.ts";
@@ -118,6 +119,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 	let eventHandlersDisposer: (() => void) | undefined;
 	let footerLifecycle!: ReturnType<typeof createFooterLifecycleController<ReturnType<typeof currentSessionLineage>>>;
 	let handbackDelivery!: ReturnType<typeof createHandbackDeliveryController<ReturnType<typeof currentSessionLineage>>>;
+	let retention!: ReturnType<typeof createOrchestratorRetentionController>;
 	const tapController = createTapController({
 		getRoots: (ctx) => footerLifecycle.buildVisibleTapRoots(ctx, { includeUserRuns: true }),
 		openStream: (childSessionId, handler) => openSubagentStream(childSessionId, handler),
@@ -149,6 +151,11 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		warnDiagnostic: warnOrchestratorDiagnostic,
 		isTerminal,
 	});
+	retention = createOrchestratorRetentionController({
+		state,
+		getActiveRunIds: continuationController.activeRunIds,
+		hasActiveAsyncTailer: asyncEvents.hasAsyncEventTailer,
+	});
 	footerLifecycle = createFooterLifecycleController({
 		state,
 		getLatestCtx: () => latestCtx,
@@ -174,6 +181,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		updateFooter: () => footerLifecycle.updateUiStatus(),
 		bindContinuation: bindStickyUserSubagentSessionToRun as never,
 		releaseContinuation: clearStickyUserSubagentRun,
+		onRunFinalized: () => retention.schedule(latestCtx?.cwd ?? process.cwd()),
 	});
 	const {
 		appendChildEntry,
@@ -192,6 +200,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		handbackMatchesSessionLineage,
 		normalizeHandbackConsumer,
 		refreshRunAggregates: (runId) => { refreshRunAggregates(runId); },
+		onDeliveryError: (error) => warnOrchestratorDiagnostic("queued handback delivery failed; retrying", error),
 	});
 	asyncRecovery = createAsyncRecoveryService({
 		state,
@@ -290,6 +299,9 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		reconcileOwned: reconcileOwnedAsyncRuns,
 		reconcileDuplicateHandbacks: handbackDelivery.reconcileDuplicateHandbacks,
 		flushQueuedHandbacks: (ctx) => handbackDelivery.flushQueuedHandbacks(ctx, { forceAgentDelivery: true }),
+		onHandbackDeliveryError: (error) => warnOrchestratorDiagnostic("queued handback delivery failed; retrying", error),
+		pruneState: (ctx) => { retention.prune(ctx.cwd); },
+		scheduleRetention: (ctx) => { retention.schedule(ctx.cwd); },
 		scheduleHandbackFlush: handbackDelivery.scheduleQueuedHandbackFlush,
 		shutdown: async () => {
 			eventHandlersDisposer?.();
@@ -305,6 +317,7 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			devStreamFileClosers.clear();
 			asyncEvents.stopAllAsyncEventTailers();
 			handbackDelivery.clearQueuedHandbackFlushTimer();
+			retention.dispose();
 			footerLifecycle.clearUiStatusTimer();
 			clearRunMessageSnapshots();
 			disposeRunMessageSnapshots();
@@ -328,5 +341,6 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 		hydrateDelegationRequest: (ctx, request, thinking) => cardResolver.hydrate(ctx, request, thinking),
 		tryFinalizeRun: tryFinalizeRun,
 		finalizeChildrenFromResults,
+		getRetentionSummary: retention.getLastSummary,
 	});
 }

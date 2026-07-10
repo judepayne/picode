@@ -12,6 +12,8 @@ export interface HandbackDeliveryState {
 	markHandbackDismissed(handbackId: string, dismissedAt: number): OrchestratorHandbackRecord | undefined;
 	createHandback(input: OrchestratorHandbackRecord): OrchestratorHandbackRecord;
 	createContinuation(input: OrchestratorContinuationRecord): OrchestratorContinuationRecord;
+	listContinuations(): OrchestratorContinuationRecord[];
+	updateContinuation(continuationId: string, patch: Partial<OrchestratorContinuationRecord>): OrchestratorContinuationRecord | undefined;
 }
 
 export interface HandbackDeliveryInput<Lineage> {
@@ -23,6 +25,7 @@ export interface HandbackDeliveryInput<Lineage> {
 	handbackMatchesSessionLineage(handback: Pick<OrchestratorHandbackRecord, "parentSessionId">, lineage: Lineage): boolean;
 	normalizeHandbackConsumer(value: unknown): "agent" | "user";
 	refreshRunAggregates(runId: string): void;
+	onDeliveryError?(error: unknown): void;
 }
 
 export interface HandbackDeliveryController {
@@ -60,12 +63,17 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 		clearQueuedHandbackFlushTimer();
 		queuedHandbackFlushTimer = setTimeout(() => {
 			queuedHandbackFlushTimer = null;
-			const queuedBeforeFlush = queuedHandbackCountForContext();
-			if (queuedBeforeFlush === 0) return;
-			reconcileDuplicateHandbacks(input.getLatestCtx());
-			flushQueuedHandbacks(input.getLatestCtx());
-			if (queuedHandbackCountForContext() > 0 && attemptsRemaining > 1) {
-				scheduleQueuedHandbackFlush(Math.min(delayMs * 2, 1000), attemptsRemaining - 1);
+			try {
+				const queuedBeforeFlush = queuedHandbackCountForContext();
+				if (queuedBeforeFlush === 0) return;
+				reconcileDuplicateHandbacks(input.getLatestCtx());
+				flushQueuedHandbacks(input.getLatestCtx());
+				if (queuedHandbackCountForContext() > 0 && attemptsRemaining > 1) {
+					scheduleQueuedHandbackFlush(Math.min(delayMs * 2, 1000), attemptsRemaining - 1);
+				}
+			} catch (error) {
+				input.onDeliveryError?.(error);
+				if (attemptsRemaining > 1) scheduleQueuedHandbackFlush(Math.min(delayMs * 2, 1000), attemptsRemaining - 1);
 			}
 		}, delayMs);
 		queuedHandbackFlushTimer.unref?.();
@@ -128,20 +136,31 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 		handbacks: OrchestratorHandbackRecord[],
 		now: number,
 	): OrchestratorContinuationRecord {
+		const handbackIds = handbacks.map((entry) => entry.handbackId);
+		const existing = input.state.listContinuations().find((continuation) =>
+			continuation.status === "queued"
+			&& continuation.handbackIds.length === handbackIds.length
+			&& continuation.handbackIds.every((id, index) => id === handbackIds[index])
+		);
+		if (existing) return existing;
 		const first = handbacks[0];
 		return input.state.createContinuation({
 			continuationId: randomUUID(),
 			parentSessionId,
 			ownerModeId,
-			handbackIds: handbacks.map((entry) => entry.handbackId),
+			handbackIds,
 			consumer: input.normalizeHandbackConsumer(first?.consumer),
 			...(first?.agent ? { agent: first.agent } : {}),
-			status: "launched",
+			status: "queued",
 			content: handbacks.map((entry) => entry.content).join("\n\n---\n\n"),
 			createdAt: now,
 			updatedAt: now,
-			launchedAt: now,
 		});
+	}
+
+	function markContinuationLaunched(continuation: OrchestratorContinuationRecord, launchedAt: number): OrchestratorContinuationRecord {
+		return input.state.updateContinuation(continuation.continuationId, { status: "launched", updatedAt: launchedAt, launchedAt })
+			?? { ...continuation, status: "launched", updatedAt: launchedAt, launchedAt };
 	}
 
 	function consumeHandbacks(handbacks: OrchestratorHandbackRecord[], consumedAt: number): void {
@@ -181,8 +200,8 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 		now: number,
 	): void {
 		for (const handback of handbacks) {
-			const continuation = createContinuationRecord(handback.parentSessionId, ownerModeId, [handback], now);
-			consumeHandbacks([handback], now);
+			const queuedContinuation = createContinuationRecord(handback.parentSessionId, ownerModeId, [handback], now);
+			const continuation = { ...queuedContinuation, status: "launched" as const, updatedAt: now, launchedAt: now };
 			input.pi.appendEntry(ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, buildContinuationEntry(continuation));
 			const details = buildContinuationDetails(continuation, [handback]);
 			sendDeferredCustomMessage(runtimeCtx, {
@@ -197,6 +216,8 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 				display: false,
 				details,
 			});
+			markContinuationLaunched(queuedContinuation, now);
+			consumeHandbacks([handback], now);
 		}
 	}
 
@@ -207,8 +228,8 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 		now: number,
 	): void {
 		if (handbacks.length === 0) return;
-		const continuation = createContinuationRecord(parentSessionId, ownerModeId, handbacks, now);
-		consumeHandbacks(handbacks, now);
+		const queuedContinuation = createContinuationRecord(parentSessionId, ownerModeId, handbacks, now);
+		const continuation = { ...queuedContinuation, status: "launched" as const, updatedAt: now, launchedAt: now };
 		input.pi.appendEntry(ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, buildContinuationEntry(continuation));
 		const details = buildContinuationDetails(continuation, handbacks);
 		input.pi.sendMessage({
@@ -223,6 +244,8 @@ export function createHandbackDeliveryController<Lineage>(input: HandbackDeliver
 			display: false,
 			details,
 		}, { triggerTurn: true });
+		markContinuationLaunched(queuedContinuation, now);
+		consumeHandbacks(handbacks, now);
 	}
 
 	function queueHandback(run: OrchestratorRunRecord, event: AsyncCompleteEvent): OrchestratorHandbackRecord | undefined {
