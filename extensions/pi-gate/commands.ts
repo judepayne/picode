@@ -4,6 +4,7 @@ import { loadGateAutoConfig } from "./auto-approver/config.ts";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import { listConfiguredPiModels, managedLlamaBackendConfig, runGateAutoSetupScript, setGateAutoBackendFromSetup } from "./auto-approver/setup.ts";
 import { setGateAutoEnabled } from "../z-prompt-vars/prompt-vars.ts";
+import { extractRuntimeTrustFamilyNames } from "./runtime-trust.ts";
 import { BASE_PROFILE_NAME, type CompiledPolicy, type EffectiveGatePolicy, type LoadedPolicy } from "./policy-types.ts";
 import { resetAutoBlockState, type GateAutoBlockState } from "./semantic/decision-flow.ts";
 import { displayStatusPath, formatGateAutoStatusMessage, updateStatus } from "./status-ui.ts";
@@ -185,6 +186,7 @@ export function createGateCommandHandler(options: GateCommandOptions) {
 		if (!isCurrent()) return;
 		const autoStatus = autoManager.status(ctx);
 		const autoConfig = loadGateAutoConfig(ctx.cwd);
+		const runtimeTrustFamilies = extractRuntimeTrustFamilyNames(sessionAllows);
 		const summary = [
 			resolved.compiled ? `Gate profile=${resolved.compiled.profileName}` : "Gate profile=error",
 			resolved.compiled && resolved.compiled.lineageNames.length > 1 ? `lineage=${resolved.compiled.lineageNames.join(">")}` : undefined,
@@ -192,6 +194,7 @@ export function createGateCommandHandler(options: GateCommandOptions) {
 			profileLocked ? `profile locked by=${GATE_PROFILE_LOCK_ENV}` : undefined,
 			runtimeState.selectedProfileOverride ? `profile override=${runtimeState.selectedProfileOverride === BASE_PROFILE_NAME ? "base" : runtimeState.selectedProfileOverride}` : undefined,
 			`session approvals=${sessionAllows.size}`,
+			runtimeTrustFamilies.length > 0 ? `runtime trust=${runtimeTrustFamilies.join(", ")}` : undefined,
 			`auto enabled=${autoStatus.enabled}`,
 			`auto runtime=${runtimeState.autoRuntimeEnabled && autoManager.isEnabled()}`,
 			`auto startOnSession=${autoConfig.startOnSession}`,

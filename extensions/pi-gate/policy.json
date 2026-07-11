@@ -183,7 +183,6 @@
           "${cwd}/**/*.txt": "allow"
         },
         "bash": {
-          "*": "ask",
           "mkdir* /tmp*": "allow",
           "rm* /tmp*": "allow",
           "git add*": "deny",

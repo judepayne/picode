@@ -86,6 +86,10 @@ export function evaluateAbsolutePathsAcrossLineage(effective: EffectiveGatePolic
 
 export interface ProfileBashEvaluation {
 	decision: Decision;
+	commandDecision: Decision;
+	pathDecision: Decision;
+	externalDecision: Decision;
+	complexityDecision: Decision;
 	normalizedCommand: string;
 	analysis: MutationAnalysis;
 	pathCandidates: string[];
@@ -118,13 +122,20 @@ export function evaluateProfileBashCommand(effective: EffectiveGatePolicy, comma
 		finalAction = "ask";
 		reasons.push(`bash ask: ${analysis.reason}`);
 	}
-	if (analysis.complex && finalAction === "allow") {
+	const complexityDecision: Decision = analysis.complex
+		? { action: "ask", reasons: ["bash ask: complex shell command requires review"] }
+		: { action: "allow", reasons: [] };
+	if (complexityDecision.action === "ask" && finalAction === "allow") {
 		finalAction = "ask";
-		reasons.push("bash ask: complex shell command requires review");
+		reasons.push(...complexityDecision.reasons);
 	}
 
 	return {
 		decision: { action: finalAction, reasons },
+		commandDecision,
+		pathDecision,
+		externalDecision,
+		complexityDecision,
 		normalizedCommand,
 		analysis,
 		pathCandidates,

@@ -51,7 +51,8 @@ In policy mode, pi-gate:
 - shows the active profile in the footer as `gate:<profile>`
 - supports:
   - Allow once
-  - Allow for session
+  - Allow for session (the exact command/input)
+  - Allow all detected runtime-family executions for session (eligible policy-mode shell calls only)
 - can switch profiles at runtime and clears cached approvals when the profile changes
 - accepts inter-extension profile switch requests and, if a turn is active, queues the switch until `agent_end`
 - applies delegated subagent profile lineage ceilings from `PI_GATE_PROFILE_LINEAGE` by evaluating each concrete tool call against every profile in the lineage and choosing the strictest result (`deny > ask > allow`)
@@ -195,6 +196,27 @@ More complete example with a base policy plus two profiles:
   }
 }
 ```
+
+### Runtime-family session trust
+
+For eligible policy-mode shell asks, pi-gate adds a runtime-family choice to the normal approval menu, for example:
+
+```text
+Allow once
+Allow for session
+Allow all Python executions for session
+Deny
+```
+
+The initial families are Python (`python`, `python3`, versioned Python), Node.js (`node`, `nodejs`), JavaScript/TypeScript runtimes (`bun`, `deno`, `tsx`, `ts-node`), and shell interpreters (`sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, `pwsh`, `powershell`). A narrow `env NAME=value -- <runtime>` wrapper is supported, but command-lookup/startup changes and behavior-changing `env` options are not.
+
+Family trust includes recognized module, inline, stdin, quoted-delimiter heredoc, test-runner, local package-script, and shell `-c` forms. Unquoted heredocs remain on ordinary approval because the parent shell expands their bodies before launching the runtime. When a visible script file is supplied, it must exist and canonically resolve inside the current project; external scripts and symlink escapes use ordinary approval. Download-and-run launchers such as `npx`, `bunx`, `pnpm dlx`, `yarn dlx`, and `uvx` are excluded.
+
+The approval is in memory and scoped to the effective profile lineage and canonical project root. Profile changes, reload/shutdown, and `/gate clear` remove it. `/gate status` lists active runtime families, while the footer's `+N` remains the aggregate session-approval count.
+
+Policy denies and independently visible edit/external-directory asks are evaluated before runtime trust. Existing trusted families apply to independently evaluated `&&` and pipeline stages, but never approve adjacent stages. An untrusted runtime stage in a composite retains the existing block behavior rather than opening sequential prompts.
+
+This is launcher-level convenience, not executable attestation, script inspection, syscall mediation, or OS sandboxing. Inline code and trusted processes can perform operations not visible in the launcher command. Gate Auto does not offer or consume runtime-family trust.
 
 ## Auto mode
 

@@ -8,6 +8,8 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import { setGateAutoEnabled, setVar, setWriteLocation } from "../../z-prompt-vars/prompt-vars.ts";
 import { assessGateRisk } from "../risk.ts";
 import { getLastUserTurn } from "../session-context.ts";
+import { compilePolicy } from "../policy-compiler.ts";
+import { evaluateProfileBashCommand } from "../policy-evaluator.ts";
 import { loadGateAutoConfig } from "../auto-approver/config.ts";
 import { parseGateSemanticDecisionText } from "../semantic/client.ts";
 import { buildGateSemanticDynamicPayload, buildGateSemanticStableContext } from "../semantic/context.ts";
@@ -16,6 +18,7 @@ import { validateAutoConfigSemantics } from "../semantic/loader.ts";
 import piGate, { extractMutationTargets, setGateAutoBackendFromSetup, validatePolicySchema } from "../index.ts";
 import { GateAutoApproverManager } from "../auto-approver/manager.ts";
 import autoConfig from "../auto.json" with { type: "json" };
+import policy from "../policy.json" with { type: "json" };
 import schema from "../policy.schema.json" with { type: "json" };
 
 type ToolDecision = { block?: boolean; reason?: string } | undefined;
@@ -647,6 +650,55 @@ describe("pi-gate session context", () => {
 	});
 });
 
+describe("pi-gate effective profile policy", () => {
+	function effectiveProfile(profileName: string, cwd: string) {
+		const compiled = compilePolicy(policy as never, cwd, profileName);
+		return {
+			active: compiled,
+			lineage: [compiled],
+			lineageNames: [profileName],
+			profileName,
+			unattended: compiled.unattended,
+		};
+	}
+
+	it("lets Designer inherit Planner read-only Git allowances without weakening explicit denies", () => {
+		const cwd = makeWorkspace();
+		const effective = effectiveProfile("designer", cwd);
+		for (const command of [
+			"git status --short",
+			"git log -1",
+			"git diff --stat",
+			"git show HEAD",
+			"git branch --list",
+			"git remote -v",
+			"git config --get user.name",
+			"git ls-files",
+			"mkdir /tmp/picode-designer-test",
+			"rm /tmp/picode-designer-test",
+		]) {
+			assert.equal(evaluateProfileBashCommand(effective, command, cwd).decision.action, "allow", command);
+		}
+		for (const command of ["git add .", "git commit -m test", "git push origin main"]) {
+			assert.equal(evaluateProfileBashCommand(effective, command, cwd).decision.action, "deny", command);
+		}
+		const unknown = evaluateProfileBashCommand(effective, "python -m pytest", cwd);
+		assert.equal(unknown.decision.action, "ask");
+		assert.equal(unknown.commandDecision.action, "ask");
+		assert.equal(unknown.pathDecision.action, "allow");
+		assert.equal(unknown.externalDecision.action, "allow");
+		assert.equal(unknown.complexityDecision.action, "allow");
+	});
+
+	it("keeps Scout deny-by-default with explicit read-only Git allowances", () => {
+		const cwd = makeWorkspace();
+		const effective = effectiveProfile("scout", cwd);
+		assert.equal(evaluateProfileBashCommand(effective, "git status --short", cwd).decision.action, "allow");
+		assert.equal(evaluateProfileBashCommand(effective, "git log -1", cwd).decision.action, "allow");
+		assert.equal(evaluateProfileBashCommand(effective, "npm install", cwd).decision.action, "deny");
+	});
+});
+
 describe("pi-gate policy enforcement", () => {
 	it("keeps only the latest registration active across reload-style reinitialization", async () => {
 		process.env.GATE_PROFILE = "base";
@@ -925,6 +977,75 @@ describe("pi-gate policy enforcement", () => {
 		const decision = await pi.tool("bash", { command: "sudo true" }, ctx);
 		assert.equal(decision?.block, true);
 		assert.match(decision?.reason ?? "", /bash ask|denied/i);
+	});
+
+	it("stores, reports, reuses, and clears runtime-family session trust", async () => {
+		process.env.GATE_PROFILE = "planner";
+		const familyChoice = "Allow all Python executions for session";
+		const { pi, ctx } = createHarness({ selectChoice: familyChoice });
+		await pi.start(ctx);
+
+		assert.equal(await pi.tool("bash", { command: "python -m pytest" }, ctx), undefined);
+		assert.deepEqual(ctx.selectChoices.at(-1), ["Allow once", "Allow for session", familyChoice, "Deny"]);
+		assert.equal(ctx.statuses.gate, "gate:planner +1");
+
+		const callsAfterTrust = ctx.selectCalls;
+		assert.equal(await pi.tool("bash", { command: "python -c 'print(1)'" }, ctx), undefined);
+		assert.equal(ctx.selectCalls, callsAfterTrust);
+		assert.equal(await pi.tool("bash", { command: "python <<'PY'\nprint('a | b > c')\nPY" }, ctx), undefined);
+		assert.equal(ctx.selectCalls, callsAfterTrust);
+		assert.equal(await pi.tool("bash", { command: "python -m pytest && git status --short" }, ctx), undefined);
+		assert.equal(ctx.selectCalls, callsAfterTrust);
+
+		const gateCommand = pi.commands.get("gate");
+		assert.ok(gateCommand);
+		await gateCommand("status", ctx);
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /session approvals=1/);
+		assert.match(ctx.notifications.at(-1)?.message ?? "", /runtime trust=Python/);
+
+		ctx.cwd = makeWorkspace();
+		ctx.selectChoice = "Deny";
+		assert.equal((await pi.tool("bash", { command: "python -m pytest" }, ctx))?.block, true, "runtime trust must not cross project roots");
+		assert.deepEqual(ctx.selectChoices.at(-1), ["Allow once", "Allow for session", familyChoice, "Deny"]);
+
+		await gateCommand("clear", ctx);
+		assert.equal(ctx.statuses.gate, "gate:planner");
+		ctx.selectChoice = "Deny";
+		assert.equal((await pi.tool("bash", { command: "python -c 'print(2)'" }, ctx))?.block, true);
+	});
+
+	it("keeps runtime families scoped and does not bypass independent asks or chain stages", async () => {
+		process.env.GATE_PROFILE = "planner";
+		const { pi, ctx } = createHarness({ selectChoice: "Allow all Python executions for session" });
+		await pi.start(ctx);
+		assert.equal(await pi.tool("bash", { command: "python -m pytest" }, ctx), undefined);
+
+		const callsAfterTrust = ctx.selectCalls;
+		const untrustedChain = await pi.tool("bash", { command: "node -e 'console.log(1)' && git status --short" }, ctx);
+		assert.equal(untrustedChain?.block, true);
+		assert.equal(ctx.selectCalls, callsAfterTrust, "composite asks must not open a new prompt");
+
+		ctx.selectChoice = "Deny";
+		const independentAsk = await pi.tool("bash", { command: "bash -c 'touch /etc/picode-runtime-trust-test'" }, ctx);
+		assert.equal(independentAsk?.block, true);
+		assert.deepEqual(ctx.selectChoices.at(-1), ["Allow once", "Allow for session", "Deny"]);
+		const expandedHeredoc = await pi.tool("bash", { command: "python <<PY\n$(touch /etc/picode-runtime-trust-test)\nPY" }, ctx);
+		assert.equal(expandedHeredoc?.block, true);
+		assert.deepEqual(ctx.selectChoices.at(-1), ["Allow once", "Allow for session", "Deny"]);
+
+		process.env.PI_GATE_PROFILE_LINEAGE = "planner,scout";
+		const denied = await pi.tool("bash", { command: "python -m pytest" }, ctx);
+		assert.equal(denied?.block, true);
+		assert.match(denied?.reason ?? "", /bash deny|unattended/i);
+	});
+
+	it("keeps ordinary session approval exact-command-only", async () => {
+		process.env.GATE_PROFILE = "planner";
+		const { pi, ctx } = createHarness({ selectChoice: "Allow for session" });
+		await pi.start(ctx);
+		assert.equal(await pi.tool("bash", { command: "python -m pytest" }, ctx), undefined);
+		ctx.selectChoice = "Deny";
+		assert.equal((await pi.tool("bash", { command: "python -c 'print(1)'" }, ctx))?.block, true);
 	});
 
 	it("does not start configured gate auto on session start unless opted in", async () => {

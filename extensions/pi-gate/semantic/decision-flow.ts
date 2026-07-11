@@ -12,6 +12,11 @@ const MAX_SESSION_ALLOWS = 100;
 const AUTO_BLOCK_CONSECUTIVE_PROMPT_THRESHOLD = 3;
 const AUTO_BLOCK_TOTAL_PROMPT_THRESHOLD = 20;
 
+export interface AdditionalSessionApproval {
+	key: string;
+	label: string;
+}
+
 async function confirmDecision(
 	ctx: ExtensionContext,
 	title: string,
@@ -21,15 +26,23 @@ async function confirmDecision(
 	profileName: string,
 	locked = false,
 	autoEnabled = false,
+	additionalSessionApproval?: AdditionalSessionApproval,
 ): Promise<{ allow: boolean; sessionStored: boolean }> {
 	if (!ctx.hasUI) return { allow: false, sessionStored: false };
-	const choices = autoEnabled ? ["Allow once", "Deny"] : ["Allow once", "Allow for session", "Deny"];
+	const choices = autoEnabled
+		? ["Allow once", "Deny"]
+		: ["Allow once", "Allow for session", ...(additionalSessionApproval ? [additionalSessionApproval.label] : []), "Deny"];
 	const choice = await ctx.ui.select(`${title}\n\n${message}`, choices);
 	if (choice === "Allow once") return { allow: true, sessionStored: false };
-	if (!autoEnabled && choice === "Allow for session") {
+	const storedKey = !autoEnabled && choice === "Allow for session"
+		? sessionKey
+		: !autoEnabled && additionalSessionApproval && choice === additionalSessionApproval.label
+			? additionalSessionApproval.key
+			: undefined;
+	if (storedKey) {
 		// Cap at MAX_SESSION_ALLOWS to prevent unbounded memory growth.
 		if (sessionAllows.size >= MAX_SESSION_ALLOWS) sessionAllows.clear();
-		sessionAllows.add(sessionKey);
+		sessionAllows.add(storedKey);
 		updateStatus(ctx, profileName, sessionAllows, false, locked, autoEnabled);
 		return { allow: true, sessionStored: true };
 	}
@@ -70,6 +83,7 @@ export interface GateAskDecisionInput {
 		normalizedCommand: string;
 		analysis: MutationAnalysis;
 	};
+	additionalSessionApproval?: AdditionalSessionApproval;
 }
 
 function buildAutoApprovalRequest(input: GateAskDecisionInput): GateAutoApprovalRequest {
@@ -162,6 +176,7 @@ export async function promptForAskDecision(
 		input.effective.profileName,
 		profileLocked,
 		autoEnabled,
+		input.additionalSessionApproval,
 	);
 	if (result.allow) return { allowed: true };
 	return { block: true, reason: pickReason(input.reasons, "ask", input.fallbackDenyReason) };

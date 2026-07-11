@@ -6,12 +6,21 @@ import { loadGateSemanticConfig } from "../semantic/loader.ts";
 import { isGateSemanticSubject } from "../semantic/types.ts";
 import type { GateSemanticSubject } from "../semantic/types.ts";
 import { buildAbsolutePathGroups, buildExternalDirectoryGroups, isPathSubject, normalizeAbsPath, normalizeCommand } from "../matching.ts";
-import { evaluateAbsolutePathsAcrossLineage, evaluateExternalDirectoryAcrossLineage, evaluateProfileBashCommand, evaluateSubjectAcrossLineage, pickMoreRestrictive } from "../policy-evaluator.ts";
+import { evaluateAbsolutePathsAcrossLineage, evaluateExternalDirectoryAcrossLineage, evaluateProfileBashCommand, evaluateSubjectAcrossLineage, pickMoreRestrictive, type ProfileBashEvaluation } from "../policy-evaluator.ts";
 import { extractMutationTargets } from "../shell-mutation.ts";
 import { analyzePolicyBashComposite, buildBashSessionKey, buildPathSessionKey, getChainUnsafeShellSegmentReason } from "../policy-shell.ts";
 import { SEMANTIC_GENERIC_TOOL_NAMES, getGenericToolSubjectGroups, getToolPathCandidates, getToolPermissionSubject, getToolSubjectGroups } from "../tool-classification.ts";
 import { getSemanticRole, pickReason, promptForAskDecision, resolveAskDecision, resolveSemanticDecision, type GateAutoBlockState } from "../semantic/decision-flow.ts";
+import { buildRuntimeFamilyApprovalKey, classifyRuntimeCommand, runtimeCandidateOwnsComplexity, type RuntimeTrustCandidate } from "../runtime-trust.ts";
 import type { EffectiveGatePolicy } from "../policy-types.ts";
+
+function canRuntimeTrustResolveAsk(evaluation: ProfileBashEvaluation, candidate: RuntimeTrustCandidate): boolean {
+	if (evaluation.decision.action !== "ask") return false;
+	if (evaluation.commandDecision.action === "deny" || evaluation.pathDecision.action === "deny" || evaluation.externalDecision.action === "deny") return false;
+	if (evaluation.pathDecision.action !== "allow" || evaluation.externalDecision.action !== "allow") return false;
+	if (evaluation.complexityDecision.action === "ask" && !runtimeCandidateOwnsComplexity(candidate)) return false;
+	return evaluation.commandDecision.action === "allow" || evaluation.commandDecision.action === "ask";
+}
 
 export interface GateToolHandlerOptions {
  extensionDir: string;
@@ -280,7 +289,10 @@ export function createGateToolHandler(options: GateToolHandlerOptions) {
 			const sessionKey = scopeSessionKey(compiled, buildBashSessionKey(command));
 			if (sessionAllows.has(sessionKey)) return undefined;
 
-			const composite = analyzePolicyBashComposite(command);
+			const runtimeCandidate = classifyRuntimeCommand(command, ctx.cwd);
+			const scopedRuntimeKey = (candidate: RuntimeTrustCandidate): string =>
+				scopeSessionKey(compiled, buildRuntimeFamilyApprovalKey(candidate.family, ctx.cwd));
+			const composite = runtimeCandidate?.syntax === "heredoc" ? undefined : analyzePolicyBashComposite(command);
 			if (composite?.error) return { block: true, reason: `Gate blocked bash command chain: ${composite.error}` };
 			if (composite?.segments) {
 				for (const segment of composite.segments) {
@@ -289,24 +301,38 @@ export function createGateToolHandler(options: GateToolHandlerOptions) {
 						return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${chainUnsafeReason}` };
 					}
 					const segmentEvaluation = evaluateProfileBashCommand(compiled, segment, ctx.cwd);
-					if (segmentEvaluation.decision.action !== "allow") {
-						const reason = segmentEvaluation.decision.action === "deny"
-							? pickReason(segmentEvaluation.decision.reasons, "deny", "Gate denied bash command chain")
-							: pickReason(segmentEvaluation.decision.reasons, "ask", "Gate blocked bash command chain: a component requires review");
-						return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${reason}` };
-					}
+					if (segmentEvaluation.decision.action === "allow") continue;
+					const segmentCandidate = classifyRuntimeCommand(segment, ctx.cwd);
+					if (
+						segmentCandidate
+						&& canRuntimeTrustResolveAsk(segmentEvaluation, segmentCandidate)
+						&& sessionAllows.has(scopedRuntimeKey(segmentCandidate))
+					) continue;
+					const reason = segmentEvaluation.decision.action === "deny"
+						? pickReason(segmentEvaluation.decision.reasons, "deny", "Gate denied bash command chain")
+						: pickReason(segmentEvaluation.decision.reasons, "ask", "Gate blocked bash command chain: a component requires review");
+					return { block: true, reason: `Gate blocked bash command chain at ${JSON.stringify(segment)}: ${reason}` };
 				}
 				return undefined;
 			}
 
-			const evaluation = evaluateProfileBashCommand(compiled, command, ctx.cwd);
-			const { normalizedCommand, analysis } = evaluation;
+			const evaluation = evaluateProfileBashCommand(compiled, runtimeCandidate?.policyCommand ?? command, ctx.cwd);
+			const normalizedCommand = normalizeCommand(command);
+			const { analysis } = evaluation;
 			const reasons = evaluation.decision.reasons;
 
 			if (evaluation.decision.action === "allow") return undefined;
 			if (evaluation.decision.action === "deny") {
 				return { block: true, reason: pickReason(reasons, "deny", "Gate denied bash command") };
 			}
+
+			const runtimeApproval = runtimeCandidate && canRuntimeTrustResolveAsk(evaluation, runtimeCandidate)
+				? {
+					key: scopedRuntimeKey(runtimeCandidate),
+					label: `Allow all ${runtimeCandidate.displayName} executions for session`,
+				}
+				: undefined;
+			if (runtimeApproval && sessionAllows.has(runtimeApproval.key)) return undefined;
 
 			return await resolveAskDecision(
 				{
@@ -326,6 +352,7 @@ export function createGateToolHandler(options: GateToolHandlerOptions) {
 					subject: "bash",
 					pathCandidates: evaluation.pathCandidates,
 					bash: { command, normalizedCommand, analysis },
+					additionalSessionApproval: runtimeApproval,
 				},
 				sessionAllows,
 				profileLocked,
