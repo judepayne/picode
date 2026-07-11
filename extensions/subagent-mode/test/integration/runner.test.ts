@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 
 import { runChild } from "../../runner.ts";
+import { piIntegrationEnv, piIntegrationModel } from "./pi-test-config.ts";
 import {
 	EVENT_CHILD_COMPLETE,
 	EVENT_CHILD_STARTED,
@@ -46,6 +47,7 @@ describe("runner: end-to-end against real pi child", { skip: !piInstalled() }, (
 					childId: "e2e-child",
 					agent: "scout",
 					task: "Say exactly 'Hello world' and nothing else.",
+					model: piIntegrationModel,
 					context: "fresh",
 					depth: 0,
 					maxSubagentDepth: 2,
@@ -60,6 +62,7 @@ describe("runner: end-to-end against real pi child", { skip: !piInstalled() }, (
 					onEvent: (event) => events.push(event),
 				},
 				{
+					extraEnv: piIntegrationEnv,
 					extensions: [], // --no-extensions to skip discovery (faster, deterministic)
 					disableSkills: true,
 				},
@@ -120,6 +123,7 @@ describe("runner: end-to-end against real pi child", { skip: !piInstalled() }, (
 				childId: "cancel-child",
 				agent: "scout",
 				task: "Count slowly from one to one hundred, listing each number on its own line.",
+				model: piIntegrationModel,
 				context: "fresh",
 				depth: 0,
 				maxSubagentDepth: 2,
@@ -129,6 +133,7 @@ describe("runner: end-to-end against real pi child", { skip: !piInstalled() }, (
 				signal: controller.signal,
 			},
 			{
+				extraEnv: piIntegrationEnv,
 				extensions: [],
 				disableSkills: true,
 			},

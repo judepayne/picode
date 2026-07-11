@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import { describe, test } from "node:test";
 
 import { runAsyncMain } from "../../async-executor.ts";
+import { piIntegrationEnv, piIntegrationModel } from "./pi-test-config.ts";
 import {
 	asyncConfigPath,
 	asyncRunDir,
@@ -49,6 +50,8 @@ describe("async-runner persistence", { skip: !piInstalled() }, () => {
 				context: "fresh",
 				agent: "scout",
 				task: "Say exactly 'async-hello' and nothing else.",
+				model: piIntegrationModel,
+				env: piIntegrationEnv,
 				childIds: [childSessionId],
 				nodeLog: {
 					nodeLogsDir,
