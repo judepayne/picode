@@ -152,6 +152,7 @@ interface CustomSessionEntry {
 	data?: {
 		modeId?: string;
 		targetModeId?: string;
+		handoffPrompt?: string;
 		subagents?: string[];
 		bannedSubagents?: string[];
 	};
@@ -379,6 +380,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	let modes: ModeDefinition[] = [];
 	let currentIndex = 0;
 	let pendingModeIndex: number | undefined;
+	let pendingHandoffPrompt: string | undefined;
 	let loadError: string | undefined;
 	let loadWarnings: string[] = [];
 
@@ -399,6 +401,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		loadError = undefined;
 		loadWarnings = [];
 		pendingModeIndex = undefined;
+		pendingHandoffPrompt = undefined;
 		const { agents: cards, diagnostics } = collectAgentAssetSnapshot(pi);
 		const discovered = new Map<string, ModeDefinition>();
 		let lastError: string | undefined;
@@ -463,10 +466,11 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		});
 	}
 
-	function persistPendingModeSwitch(mode: ModeDefinition): void {
+	function persistPendingModeSwitch(mode: ModeDefinition, handoffPrompt?: string): void {
 		pi.appendEntry(MODE_HANDOFF_MESSAGE_TYPE, {
 			targetMode: mode.name,
 			targetModeId: mode.id,
+			...(handoffPrompt ? { handoffPrompt } : {}),
 		});
 	}
 
@@ -575,6 +579,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 
 		pendingModeIndex = undefined;
+		pendingHandoffPrompt = undefined;
 		currentIndex = nextIndex;
 		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
@@ -587,6 +592,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			return;
 		}
 		pendingModeIndex = undefined;
+		pendingHandoffPrompt = undefined;
 		currentIndex = (currentIndex + 1) % modes.length;
 		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
@@ -599,6 +605,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			return;
 		}
 		pendingModeIndex = undefined;
+		pendingHandoffPrompt = undefined;
 		currentIndex = (currentIndex - 1 + modes.length) % modes.length;
 		persistCurrentMode({ force: true });
 		await applyCurrentMode(ctx, { persist: true });
@@ -621,7 +628,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}, modeHandoffOptions(ctx));
 	}
 
-	function queueModeSwitchForTool(ctx: ExtensionContext, identifier: string): { mode?: ModeDefinition; error?: string } {
+	function queueModeSwitchForTool(ctx: ExtensionContext, identifier: string, handoffPrompt?: string): { mode?: ModeDefinition; error?: string } {
 		if (modes.length === 0) {
 			updateStatus(ctx);
 			return { error: loadError ? `Agent mode: ${loadError}` : "Agent mode: no modes loaded" };
@@ -629,19 +636,22 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		const nextIndex = findModeIndex(identifier);
 		if (nextIndex < 0) return { error: `Agent mode: unknown mode \"${identifier}\"` };
 		pendingModeIndex = nextIndex;
+		pendingHandoffPrompt = handoffPrompt;
 		const mode = modes[nextIndex];
-		if (mode) persistPendingModeSwitch(mode);
+		if (mode) persistPendingModeSwitch(mode, handoffPrompt);
 		return { mode };
 	}
 
-	function latestDurablePendingModeId(ctx: ExtensionContext): string | undefined {
+	function latestDurablePendingMode(ctx: ExtensionContext): { modeId: string; handoffPrompt?: string } | undefined {
 		const branch = ctx.sessionManager.getBranch();
 		for (let i = branch.length - 1; i >= 0; i--) {
 			const entry = branch[i] as CustomSessionEntry;
 			if (entry?.type === "custom" && entry.customType === MODE_STATE_ENTRY_TYPE) return undefined;
 			if (entry?.customType !== MODE_HANDOFF_MESSAGE_TYPE) continue;
-			if (entry.type === "custom") return entry.data?.targetModeId;
-			if (entry.type === "custom_message") return entry.details?.targetModeId;
+			const modeId = entry.type === "custom" ? entry.data?.targetModeId : entry.details?.targetModeId;
+			if (!modeId) return undefined;
+			const handoffPrompt = entry.type === "custom" ? entry.data?.handoffPrompt : undefined;
+			return { modeId, ...(handoffPrompt ? { handoffPrompt } : {}) };
 		}
 		return undefined;
 	}
@@ -649,7 +659,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	async function applyPendingModeSwitch(ctx: ExtensionContext): Promise<ModeDefinition | undefined> {
 		let nextIndex = pendingModeIndex;
 		if (nextIndex === undefined) {
-			const durableModeId = latestDurablePendingModeId(ctx);
+			const durableModeId = latestDurablePendingMode(ctx)?.modeId;
 			if (durableModeId) nextIndex = findModeIndex(durableModeId);
 			if (durableModeId && nextIndex < 0) {
 				persistCurrentMode({ force: true });
@@ -670,6 +680,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		}
 		currentIndex = nextIndex;
 		pendingModeIndex = undefined;
+		pendingHandoffPrompt = undefined;
 		await applyCurrentMode(ctx, { persist: false });
 		persistCurrentMode({ force: true });
 		return getCurrentMode();
@@ -726,7 +737,11 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(`Agent mode assets: ${warning}`, "warning");
 		}
 		if (modes.length > 0) {
-			await applyCurrentMode(ctx, { persist: !latestDurablePendingModeId(ctx) });
+			const durablePending = latestDurablePendingMode(ctx);
+			if (durablePending?.handoffPrompt && readAutomodeEnabled(ctx, getCurrentMode()?.id) === "true") {
+				pendingHandoffPrompt = durablePending.handoffPrompt;
+			}
+			await applyCurrentMode(ctx, { persist: !durablePending });
 		}
 	});
 
@@ -740,6 +755,27 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		return {
 			systemPrompt: `${buildModeSystemPrompt(ctx, current)}\n\n${event.systemPrompt}\n`,
 		};
+	});
+
+	function launchPendingHandoff(ctx: ExtensionContext): void {
+		const handoffPrompt = pendingHandoffPrompt;
+		if (!handoffPrompt || !ctx.isIdle()) return;
+		if (readAutomodeEnabled(ctx, getCurrentMode()?.id) !== "true") {
+			pendingModeIndex = undefined;
+			pendingHandoffPrompt = undefined;
+			persistCurrentMode({ force: true });
+			return;
+		}
+		pi.sendUserMessage(`Agent-mode handoff (system-generated, not user input): ${handoffPrompt}`);
+		pendingHandoffPrompt = undefined;
+	}
+
+	pi.on("agent_settled", (_event, ctx) => {
+		launchPendingHandoff(ctx);
+	});
+
+	pi.on("resources_discover", (_event, ctx) => {
+		launchPendingHandoff(ctx);
 	});
 
 	pi.on("tool_call", async (event) => {
@@ -819,16 +855,13 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 				};
 			}
 
-			const result = queueModeSwitchForTool(ctx, requestedMode);
+			const result = queueModeSwitchForTool(ctx, requestedMode, triggerTurn ? handoffPrompt : undefined);
 			if (!result.mode) {
 				return {
 					content: [{ type: "text" as const, text: result.error ?? `Agent mode: unknown mode \"${requestedMode}\"` }],
 					isError: true,
 					details: { mode: requestedMode },
 				};
-			}
-			if (triggerTurn) {
-				sendModeHandoffMessage(ctx, result.mode, handoffPrompt);
 			}
 			return {
 				content: [{ type: "text" as const, text: `Queued agent mode switch to ${result.mode.name}${triggerTurn ? " and queued a handoff turn" : " for the next agent turn"}.` }],
@@ -855,7 +888,9 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 
 				if (action === "off") {
 					pendingModeIndex = undefined;
+					pendingHandoffPrompt = undefined;
 					setAutomodeEnabled(ctx.cwd, false, current?.id);
+					persistCurrentMode({ force: true });
 					await applyCurrentMode(ctx, { persist: false, notify: false });
 					ctx.ui.notify("Automode off.", "info");
 					return;

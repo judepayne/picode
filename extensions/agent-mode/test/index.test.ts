@@ -70,6 +70,7 @@ class FakePi {
 	readonly commands = new Map<string, { handler: CommandHandler; getArgumentCompletions?: (prefix: string) => unknown[] }>();
 	readonly tools = new Map<string, ToolRegistration>();
 	readonly sentMessages: Array<{ message: Record<string, unknown>; options?: Record<string, unknown> }> = [];
+	readonly sentUserMessages: string[] = [];
 	readonly sessionEntries: unknown[] = [];
 	toolCallHandler?: ToolCallHandler;
 	activeTools: string[] = [];
@@ -120,6 +121,10 @@ class FakePi {
 	sendMessage(message: Record<string, unknown>, options?: Record<string, unknown>): void {
 		this.sentMessages.push({ message, options });
 		this.sessionEntries.push({ type: "custom_message", customType: message.customType, details: message.details, content: message.content });
+	}
+
+	sendUserMessage(content: string): void {
+		this.sentUserMessages.push(content);
 	}
 
 	async emitLifecycle(event: string, payload: Record<string, unknown>, ctx: FakeContext): Promise<unknown> {
@@ -302,10 +307,12 @@ describe("agent-mode extension entrypoint", () => {
 		const blocked = await pi.tool("bash", { command: "rm -rf dist" }, ctx);
 		assert.equal(blocked?.block, true);
 		assert.match(blocked?.reason ?? "", /Mode Planner only allows read-only bash/);
-		assert.equal(pi.sentMessages.length, 1);
-		assert.equal(pi.sentMessages[0]?.message.customType, "agent-mode-handoff");
-		assert.match(String(pi.sentMessages[0]?.message.content), /system-generated, not user input/);
-		assert.deepEqual(pi.sentMessages[0]?.options, { triggerTurn: true, deliverAs: "followUp" });
+		assert.equal(pi.sentMessages.length, 0);
+		assert.equal(pi.sentUserMessages.length, 0);
+		ctx.idle = true;
+		await pi.emitLifecycle("agent_settled", {}, ctx);
+		assert.equal(pi.sentUserMessages.length, 1);
+		assert.match(pi.sentUserMessages[0] ?? "", /system-generated, not user input/);
 
 		const promptResult = await pi.emitLifecycle("before_agent_start", { systemPrompt: "base prompt" }, ctx) as { systemPrompt?: string };
 		assert.match(promptResult.systemPrompt ?? "", /The canonical active mode for this turn is Builder/);
@@ -341,6 +348,9 @@ describe("agent-mode extension entrypoint", () => {
 		const freshCtx = new FakeContext(cwd, [...pi.sessionEntries]);
 		await freshPi.emitLifecycle("session_start", {}, freshCtx);
 		assert.equal(process.env.GATE_PROFILE, "planner");
+		await freshPi.emitLifecycle("resources_discover", {}, freshCtx);
+		assert.equal(freshPi.sentUserMessages.length, 1);
+		assert.match(freshPi.sentUserMessages[0] ?? "", /Implement the plan/);
 
 		const promptResult = await freshPi.emitLifecycle("before_agent_start", { systemPrompt: "base prompt" }, freshCtx) as { systemPrompt?: string };
 		assert.match(promptResult.systemPrompt ?? "", /The canonical active mode for this turn is Builder/);
