@@ -163,6 +163,14 @@
         }
       }
     },
+    "partner-reviewer": {
+      "inherits-from": "reviewer",
+      "permission": {
+        "edit": {
+          "*": "deny"
+        }
+      }
+    },
     "reviewer": {
       "inherits-from": "planner"
     },

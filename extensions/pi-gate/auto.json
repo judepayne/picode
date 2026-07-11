@@ -124,6 +124,16 @@
     "worker": {
       "guidance": "Allow focused implementation inside the project for the delegated task. Block external, broad, unrelated, destructive, credential, network, publishing, or privilege-related actions."
     },
+    "partner-reviewer": {
+      "guidance": "Allow read-only initial and closure code review, current-diff inspection, and focused validation. Do not allow edits or mutating commands.",
+      "hardDeny": {
+        "edit": ["*"]
+      },
+      "alwaysAllow": {
+        "read": ["${cwd}/**"],
+        "bash": ["pwd", "ls*", "cat*", "head*", "tail*", "rg*", "grep*", "find*", "git status*", "git diff*", "node --test*", "npm test*"]
+      }
+    },
     "reviewer": {
       "guidance": "Allow read-only review and validation. Do not allow edits.",
       "hardDeny": {

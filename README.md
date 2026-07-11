@@ -8,7 +8,7 @@ npm: https://www.npmjs.com/package/@judepayne/picode
 
 `picode` is a Pi package for running Pi with a disciplined, role-based workflow that still feels fast and powerful.
 
-It gives you named runtime modes — **Builder**, **Planner** and **Designer** — plus delegated **subagents** such as scout, worker and reviewer. Switch modes with `Ctrl + ,` and `Ctrl + .`, or dispatch a subagent directly with `~scout`, `~worker`, `~reviewer`.
+It gives you named runtime modes — **Builder**, **Planner** and **Designer** — plus delegated **subagents** such as scout, worker, reviewer and Partner Reviewer. Switch modes with `Ctrl + ,` and `Ctrl + .`, or dispatch a subagent directly with `~scout`, `~worker`, `~reviewer`, `~partner-reviewer`.
 
 Picode's goal is to give you a significant boost whilst remaining unobtrusive.
 
@@ -22,7 +22,7 @@ Picode splits those concerns into **runtime modes**. You switch between speciali
 
 You are not just telling Pi to "act like a planner." You are putting it into a runtime that behaves like one.
 
-On top of that, the active agent can delegate bounded work to **subagents** — scout, worker and reviewer — which are not role-play prompts but standalone utilities with their own instructions, tools and gate profiles. They run independently and hand back structured results, so the main agent stays focused while the specialist does the reconnaissance, implementation, or review.
+On top of that, the active agent can delegate bounded work to **subagents** — scout, worker, reviewer and Partner Reviewer — which are not role-play prompts but standalone utilities with their own instructions, tools and gate profiles. They run independently and hand back structured results, so the main agent stays focused while the specialist does the reconnaissance, implementation, or review.
 
 None of this is baked in. Every agent and subagent is just a markdown file. Don't like the shipped set? Change them, delete them, or add your own specialist subagents.
 
@@ -108,7 +108,7 @@ Once that is done, a good quick smoke test is:
 | See current agent | `/agents` |
 | Switch agent | `/agents <name>` or `Ctrl + ,` / `Ctrl + .` |
 | Start automode from Designer | `/automode` or `/automode on` |
-| Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>` |
+| Run a subagent directly | `~scout <task>`, `~worker <task>`, `~reviewer <task>`, `~partner-reviewer <task>` |
 | Delegate through the active agent | Just ask in plain English |
 | Check / set prompt vars | `/vars` or `/vars set <key> <value>` |
 | Local auto gate approval | `/gate auto on`, `/gate auto status` |
@@ -130,7 +130,7 @@ Pi-gate rules resolve to `allow`, `ask`, or `deny`. For the top-level agents, th
 
 Optionally, `/gate auto on` enables semantic auto-approval for the current Pi session. It uses `auto.json` hard-denies, optional role-specific always-allows, and per-agent/subagent natural-language guidance instead of policy `ask` rules. Policy denies and hard denies remain final, model allows are one-call-only, grey-area calls go to the semantic approver with trusted sequential context, and repeated model blocks pause into normal prompting. It does not auto-start after a Pi restart unless `gate.auto.startOnSession=true` is set. `/gate auto setup` can configure either a managed local llama.cpp backend or a model from Pi's configured model registry.
 
-Third, the main agent can delegate bounded work to **subagents** such as scout, worker, and reviewer. Those subagents are not role-play. They run from their own markdown cards with their own tools and instructions.
+Third, the main agent can delegate bounded work to **subagents** such as scout, worker, reviewer, and Partner Reviewer. Those subagents are not role-play. They run from their own markdown cards with their own tools and instructions.
 
 Fourth, prompts can interpolate project-aware values such as the active plan path and design path. That keeps prompts portable and lets the shipped agents adapt to the current workspace without hardcoding absolute paths.
 
@@ -212,7 +212,12 @@ Subagents are delegated helpers. The shipped set is:
 
 - `scout` for reconnaissance
 - `worker` for bounded implementation or validation work
-- `reviewer` for an independent review pass
+- `reviewer` for an independent one-shot review pass
+- `partner-reviewer` for a resumable full-review and closure-review cycle
+
+Builder automatically uses Partner Reviewer when the current implementation changes five or more unique files. That behaviour is enabled by one sentence in `extensions/agent-assets/agents/01-builder.md`; removing the sentence restores the ordinary review policy while leaving direct `~partner-reviewer` invocation available.
+
+Partner Reviewer runs asynchronously. After Builder addresses material findings, it resumes the same reviewer conversation with explicit `context: "continue"` and the latest `childSessionId`. Each stage is a separate child process—the reviewer is resumable, not permanently resident—and the bounded cycle stops on a `clean` or `acceptable` verdict.
 
 Like agents, subagents have their own settings: tools, model, thinking level, body prompt, and `maxSubagentDepth`.
 
@@ -222,19 +227,21 @@ You can invoke them directly from the prompt line:
 ~scout inspect how config is loaded
 ~worker implement the smallest safe fix and run the relevant test file
 ~reviewer inspect the current working tree diff and report findings by severity
+~partner-reviewer perform an initial full review of this implementation
 ```
 
 Or you can just ask the current agent to orchestrate the work for you in plain English.
 
 Subagents can run sync or async. Direct `~subagent` use is async and lightweight by design.
 
-They also sit under their own gate profiles. This is where the permission story gets more interesting. The shipped subagent profiles are marked as **unattended**, which means they are designed to run without stopping for interactive `ask` decisions mid-flight. In practice that means the profiles lean toward explicit `allow` or `deny` rules instead.
+They also sit under their own gate profiles. This is where the permission story gets more interesting. Subagent children run without interactive approval prompts, so their profiles favour explicit `allow` or `deny` decisions; unresolved `ask` decisions fail closed. Scout and worker are explicitly marked **unattended**, while reviewer and Partner Reviewer inherit the read-oriented Planner policy.
 
 For example:
 
 - `scout` is tightly read-oriented, can write only to orchestrator artifact locations when needed, and has `maxSubagentDepth: 1`
 - `worker` is allowed to mutate files but has sharp denials around things like `git push`, `sudo`, and pipe-to-shell download patterns, and has `maxSubagentDepth: 0`
 - `reviewer` is read-only in spirit and does not edit files, with `maxSubagentDepth: 0`
+- `partner-reviewer` has the same read-only boundary and uses persisted continuation context for a bounded closure review
 
 That combination is important: prompt, tools, gate profile, and depth limit all reinforce the intended role.
 
@@ -336,7 +343,7 @@ Built-in subagent cards live under:
 
 - `extensions/agent-assets/subagents/`
 
-These define delegated specialists such as scout, worker, and reviewer.
+These define delegated specialists such as scout, worker, reviewer, and Partner Reviewer.
 
 ### 3. Add user overlays
 

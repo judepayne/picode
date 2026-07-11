@@ -9,7 +9,7 @@ import { setGateAutoEnabled, setVar, setWriteLocation } from "../../z-prompt-var
 import { assessGateRisk } from "../risk.ts";
 import { getLastUserTurn } from "../session-context.ts";
 import { compilePolicy } from "../policy-compiler.ts";
-import { evaluateProfileBashCommand } from "../policy-evaluator.ts";
+import { evaluateAbsolutePathsAcrossLineage, evaluateProfileBashCommand } from "../policy-evaluator.ts";
 import { loadGateAutoConfig } from "../auto-approver/config.ts";
 import { parseGateSemanticDecisionText } from "../semantic/client.ts";
 import { buildGateSemanticDynamicPayload, buildGateSemanticStableContext } from "../semantic/context.ts";
@@ -547,6 +547,31 @@ describe("pi-gate auto config and evaluator", () => {
 		assert.equal(result.action, "block");
 	});
 
+	it("defines read-only Gate Auto guidance for Partner Reviewer", () => {
+		const cwd = makeWorkspace();
+		const edit = evaluateGateSemantic({
+			config: autoConfig,
+			cwd,
+			subject: "edit",
+			groups: [{ display: path.join(cwd, "src/example.ts"), values: [path.join(cwd, "src/example.ts"), "src/example.ts"] }],
+			roleType: "subagent",
+			roleName: "partner-reviewer",
+		});
+		assert.equal(edit.action, "block");
+		assert.match(edit.role.guidance, /initial and closure code review/);
+
+		const diff = evaluateGateSemantic({
+			config: autoConfig,
+			cwd,
+			subject: "bash",
+			groups: [{ display: "git diff --stat", values: ["git diff --stat"] }],
+			roleType: "subagent",
+			roleName: "partner-reviewer",
+			bashCommand: "git diff --stat",
+		});
+		assert.equal(diff.action, "allow");
+	});
+
 	it("keeps alwaysAllow role-specific and rejects unsafe shell chains", () => {
 		const cwd = makeWorkspace();
 		const config = {
@@ -696,6 +721,20 @@ describe("pi-gate effective profile policy", () => {
 		assert.equal(evaluateProfileBashCommand(effective, "git status --short", cwd).decision.action, "allow");
 		assert.equal(evaluateProfileBashCommand(effective, "git log -1", cwd).decision.action, "allow");
 		assert.equal(evaluateProfileBashCommand(effective, "npm install", cwd).decision.action, "deny");
+	});
+
+	it("lets Partner Reviewer inherit Reviewer inspection while denying every edit", () => {
+		const cwd = makeWorkspace();
+		const effective = effectiveProfile("partner-reviewer", cwd);
+		assert.equal(effective.unattended, false);
+		assert.equal(evaluateProfileBashCommand(effective, "git diff --stat", cwd).decision.action, "allow");
+		for (const target of [path.join(cwd, "src/example.ts"), path.join(cwd, ".pi/plans/active.md")]) {
+			assert.equal(evaluateAbsolutePathsAcrossLineage(effective, "edit", [target], cwd).action, "deny", target);
+		}
+		assert.equal(
+			evaluateProfileBashCommand(effective, "echo changed > .pi/plans/active.md", cwd).decision.action,
+			"deny",
+		);
 	});
 });
 
