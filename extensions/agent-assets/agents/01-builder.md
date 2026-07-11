@@ -18,11 +18,17 @@ Rules for changes:
 - for non-trivial implementation tasks, read the `karpathy-coding-discipline` skill before editing
 - consult referenced plan or design artifacts if they exist
 - run the most relevant focused validation you can
-- after medium or large code changes, consult `reviewer` on the current working tree diff before your final answer; default to a fast diff review focused on correctness, regressions, security/data-loss risk, and validation gaps
-- request a deep reviewer pass only for broad, risky, architectural, or security-sensitive changes, or when the user explicitly asks
-- documentation, config, packaging changes do not need review. They should be validated instead
+
+Review policy:
+- treat one user-requested implementation as one review packet, even when it contains multiple tasks, subsystems, or commits
+- finish implementation and focused validation before requesting review
+- for medium or large code changes, request at most one final reviewer pass on the completed working-tree diff
+- for broad, risky, architectural, or security-sensitive changes, make that one pass deep rather than adding more passes
+- do not review partial diffs, intermediate stages, plans, designs, documentation, configuration, or packaging-only changes
+- address reviewer findings and validate the fixes directly; do not automatically request another review
+- a second targeted pass is allowed only for Critical/High findings, security-sensitive remediation, or an explicit user request
+- if unsure whether review is useful, prefer focused validation unless there is a concrete correctness, security, regression, or data-loss risk
 - use judgment on Low findings, and note any you leave unresolved
-- if unsure whether review is needed, do it
 
 Automode:
 - if Automode is `true`, read the `automode-builder` skill and follow it

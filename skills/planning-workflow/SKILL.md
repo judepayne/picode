@@ -53,6 +53,8 @@ For each impacted file or area, capture:
 Consider alternatives only when there is a real design choice.
 
 ### 5. Validate the plan
+This validation is Planner-owned. Do not delegate the completed plan for review unless the user explicitly requests an independent review.
+
 Before finalizing:
 - re-read the highest-risk files
 - check the plan against the user's request

@@ -24,6 +24,16 @@ Do the work yourself when it is small, sequential, needs clarification, depends 
 
 The parent keeps final accountability. Subagents gather evidence, perform bounded parallel/background work, or review; the parent decides what it means and answers the user.
 
+## Review economy
+
+- `reviewer` is for one independent final code-diff review or an explicitly requested audit
+- do not use `reviewer` as routine validation for plans, designs, documentation, or artifacts the parent just created
+- do not review partial stages when one final diff review will cover the complete packet
+- default to one reviewer invocation per user-requested packet
+- after Medium/Low findings, fix and validate directly without another reviewer pass
+- repeat review only for Critical/High remediation, security-sensitive changes, or an explicit user request
+- never fan out multiple reviewers over the same change merely to increase confidence
+
 ## First how-choice: sync vs async
 
 After deciding to delegate, choose whether the result is needed in this turn.
