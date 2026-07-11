@@ -2,6 +2,7 @@ import { buildPromptVars, getRawStoredVarValue } from "../../z-prompt-vars/promp
 
 import type {
 	GateAutoApproverConfig,
+	GateAutoBackendConfig,
 	GateAutoCacheRetention,
 	GateAutoProcessKind,
 	GateAutoResponseFormat,
@@ -141,7 +142,7 @@ export function loadGateAutoConfig(cwd: string, env: NodeJS.ProcessEnv = process
 	const rawBackend = get("gate.auto.backend");
 	const backendObject = objectValue(rawBackend);
 	const managedFallback = buildManagedLlamaBackend(env, processKind, undefined);
-	let backend = managedFallback.backend;
+	let backend: GateAutoBackendConfig = managedFallback.backend;
 	let inheritedEndpoint = managedFallback.inheritedEndpoint;
 	let backendError = managedFallback.error;
 

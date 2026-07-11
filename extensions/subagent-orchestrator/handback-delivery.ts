@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildHandbackDeduplicationKey, buildQueuedHandback, partitionHandbackDuplicates } from "./handbacks.ts";
 import { buildContinuationEntry, buildHandbackEntry, ORCHESTRATOR_CONTINUATION_ENTRY_TYPE, ORCHESTRATOR_CONTINUATION_MESSAGE_TYPE, ORCHESTRATOR_HANDBACK_ENTRY_TYPE } from "./session-entries.ts";
 import type { AsyncCompleteEvent, OrchestratorChildSessionRecord, OrchestratorContinuationMessageDetails, OrchestratorContinuationRecord, OrchestratorHandbackRecord, OrchestratorRunRecord } from "./types.ts";

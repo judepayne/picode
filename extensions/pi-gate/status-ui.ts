@@ -1,7 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import { isWithinRoot, normalizeAbsPath, normalizeSlashes } from "./matching.ts";
 import { loadGateSemanticConfig } from "./semantic/loader.ts";

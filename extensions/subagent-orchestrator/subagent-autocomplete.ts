@@ -1,4 +1,4 @@
-import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@mariozechner/pi-tui";
+import type { AutocompleteItem, AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 
 import { shouldOfferUserDispatchAutocomplete } from "./user-dispatch.ts";
 

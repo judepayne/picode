@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentParentChildId, currentSubagentDepth } from "../subagent-mode/depth.ts";
 import { currentSessionKey } from "./delegation-context.ts";
 import { buildChildSessionRecords } from "./session-model.ts";
@@ -52,13 +52,13 @@ export function createRunLauncher(options: RunLauncherOptions) {
 		request: NormalizedDelegationRequest,
 		options: {
 			origin: RunOrigin;
-			onUpdate?: (result: { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }) => void;
+			onUpdate?: AgentToolUpdateCallback<unknown>;
 			signal?: AbortSignal;
 		},
 	): Promise<{ orchestratorRunId: string; response: ProgrammaticSubagentResponse }> {
 		const orchestratorRunId = randomUUID();
 		const now = Date.now();
-		const parentSessionId = currentSessionKey(ctx);
+		const parentSessionId = currentSessionKey(ctx) ?? orchestratorRunId;
 		const parentSessionFile = ctx.sessionManager.getSessionFile();
 		const parentExecutionChildId = currentParentChildId();
 		const directParentChild = parentExecutionChildId
@@ -146,7 +146,7 @@ export function createRunLauncher(options: RunLauncherOptions) {
 			});
 			appendChildEntry(created, "created");
 		}
-		footerLifecycle.updateUiStatus(ctx, true);
+		footerLifecycle.updateUiStatus(ctx);
 
 		let settled = false;
 		const settleResponse = (response: ProgrammaticSubagentResponse): void => {

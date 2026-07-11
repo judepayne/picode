@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import type { GateCommandRuntimeState } from "./commands.ts";
 import { compilePolicy } from "./policy-compiler.ts";
@@ -101,7 +101,7 @@ export function createGateProfileController(options: GateProfileControllerOption
 		}
 		if (ctx.isIdle()) {
 			const result = switchProfile(ctx, normalizedProfile, { notify: request.notify });
-			return result.ok ? { ok: true, queued: false } : result;
+			return result.ok === true ? { ok: true, queued: false } : result;
 		}
 		pendingProfileSwitch = { ...request, profile: normalizedProfile };
 		if (request.notify ?? true) {
@@ -116,7 +116,7 @@ export function createGateProfileController(options: GateProfileControllerOption
 		const request = pendingProfileSwitch;
 		pendingProfileSwitch = undefined;
 		const result = switchProfile(ctx, request.profile, { notify: request.notify });
-		if (!result.ok) ctx.ui.notify(result.error, "warning");
+		if (result.ok === false) ctx.ui.notify(result.error, "warning");
 	}
 
 	return {

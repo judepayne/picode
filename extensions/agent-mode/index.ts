@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { AutocompleteItem } from "@mariozechner/pi-tui";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteItem, KeyId } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { collectAgentAssetSnapshot, type AgentAssetCard } from "../agent-assets/contract.ts";
 import { normalizeOptionalFrontmatterString, unquote } from "../agent-assets/frontmatter-values.ts";
 import { parseToolSelection, resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
@@ -308,7 +308,7 @@ function isReadOnlyBashSegment(command: string): boolean {
 export function isReadOnlyBashCommand(command: string): boolean {
 	if (READ_ONLY_BASH_BLOCKLIST.some((pattern) => pattern.test(command))) return false;
 	const segments = splitConservativeShellPipeline(command);
-	return Boolean(segments?.length) && segments.every(isReadOnlyBashSegment);
+	return segments !== undefined && segments.length > 0 && segments.every(isReadOnlyBashSegment);
 }
 
 export default function agentModeExtension(pi: ExtensionAPI) {
@@ -601,7 +601,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 		if (nextIndex === undefined) {
 			const durableModeId = latestDurablePendingMode(ctx)?.modeId;
 			if (durableModeId) nextIndex = findModeIndex(durableModeId);
-			if (durableModeId && nextIndex < 0) {
+			if (durableModeId && nextIndex !== undefined && nextIndex < 0) {
 				persistCurrentMode({ force: true });
 				if (ctx.hasUI) ctx.ui.notify(`Agent mode: ignored invalid queued handoff target "${durableModeId}"`, "warning");
 				return undefined;
@@ -729,7 +729,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	});
 
 	if (settings.nextShortcut) {
-		pi.registerShortcut(settings.nextShortcut, {
+		pi.registerShortcut(settings.nextShortcut as KeyId, {
 			description: "Switch to the next configured mode",
 			handler: async (ctx) => {
 				await switchToNextMode(ctx);
@@ -738,7 +738,7 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	}
 
 	if (settings.prevShortcut) {
-		pi.registerShortcut(settings.prevShortcut, {
+		pi.registerShortcut(settings.prevShortcut as KeyId, {
 			description: "Switch to the previous configured mode",
 			handler: async (ctx) => {
 				await switchToPreviousMode(ctx);

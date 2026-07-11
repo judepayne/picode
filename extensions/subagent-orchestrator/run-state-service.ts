@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { extractChildResultPayloads, summarizeHandbackText } from "./handbacks.ts";
 import { buildRunMessageDetails } from "./run-message-details.ts";
 import type { RunMessageSnapshotStore } from "./run-live-state.ts";
@@ -124,7 +124,7 @@ export function createRunStateService(options: RunStateServiceOptions) {
 			const finalAnswer = status === "cancelled"
 				? undefined
 				: result?.output ?? result?.finalOutput ?? (children.length === 1 ? fallbackText : undefined);
-			const nextStatus = (() => {
+			const nextStatus: RunStatus = (() => {
 				if (child.status === "cancelled" || status === "cancelled") return "cancelled";
 				if (result?.success === true) return "complete";
 				if (result?.success === false) return "failed";

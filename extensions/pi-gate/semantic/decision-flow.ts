@@ -1,5 +1,5 @@
 import * as crypto from "node:crypto";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { GateAutoApproverManager } from "../auto-approver/manager.ts";
 import type { GateAutoApprovalRequest } from "../auto-approver/types.ts";
 import { assessGateRisk } from "../risk.ts";

@@ -1,4 +1,4 @@
-import { SessionManager, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";
 import {
 	findStickyUserSubagentSession,

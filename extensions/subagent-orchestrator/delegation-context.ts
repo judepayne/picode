@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { currentParentChildId, currentSubagentDepth } from "../subagent-mode/depth.ts";
 import { findNamedAgentCard, slugifyCardName } from "./agent-card-lookup.ts";
 import { buildSessionLineage, sessionReferenceInLineage } from "./session-lineage.ts";

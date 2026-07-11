@@ -12,7 +12,7 @@ function compactRecord(record: GateSemanticAuditRecord): GateSemanticAuditRecord
 	for (const [key, value] of Object.entries(record)) {
 		if (value !== undefined) compacted[key] = value;
 	}
-	return compacted as GateSemanticAuditRecord;
+	return compacted as unknown as GateSemanticAuditRecord;
 }
 
 export function appendGateAutoDecisionAuditRecord(cwd: string, record: GateSemanticAuditRecord, enabled: boolean): void {

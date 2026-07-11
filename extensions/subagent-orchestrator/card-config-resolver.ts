@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { collectAgentAssetSnapshot } from "../agent-assets/contract.ts";
 import { resolveToolSelection, type ToolSelectionSpec } from "../agent-assets/tool-selection.ts";
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";

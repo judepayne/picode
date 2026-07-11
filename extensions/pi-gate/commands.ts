@@ -1,5 +1,5 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ChildProcess } from "node:child_process";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadGateAutoConfig } from "./auto-approver/config.ts";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import { listConfiguredPiModels, managedLlamaBackendConfig, runGateAutoSetupScript, setGateAutoBackendFromSetup } from "./auto-approver/setup.ts";
@@ -14,7 +14,7 @@ const GATE_PROFILE_LOCK_ENV = "GATE_PROFILE_LOCK";
 export interface GateCommandRuntimeState {
  autoRuntimeEnabled: boolean;
  selectedProfileOverride?: string;
- activeAutoSetup?: ChildProcessWithoutNullStreams;
+ activeAutoSetup?: ChildProcess;
 }
 
 export interface GateCommandOptions {
@@ -159,7 +159,7 @@ export function createGateCommandHandler(options: GateCommandOptions) {
 				return;
 			}
 			const result = switchProfile(ctx, choice);
-			if (!result.ok) {
+			if (result.ok === false) {
 				ctx.ui.notify(result.error, "warning");
 			}
 			return;

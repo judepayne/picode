@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolUpdateCallback, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildChildSessionEntry, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE } from "./session-entries.ts";
 import { createStateStore } from "./state.ts";
 import type {
@@ -13,7 +13,7 @@ import type {
 
 export interface PendingRequest {
 	orchestratorRunId: string;
-	onUpdate?: (result: { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }) => void;
+	onUpdate?: AgentToolUpdateCallback<unknown>;
 	resolve: (response: ProgrammaticSubagentResponse) => void;
 }
 
@@ -330,7 +330,7 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 				id: payload.runId,
 				status,
 				success: status === "complete",
-				cancelled: status === "cancelled",
+				cancelled: false,
 				summary: displaySummary,
 				results: result.results.map((r) => ({
 					agent: r.agent,

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT } from "./policy.ts";
 import type { createAsyncEventManager } from "./async-events.ts";
 import type { StateStore } from "./state.ts";
@@ -44,14 +44,15 @@ export function createAsyncRecoveryService(options: AsyncRecoveryOptions) {
 				};
 				const result = parsed.result;
 				if (result && isTerminal(result.status ?? "queued")) {
+					const terminalStatus = result.status as NonNullable<AsyncCompleteEvent["status"]>;
 					const textSummary = (result.results ?? []).map((entry) => entry.finalText ?? entry.error ?? "").filter(Boolean).join("\n\n---\n\n");
 					return {
 						id: run.underlyingRunId,
 						agent: result.results?.[0]?.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT,
-						status: result.status,
-						cancelled: result.status === "cancelled",
-						success: result.status === "complete",
-						summary: lastNonEmptyLine(textSummary) ?? `${run.taskSummary} ${result.status}`,
+						status: terminalStatus,
+						cancelled: terminalStatus === "cancelled",
+						success: terminalStatus === "complete",
+						summary: lastNonEmptyLine(textSummary) ?? `${run.taskSummary} ${terminalStatus}`,
 						results: (result.results ?? []).map((entry) => ({
 							agent: entry.agent,
 							output: entry.finalText,
@@ -123,7 +124,7 @@ export function createAsyncRecoveryService(options: AsyncRecoveryOptions) {
 		});
 		if (!updated) return state.getRun(runId);
 		options.finalizeChildrenFromResults(runId, fallback.results, fallback.summary, status, now);
-		options.appendCompleteEntry(updated, status, fallback.summary ?? `${run.taskSummary} ${status}`, fallback.id);
+		options.appendCompleteEntry(updated, status, fallback.summary ?? `${run.taskSummary} ${status}`, fallback.id ?? undefined);
 		if (status !== "cancelled") options.queueHandback(updated, fallback);
 		return state.getRun(runId) ?? updated;
 	}

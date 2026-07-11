@@ -1,9 +1,9 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { setVar } from "../../z-prompt-vars/prompt-vars.ts";
 
 const GATE_AUTO_SETUP_TIMEOUT_MS = 15 * 60 * 1000;
@@ -65,7 +65,7 @@ export function managedLlamaBackendConfig(setup: { serverPath: string; modelPath
 	};
 }
 
-export function runGateAutoSetupScript(extensionDir: string, onChild?: (child: ChildProcessWithoutNullStreams) => void): Promise<{ installDir: string; serverPath: string; modelPath: string; modelSha256?: string }> {
+export function runGateAutoSetupScript(extensionDir: string, onChild?: (child: ChildProcess) => void): Promise<{ installDir: string; serverPath: string; modelPath: string; modelSha256?: string }> {
 	const packageRoot = path.resolve(extensionDir, "..", "..");
 	const scriptPath = path.join(packageRoot, "scripts", "setup-gate-auto-approver.mjs");
 	return new Promise((resolve, reject) => {

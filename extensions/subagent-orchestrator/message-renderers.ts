@@ -1,6 +1,6 @@
-import { keyHint } from "@mariozechner/pi-coding-agent";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { keyHint } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { formatRunCardLines } from "./run-ui.ts";
 import { getRenderableRunSnapshot } from "./run-live-state.ts";
 import { formatContinuationTitle } from "./session-entries.ts";

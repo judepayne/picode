@@ -14,7 +14,7 @@ export interface WorkerNodeLogRecord {
 }
 
 export function appendChildNodeLogRecord(config: ChildNodeLogWriteConfig | undefined, event: ChildEvent): boolean {
-	return appendNodeLogEvent(config, typeof event.type === "string" ? event.type : "unknown", event, typeof event.timestamp === "number" ? event.timestamp : Date.now());
+	return appendNodeLogEvent(config, typeof event.type === "string" ? event.type : "unknown", { ...event }, typeof event.timestamp === "number" ? event.timestamp : Date.now());
 }
 
 export function appendExpandedTaskNodeLogRecord(request: ChildExecutionRequest): boolean {

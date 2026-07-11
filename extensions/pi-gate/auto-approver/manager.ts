@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { loadGateAutoConfig } from "./config.ts";
 import { requestPiModelDecision } from "./backend-pi-model.ts";

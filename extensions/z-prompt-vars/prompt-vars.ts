@@ -550,11 +550,9 @@ export function setWriteLocation(cwd: string, location: PiLocation, modeId?: str
 
 function setVarInternal(cwd: string, key: string, value: unknown, modeId: string | undefined, options?: { allowAutomodeEnable?: boolean; allowGateAutoEnable?: boolean; writeLocationOverride?: PiLocation }): VarsState {
 	const normalizedKey = validateMutableVarKey(key);
-	if ((normalizedKey === "paths.plan" || normalizedKey === "paths.design") && typeof value !== "string") {
-		throw new Error(`${normalizedKey} must be a string path.`);
-	}
-	if ((normalizedKey === "paths.plan" || normalizedKey === "paths.design") && !value.trim()) {
-		throw new Error(`value is required for key ${normalizedKey}.`);
+	if (normalizedKey === "paths.plan" || normalizedKey === "paths.design") {
+		if (typeof value !== "string") throw new Error(`${normalizedKey} must be a string path.`);
+		if (!value.trim()) throw new Error(`value is required for key ${normalizedKey}.`);
 	}
 	if (normalizedKey === "automode.enabled" && typeof value !== "boolean") {
 		throw new Error("automode.enabled must be a boolean.");

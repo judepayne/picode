@@ -1,6 +1,6 @@
-import { completeSimple } from "@mariozechner/pi-ai";
-import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { parseGateSemanticDecisionText } from "../semantic/client.ts";
 import type { GateSemanticResult } from "../semantic/types.ts";
@@ -60,7 +60,7 @@ async function resolvePiModel(ctx: ExtensionContext, backend: PiModelGateAutoBac
 	if (!model) return { ok: false, error: `Pi model not found: ${backend.provider}/${backend.model}` };
 	if (registry.getApiKeyAndHeaders) {
 		const auth = await registry.getApiKeyAndHeaders(model);
-		if (!auth.ok) return { ok: false, error: `Pi model auth unavailable: ${auth.error}` };
+		if (auth.ok === false) return { ok: false, error: `Pi model auth unavailable: ${auth.error}` };
 		return { ok: true, model, auth };
 	}
 	if (registry.hasConfiguredAuth && !registry.hasConfiguredAuth(model)) {
@@ -71,14 +71,14 @@ async function resolvePiModel(ctx: ExtensionContext, backend: PiModelGateAutoBac
 
 export async function validatePiModelBackend(ctx: ExtensionContext, backend: PiModelGateAutoBackendConfig): Promise<{ ok: true } | { ok: false; error: string }> {
 	const resolved = await resolvePiModel(ctx, backend);
-	return resolved.ok ? { ok: true } : { ok: false, error: resolved.error };
+	return resolved.ok === true ? { ok: true } : { ok: false, error: resolved.error };
 }
 
 export async function requestPiModelDecision(ctx: ExtensionContext, input: PiModelDecisionInput): Promise<GateSemanticResult> {
 	const started = Date.now();
 	const backend = input.config.backend as PiModelGateAutoBackendConfig;
 	const resolved = await resolvePiModel(ctx, backend);
-	if (!resolved.ok) return fallback(input, started, resolved.error, "unavailable", resolved.error);
+	if (resolved.ok === false) return fallback(input, started, resolved.error, "unavailable", resolved.error);
 	const { model, auth } = resolved;
 
 	const controller = new AbortController();

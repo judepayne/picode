@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createAsyncEventManager } from "./async-events.ts";
 import { createAsyncRecoveryService } from "./async-recovery.ts";
 import { createChildEventController } from "./child-events.ts";

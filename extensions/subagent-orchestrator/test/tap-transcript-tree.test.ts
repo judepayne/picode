@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { before, describe, test } from "node:test";
-import { initTheme } from "@mariozechner/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 
 import { EVENT_CHILD_COMPLETE, EVENT_CHILD_PROGRESS, EVENT_CHILD_STARTED, EVENT_CHILD_TEXT_DELTA, EVENT_CHILD_TEXT_FINAL, EVENT_CHILD_TOOL_END, EVENT_CHILD_TOOL_START } from "../../subagent-mode/types.ts";
 import { EVENT_SUBAGENT_EXPANDED_TASK, EVENT_SUBAGENT_TASK, type SubagentStreamEvent } from "../stream.ts";

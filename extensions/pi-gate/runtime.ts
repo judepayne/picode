@@ -1,7 +1,7 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadGateAutoConfig } from "./auto-approver/config.ts";
 import { GateAutoApproverManager } from "./auto-approver/manager.ts";
 import { loadPolicy } from "./policy-loader.ts";
@@ -60,7 +60,7 @@ export default function piGate(pi: ExtensionAPI) {
 	const runtimeState = {
 		autoRuntimeEnabled: false,
 		selectedProfileOverride: undefined as string | undefined,
-		activeAutoSetup: undefined as ChildProcessWithoutNullStreams | undefined,
+		activeAutoSetup: undefined as ChildProcess | undefined,
 	};
 	const sessionAllows = new Set<string>();
 	const profileLocked = isEnvEnabled(process.env[GATE_PROFILE_LOCK_ENV]);
@@ -132,7 +132,7 @@ export default function piGate(pi: ExtensionAPI) {
 		}
 
 		const result = processProfileSwitchRequest(currentCtx, normalizedRequest);
-		if (!result.ok) {
+		if (result.ok === false) {
 			currentCtx.ui.notify(result.error, "warning");
 		}
 	};

@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
 import { buildTapRoots, createTapFooterFormatters, formatTapFooterTree, resolveSubagentSeparatorColor, resolveSubagentStatusColors, type TapRunRoot } from "./tap-navigation.ts";
 import type { OrchestratorChildSessionRecord, OrchestratorHandbackRecord, OrchestratorRunRecord, RunOrigin } from "./types.ts";

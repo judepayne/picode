@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import {
 	bootstrapVarsFiles,
@@ -371,8 +371,9 @@ export default function promptVarsExtension(pi: ExtensionAPI) {
 						};
 					}
 					const rawValue = operation.rawValue;
+					const displayValue = rawValue === undefined ? resolvedValue ?? "" : JSON.stringify(rawValue) ?? String(rawValue);
 					return {
-						content: [{ type: "text", text: rawValue === undefined ? resolvedValue : JSON.stringify(rawValue) }],
+						content: [{ type: "text", text: displayValue }],
 						details: {
 							action,
 							key,

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as http from "node:http";
 import * as net from "node:net";
 
@@ -12,7 +12,7 @@ export interface ManagedLlamaServerStatus {
 }
 
 export class ManagedLlamaServer {
-	private proc?: ChildProcessWithoutNullStreams;
+	private proc?: ChildProcess;
 	private endpoint?: string;
 	private lastError?: string;
 	private stopping = false;
@@ -32,19 +32,20 @@ export class ManagedLlamaServer {
 		const args = buildArgs(config, port);
 		try {
 			this.stopping = false;
-			this.proc = spawn(config.llama.serverPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-			this.proc.stdout.resume();
-			this.proc.stderr.resume();
+			const proc = spawn(config.llama.serverPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+			this.proc = proc;
+			proc.stdout.resume();
+			proc.stderr.resume();
 			this.endpoint = `http://${config.llama.host}:${port}`;
 			this.lastError = undefined;
-			this.proc.once("exit", (code, signal) => {
+			proc.once("exit", (code, signal) => {
 				this.proc = undefined;
 				this.endpoint = undefined;
 				if (this.stopping || code === 0) this.lastError = undefined;
 				else this.lastError = `llama-server exited code=${code ?? "null"} signal=${signal ?? "null"}`;
 				this.stopping = false;
 			});
-			this.proc.once("error", (error) => {
+			proc.once("error", (error) => {
 				this.lastError = error.message;
 			});
 			await waitForHealth(this.endpoint, config.llama.startupTimeoutMs);

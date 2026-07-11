@@ -1,6 +1,6 @@
-import { keyHint } from "@mariozechner/pi-coding-agent";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { keyHint } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { DEFAULT_ORCHESTRATOR_CHILD_AGENT } from "./policy.ts";
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

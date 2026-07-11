@@ -24,17 +24,17 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - name: Install test dependencies
-        run: |
-          npm install --no-save \
-            @mariozechner/pi-ai \
-            @mariozechner/pi-agent-core \
-            @mariozechner/pi-coding-agent \
-            @mariozechner/pi-tui \
-            @sinclair/typebox
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check extensions
+        run: npm run typecheck
 
       - name: Run extension tests
-        run: node --test "extensions/**/*.test.ts"
+        run: npm test
 
-      - name: Check package contents
-        run: npm pack --dry-run
+      - name: Build npm staging package
+        run: npm run build:npm
+
+      - name: Check published package contents
+        run: npm pack ./dist --dry-run

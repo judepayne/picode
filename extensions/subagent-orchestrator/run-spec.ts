@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createForkContextResolver, type ForkableSessionManager } from "../subagent-mode/fork-context.ts";
 import { resolveDefaultChildExtensionPaths } from "../subagent-mode/runner.ts";
 import { resolveDelegatedRunMaxSubagentDepth } from "./max-subagent-depth.ts";
@@ -14,7 +14,7 @@ export function createRunSpecBuilder(cards: SubagentCardConfigResolver) {
 	return {
 		precomputeForkSessionFiles(ctx: ExtensionContext, request: NormalizedDelegationRequest, count: number): string[] | undefined {
 			if (!request.async || request.context !== "fork" || count <= 0) return undefined;
-			const sessionManager = ctx.sessionManager as ForkableSessionManager;
+			const sessionManager = ctx.sessionManager as unknown as ForkableSessionManager;
 			if (
 				!sessionManager
 				|| typeof sessionManager.getSessionFile !== "function"

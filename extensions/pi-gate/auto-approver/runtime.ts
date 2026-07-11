@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { validatePiModelBackend } from "./backend-pi-model.ts";
 import { warmGateAutoApprover } from "./client.ts";
@@ -104,7 +104,7 @@ export class GateAutoRuntime {
 		if (config.backend.type === "pi-model") {
 			await this.disableRuntimeOnly();
 			const validation = await validatePiModelBackend(ctx, config.backend);
-			if (!validation.ok) {
+			if (validation.ok === false) {
 				this.mode = "unconfigured";
 				this.runtimeKey = undefined;
 				this.lastError = validation.error;

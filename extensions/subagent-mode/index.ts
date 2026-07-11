@@ -12,7 +12,7 @@
  * See PI_SUBAGENTS_REWRITE.md for the authoritative design.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { type ForkableSessionManager } from "./fork-context.ts";
 import { createOrchestratorBridge, type OrchestratorBridge } from "./orchestrator-bridge.ts";
@@ -30,7 +30,7 @@ export default function registerSubagentModeExtension(pi: ExtensionAPI): void {
 
 	const getSessionManager = (): ForkableSessionManager | undefined => {
 		const ctx = state.lastContext;
-		const sessionManager = ctx?.sessionManager as ForkableSessionManager | undefined;
+		const sessionManager = ctx?.sessionManager as unknown as ForkableSessionManager | undefined;
 		if (!sessionManager) return undefined;
 		// Duck-type check: we only need the three forkable methods.
 		if (typeof sessionManager.getSessionFile !== "function") return undefined;

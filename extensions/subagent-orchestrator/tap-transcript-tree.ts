@@ -1,5 +1,5 @@
-import { getMarkdownTheme, UserMessageComponent, type Theme } from "@mariozechner/pi-coding-agent";
-import { Box, Markdown, Text, type Component, type TUI } from "@mariozechner/pi-tui";
+import { getMarkdownTheme, UserMessageComponent, type Theme } from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, Text, type Component, type TUI } from "@earendil-works/pi-tui";
 import {
 	EVENT_CHILD_CANCELLED,
 	EVENT_CHILD_COMPLETE,
@@ -253,9 +253,9 @@ function appendAssistantText(state: TapTranscriptTreeState, text: string): void 
 
 function findToolNodeForEnd(state: TapTranscriptTreeState, toolCallId: string | undefined, toolName: string): ToolCardNode | undefined {
 	if (toolCallId) {
-		return state.nodes.findLast((node): node is ToolCardNode => node.kind === "tool" && node.toolCallId === toolCallId);
+		return state.nodes.findLast((node): node is ToolCardNode => node instanceof ToolCardNode && node.toolCallId === toolCallId);
 	}
-	return state.nodes.findLast((node): node is ToolCardNode => node.kind === "tool" && node.isPendingMatch(toolName));
+	return state.nodes.findLast((node): node is ToolCardNode => node instanceof ToolCardNode && node.isPendingMatch(toolName));
 }
 
 export function createTapTranscriptTreeState(): TapTranscriptTreeState {

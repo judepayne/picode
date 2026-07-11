@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cancelAsyncRun } from "../subagent-mode/async-executor.ts";
 import { normalizeDelegateInput } from "./delegate-input.ts";
 import type { createHandbackDeliveryController } from "./handback-delivery.ts";

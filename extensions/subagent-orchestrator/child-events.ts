@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	EVENT_CHILD_CANCELLED as SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
 	EVENT_CHILD_COMPLETE as SUBAGENT_MODE_CHILD_COMPLETE_EVENT,
@@ -92,6 +92,7 @@ export function createChildEventController(input: ChildEventControllerInput): Ch
 
 	function appendNodeLogForChild(child: OrchestratorChildSessionRecord, event: LoggedChildEvent): OrchestratorNodeLogRecord {
 		const record = input.state.appendNodeLogRecord(child.childSessionId, {
+			childSessionId: child.childSessionId,
 			runId: child.runId,
 			...(child.rootRunId ? { rootRunId: child.rootRunId } : {}),
 			timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now(),

@@ -1,5 +1,5 @@
-import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import type { AutocompleteProvider, EditorTheme, KeybindingsManager, TUI } from "@mariozechner/pi-tui";
+import { CustomEditor, type KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteProvider, EditorTheme, TUI } from "@earendil-works/pi-tui";
 
 import { UserDispatchAutocompleteProvider } from "./subagent-autocomplete.ts";
 

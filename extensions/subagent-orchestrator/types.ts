@@ -444,13 +444,14 @@ export interface ProgrammaticResultDetails {
 	pid?: number;
 	results?: ProgrammaticResultEntry[];
 	progress?: ProgrammaticProgressEntry[];
+	childSessions?: unknown[];
 }
 
 export interface ProgrammaticSubagentResponse {
 	requestId: string;
 	result: {
-		content?: Array<{ type?: string; text?: string }>;
-		details?: ProgrammaticResultDetails;
+		content: Array<{ type: "text"; text: string }>;
+		details: ProgrammaticResultDetails;
 		isError?: boolean;
 	};
 	isError: boolean;

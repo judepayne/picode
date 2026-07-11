@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A Pi package for disciplined, role-based coding workflows with mode switching, permissions, subagents, and prompt vars.",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -26,6 +29,7 @@
   ],
   "scripts": {
     "test": "node --test \"extensions/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
     "smoke:gate-auto": "node scripts/smoke-gate-auto-soft-block.mjs",
     "build:npm": "node scripts/build-npm-package.mjs",
     "publish:npm:dry-run": "npm run build:npm && npm publish ./dist --dry-run --access public",
@@ -51,18 +55,31 @@
     "./subagent-orchestrator": "./extensions/subagent-orchestrator/index.ts"
   },
   "pi": {
-    "extensions": ["./extensions"],
-    "skills": ["./skills"],
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
     "image": "https://raw.githubusercontent.com/judepayne/picode/main/img/picode-preview.png"
   },
   "publishConfig": {
     "access": "public"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-agent-core": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*",
-    "@sinclair/typebox": "*"
+    "@earendil-works/pi-agent-core": "^0.80.6",
+    "@earendil-works/pi-ai": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-tui": "^0.80.6",
+    "typebox": "^1.1.38"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.80.6",
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-tui": "0.80.6",
+    "@types/node": "24.12.4",
+    "typebox": "1.1.38",
+    "typescript": "5.9.3"
   }
 }

@@ -11,6 +11,7 @@ import {
 	type CompiledPatternRule,
 	type CompiledPolicy,
 	type MergedPermissionConfig,
+	type PermissionAction,
 	type PermissionConfig,
 	type RawPolicy,
 	type RawProfile,

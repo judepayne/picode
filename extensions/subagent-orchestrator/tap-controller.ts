@@ -1,5 +1,5 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { isKeyRelease, isKeyRepeat, matchesKey } from "@mariozechner/pi-tui";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 import type { SubagentStreamEvent, SubagentStreamHandler } from "./stream.ts";
 import { buildPromptVars } from "../z-prompt-vars/prompt-vars.ts";
 import { createTapFooterFormatters, formatTapFooterTree, moveTapSelection, normalizeTapSelection, resolveSubagentSeparatorColor, resolveSubagentStatusColors, selectedTapNode, type TapRunRoot, type TapSelection } from "./tap-navigation.ts";

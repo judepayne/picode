@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { formatUserLaunchNotification } from "./footer-status.ts";
 import { parseUserDispatch } from "./user-dispatch.ts";
 import { SubagentEditor } from "./subagent-editor.ts";

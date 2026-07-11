@@ -55,16 +55,11 @@ const require = createRequire(import.meta.url);
 const jitiCliPath: string | undefined = (() => {
 	const candidates: Array<() => string> = [
 		() => path.join(path.dirname(require.resolve("jiti/package.json")), "lib/jiti-cli.mjs"),
-		() => path.join(path.dirname(require.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs"),
 		() => {
 			const piRoot = resolvePiPackageRoot();
 			if (!piRoot) throw new Error("no pi package root");
 			const piRequire = createRequire(path.join(piRoot, "package.json"));
-			try {
-				return path.join(path.dirname(piRequire.resolve("jiti/package.json")), "lib/jiti-cli.mjs");
-			} catch {
-				return path.join(path.dirname(piRequire.resolve("@mariozechner/jiti/package.json")), "lib/jiti-cli.mjs");
-			}
+			return path.join(path.dirname(piRequire.resolve("jiti/package.json")), "lib/jiti-cli.mjs");
 		},
 	];
 	for (const candidate of candidates) {

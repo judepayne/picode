@@ -111,7 +111,7 @@ function isLowRiskAllowCandidate(request: GateRiskRequest): boolean {
 	if (request.toolName === "read") return true;
 	if (request.toolName !== "bash") return false;
 	const segments = splitSimpleCommandChain(command);
-	return Boolean(segments?.length) && segments.every(isLowRiskSimpleCommand);
+	return segments !== undefined && segments.length > 0 && segments.every(isLowRiskSimpleCommand);
 }
 
 export function assessGateRisk(request: GateRiskRequest): GateRiskAssessment {
