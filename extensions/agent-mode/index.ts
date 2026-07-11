@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,7 +15,6 @@ const SETTINGS_FILE_NAME = "settings.json";
 const MODE_STATUS_KEY = "agent-mode";
 const MODE_STATE_ENTRY_TYPE = "agent-mode-state";
 const MODE_HANDOFF_MESSAGE_TYPE = "agent-mode-handoff";
-const LEGACY_MODE_CONTEXT_MESSAGE_TYPE = "agent-mode-context";
 const GATE_SWITCH_PROFILE_EVENT = "gate:switch-profile";
 
 const NAMED_COLORS: Record<string, [number, number, number]> = {
@@ -160,64 +158,6 @@ interface CustomSessionEntry {
 		targetModeId?: string;
 		targetMode?: string;
 	};
-}
-
-interface LegacyCleanupResult {
-	removedCount: number;
-	error?: string;
-}
-
-function rewriteSessionFileRemovingLegacyModeContext(sessionFile: string | undefined): LegacyCleanupResult {
-	if (!sessionFile) return { removedCount: 0 };
-	try {
-		if (!fs.existsSync(sessionFile)) return { removedCount: 0 };
-		const raw = fs.readFileSync(sessionFile, "utf8");
-		if (!raw.includes(LEGACY_MODE_CONTEXT_MESSAGE_TYPE)) return { removedCount: 0 };
-
-		const lines = raw.split(/\r?\n/).filter((line) => line.trim().length > 0);
-		const removedParents = new Map<string, string | null>();
-		const keptEntries: Record<string, unknown>[] = [];
-		let removedCount = 0;
-
-		for (const line of lines) {
-			const entry = JSON.parse(line) as Record<string, unknown>;
-			if (
-				entry.type === "custom_message" &&
-				entry.customType === LEGACY_MODE_CONTEXT_MESSAGE_TYPE &&
-				typeof entry.id === "string"
-			) {
-				removedParents.set(entry.id, typeof entry.parentId === "string" ? entry.parentId : null);
-				removedCount += 1;
-				continue;
-			}
-			keptEntries.push(entry);
-		}
-
-		if (removedCount === 0) return { removedCount: 0 };
-
-		for (const entry of keptEntries) {
-			let parentId = typeof entry.parentId === "string" ? entry.parentId : null;
-			const seen = new Set<string>();
-			while (parentId && removedParents.has(parentId) && !seen.has(parentId)) {
-				seen.add(parentId);
-				parentId = removedParents.get(parentId) ?? null;
-			}
-			if (parentId === null) delete entry.parentId;
-			else if (typeof entry.parentId === "string" && entry.parentId !== parentId) entry.parentId = parentId;
-		}
-
-		// Write to a temp file then rename for atomic replacement, reducing the
-		// risk of interleaving with concurrent session appends during startup.
-		const tmpFile = `${sessionFile}.${Date.now()}.${crypto.randomBytes(4).toString("hex")}.tmp`;
-		fs.writeFileSync(tmpFile, `${keptEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf8");
-		fs.renameSync(tmpFile, sessionFile);
-		return { removedCount };
-	} catch (error) {
-		return {
-			removedCount: 0,
-			error: error instanceof Error ? error.message : String(error),
-		};
-	}
 }
 
 function parseRgbColor(value: string): [number, number, number] | undefined {
@@ -719,13 +659,9 @@ export default function agentModeExtension(pi: ExtensionAPI) {
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		const cleanup = rewriteSessionFileRemovingLegacyModeContext(ctx.sessionManager.getSessionFile());
 		loadModes();
 		restoreModeIndexFromSession(ctx);
 		updateStatus(ctx);
-		if (cleanup.error && ctx.hasUI) {
-			ctx.ui.notify(`Agent mode cleanup failed: ${cleanup.error}`, "warning");
-		}
 		if (settingsError && ctx.hasUI) {
 			ctx.ui.notify(`Agent mode settings: ${settingsError}`, "warning");
 		}

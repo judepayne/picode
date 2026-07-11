@@ -90,15 +90,3 @@ export function collectAgentAssetSnapshot(pi: PiLike): AgentAssetSnapshot {
 		diagnostics,
 	};
 }
-
-export function collectAgentCards(pi: PiLike): AgentAssetCard[] {
-	return collectAgentAssetSnapshot(pi).agents;
-}
-
-export function collectSubagentCards(pi: PiLike): AgentAssetCard[] {
-	return collectAgentAssetSnapshot(pi).subagents;
-}
-
-export function collectAgentAssetDiagnostics(pi: PiLike): AgentAssetDiagnostic[] {
-	return collectAgentAssetSnapshot(pi).diagnostics;
-}

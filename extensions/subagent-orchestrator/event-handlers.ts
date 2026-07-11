@@ -1,11 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DEFAULT_ORCHESTRATOR_CHILD_AGENT } from "./policy.ts";
-import { formatBackgroundFailureNotification } from "./footer-status.ts";
 import { buildChildSessionEntry, ORCHESTRATOR_CHILD_SESSION_ENTRY_TYPE } from "./session-entries.ts";
 import { createStateStore } from "./state.ts";
 import type {
 	AsyncCompleteEvent,
-	AsyncStartedEvent,
 	OrchestratorChildSessionRecord,
 	OrchestratorHandbackRecord,
 	OrchestratorRunRecord,
@@ -93,10 +90,6 @@ export interface SubagentEventNames {
 	childError: string;
 	childComplete: string;
 	childCancelled: string;
-	legacyStarted: string;
-	legacyComplete: string;
-	notifySuppress: string;
-	widgetSuppress: string;
 }
 
 export interface RegisterSubagentEventHandlersInput {
@@ -349,69 +342,6 @@ export function registerSubagentEventHandlers(pi: ExtensionAPI, input: RegisterS
 				timestamp: Date.now(),
 			} as AsyncCompleteEvent);
 			input.flushQueuedHandbacks(input.getLatestCtx());
-		}
-	}));
-
-	on(events.legacyStarted, safeEventHandler(events.legacyStarted, (data) => {
-		const event = data as AsyncStartedEvent;
-		if (typeof event.id !== "string") return;
-		pi.events.emit(events.notifySuppress, { asyncId: event.id });
-		pi.events.emit(events.widgetSuppress, { asyncId: event.id });
-		const run = state.findRunByUnderlyingId(event.id);
-		if (!run) return;
-		state.updateRun(run.orchestratorRunId, {
-			underlyingRunId: event.id,
-			status: run.status === "cancelled" ? run.status : "running",
-			updatedAt: Date.now(),
-			...(typeof event.pid === "number" ? { pid: event.pid } : {}),
-			...(typeof event.asyncDir === "string" ? { asyncDir: event.asyncDir } : {}),
-		});
-		for (const child of state.listChildSessionsByRun(run.orchestratorRunId)) {
-			const updated = state.updateChildSession(child.childSessionId, {
-				underlyingRunId: event.id,
-				updatedAt: Date.now(),
-				...(typeof event.asyncDir === "string" ? { asyncDir: event.asyncDir } : {}),
-			});
-			if (updated) appendChildEntry(pi, updated, "updated");
-		}
-		input.refreshRunAggregates(run.orchestratorRunId);
-	}));
-
-	on(events.legacyComplete, safeEventHandler(events.legacyComplete, (data) => {
-		const event = data as AsyncCompleteEvent;
-		if (typeof event.id !== "string") return;
-		const run = state.findRunByUnderlyingId(event.id);
-		if (!run || isTerminal(run.status)) return;
-		const status = input.toRunStatus(event.status, event.success, event.cancelled);
-		const summary = event.summary ?? `${event.agent ?? state.listChildSessionsByRun(run.orchestratorRunId)[0]?.agent ?? DEFAULT_ORCHESTRATOR_CHILD_AGENT} ${status}`;
-		const errorSummary = status === "failed" ? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary : undefined;
-		const displaySummary = errorSummary ?? input.truncateDisplayText(summary, input.asyncErrorSummaryLimit) ?? summary;
-		const finalizedRun = input.tryFinalizeRun(run.orchestratorRunId, {
-			status,
-			updatedAt: Date.now(),
-			completedAt: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
-			resultSummary: summary,
-			...(errorSummary ? { error: errorSummary } : {}),
-		});
-		if (!finalizedRun) return;
-		input.finalizeChildrenFromResults(run.orchestratorRunId, event.results, summary, status, typeof event.timestamp === "number" ? event.timestamp : Date.now());
-		pi.appendEntry(input.completeEntryType, {
-			orchestratorRunId: run.orchestratorRunId,
-			ownerModeId: run.ownerModeId,
-			status,
-			summary: displaySummary,
-			underlyingRunId: event.id,
-		});
-		if (status !== "cancelled") {
-			input.queueHandback(state.getRun(run.orchestratorRunId) ?? run, event);
-			input.flushQueuedHandbacks(input.getLatestCtx());
-		}
-		const latestCtx = input.getLatestCtx();
-		if (latestCtx?.hasUI && status === "failed") {
-			latestCtx.ui.notify(
-				formatBackgroundFailureNotification(run.agent ?? event.agent, displaySummary),
-				"warning",
-			);
 		}
 	}));
 

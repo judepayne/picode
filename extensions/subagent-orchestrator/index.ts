@@ -71,8 +71,6 @@ import type { OrchestratorRunMessageDetails } from "./types.ts";
 
 const SUBAGENT_NOTIFY_SUPPRESS_EVENT = "subagent:notify:suppress";
 const SUBAGENT_WIDGET_SUPPRESS_EVENT = "subagent:widget:suppress";
-const SUBAGENT_STARTED_EVENT = "subagent:started";
-const SUBAGENT_COMPLETE_EVENT = "subagent:complete";
 const ASYNC_ERROR_SUMMARY_LIMIT = 1000;
 
 export { openSubagentStream, subagentStreamTopic, createJsonlFileSubagentStreamHandler, type OpenSubagentStreamOptions, type SubagentStreamEvent, type SubagentStreamHandler };
@@ -262,10 +260,6 @@ export default function subagentOrchestratorExtension(pi: ExtensionAPI) {
 			childError: SUBAGENT_MODE_CHILD_ERROR_EVENT,
 			childComplete: SUBAGENT_MODE_CHILD_COMPLETE_EVENT,
 			childCancelled: SUBAGENT_MODE_CHILD_CANCELLED_EVENT,
-			legacyStarted: SUBAGENT_STARTED_EVENT,
-			legacyComplete: SUBAGENT_COMPLETE_EVENT,
-			notifySuppress: SUBAGENT_NOTIFY_SUPPRESS_EVENT,
-			widgetSuppress: SUBAGENT_WIDGET_SUPPRESS_EVENT,
 		},
 		state,
 		pending,

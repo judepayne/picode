@@ -63,11 +63,6 @@ export function activateSubagentStreamService(service: ActiveStreamService): () 
 	};
 }
 
-/** @deprecated Prefer activateSubagentStreamService for ownership-safe lifecycle management. */
-export function setActiveSubagentStreamService(service: ActiveStreamService | undefined): void {
-	activeStreamService = service ? { token: Symbol("legacy-subagent-stream-service"), service } : undefined;
-}
-
 export function openSubagentStream(childSessionId: string, handler: SubagentStreamHandler, options?: OpenSubagentStreamOptions): () => void {
 	if (!activeStreamService) throw new Error("subagent-orchestrator stream service is not active.");
 	return activeStreamService.service.open(childSessionId, handler, options);

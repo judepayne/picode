@@ -115,7 +115,7 @@ Instead, they collect one `AgentAssetSnapshot` per logical load from `agent-asse
 - resolved subagent cards
 - diagnostics from the same collection event
 
-The older `collectAgentCards(...)`, `collectSubagentCards(...)`, and `collectAgentAssetDiagnostics(...)` helpers remain available for callers that need only one view. Consumers that need multiple views should use `collectAgentAssetSnapshot(...)` so cards and diagnostics cannot come from different event-bus resolutions.
+Consumers use `collectAgentAssetSnapshot(...)` so cards and diagnostics always come from the same event-bus resolution.
 
 Current consumers:
 

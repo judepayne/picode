@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { collectAgentAssetDiagnostics, collectAgentAssetCardEntries, collectAgentAssetSnapshot, collectAgentCards, collectSubagentCards, COLLECT_AGENT_ASSET_CARDS_EVENT } from "../contract.ts";
+import { collectAgentAssetCardEntries, collectAgentAssetSnapshot, COLLECT_AGENT_ASSET_CARDS_EVENT } from "../contract.ts";
 
 describe("agent asset card collection", () => {
 	it("collects manifest entries from the event bus in descending priority order", () => {
@@ -53,15 +53,16 @@ describe("agent asset card collection", () => {
 				diagnostics: [{ severity: "warning", message: "base warning" }],
 			},
 		]);
-		assert.deepEqual(collectAgentCards(pi), [
+		const snapshot = collectAgentAssetSnapshot(pi);
+		assert.deepEqual(snapshot.agents, [
 			{ name: "Writer", prompt: "Overlay writer" },
 			{ name: "Builder", prompt: "Base builder" },
 		]);
-		assert.deepEqual(collectSubagentCards(pi), [
+		assert.deepEqual(snapshot.subagents, [
 			{ name: "reviewer", prompt: "Overlay reviewer" },
 			{ name: "scout", prompt: "Base scout" },
 		]);
-		assert.deepEqual(collectAgentAssetDiagnostics(pi), [
+		assert.deepEqual(snapshot.diagnostics, [
 			{ severity: "error", message: "overlay error" },
 			{ severity: "warning", message: "base warning" },
 		]);
@@ -99,8 +100,9 @@ describe("agent asset card collection", () => {
 			});
 		});
 
-		assert.deepEqual(collectAgentCards(pi), [{ name: "Code Writer", prompt: "overlay" }]);
-		assert.deepEqual(collectSubagentCards(pi), [{ name: "Scout", prompt: "overlay" }]);
+		const snapshot = collectAgentAssetSnapshot(pi);
+		assert.deepEqual(snapshot.agents, [{ name: "Code Writer", prompt: "overlay" }]);
+		assert.deepEqual(snapshot.subagents, [{ name: "Scout", prompt: "overlay" }]);
 	});
 
 	it("collects cards and diagnostics from one consistent snapshot emission", () => {
@@ -153,6 +155,6 @@ describe("agent asset card collection", () => {
 			});
 		});
 
-		assert.deepEqual(collectSubagentCards(pi), [{ name: "Research Assistant", prompt: "first" }]);
+		assert.deepEqual(collectAgentAssetSnapshot(pi).subagents, [{ name: "Research Assistant", prompt: "first" }]);
 	});
 });
